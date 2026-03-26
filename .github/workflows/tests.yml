@@ -1,4 +1,4 @@
-name: Unit Tests
+name: "Phase 2-4: Scan Capture, Export & Packaging Tests"
 
 on:
   push:
