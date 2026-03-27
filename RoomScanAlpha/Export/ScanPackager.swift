@@ -16,6 +16,7 @@ struct ScanPackager {
         keyframes: [CapturedFrame],
         meshAnchors: [ARMeshAnchor],
         scanDuration: TimeInterval,
+        rfqContext: RFQContext?,
         onProgress: @escaping (String) -> Void
     ) throws -> PackageResult {
         let timestamp = Int(Date().timeIntervalSince1970)
@@ -64,7 +65,8 @@ struct ScanPackager {
             keyframes: keyframes,
             meshVertexCount: totalVertices,
             meshFaceCount: totalFaces,
-            scanDuration: scanDuration
+            scanDuration: scanDuration,
+            rfqContext: rfqContext
         )
         let metadataData = try JSONEncoder.prettyPrinted.encode(metadata)
         let metadataURL = scanDir.appendingPathComponent("metadata.json")
@@ -92,6 +94,15 @@ struct ScanPackager {
 // MARK: - Metadata schema
 
 struct ScanMetadata: Codable {
+    // RFQ context (nil before Phase 8 wiring)
+    let rfqId: String?
+    let floorId: String?
+    let roomLabel: String?
+    let originX: Float?       // meters — AR world space
+    let originY: Float?       // meters — AR world space
+    let rotationDeg: Float?   // degrees
+
+    // Device & scan info
     let device: String
     let deviceName: String
     let iosVersion: String
@@ -105,6 +116,12 @@ struct ScanMetadata: Codable {
     let keyframes: [KeyframeEntry]
 
     enum CodingKeys: String, CodingKey {
+        case rfqId = "rfq_id"
+        case floorId = "floor_id"
+        case roomLabel = "room_label"
+        case originX = "origin_x"
+        case originY = "origin_y"
+        case rotationDeg = "rotation_deg"
         case device
         case deviceName = "device_name"
         case iosVersion = "ios_version"
@@ -122,12 +139,19 @@ struct ScanMetadata: Codable {
         keyframes: [CapturedFrame],
         meshVertexCount: Int,
         meshFaceCount: Int,
-        scanDuration: TimeInterval
+        scanDuration: TimeInterval,
+        rfqContext: RFQContext?
     ) -> ScanMetadata {
         let device = UIDevice.current
         let firstFrame = keyframes.first
 
         return ScanMetadata(
+            rfqId: rfqContext?.rfqId,
+            floorId: rfqContext?.floorId,
+            roomLabel: rfqContext?.roomLabel,
+            originX: rfqContext?.originX,
+            originY: rfqContext?.originY,
+            rotationDeg: rfqContext?.rotationDeg,
             device: device.model,
             deviceName: device.name,
             iosVersion: device.systemVersion,

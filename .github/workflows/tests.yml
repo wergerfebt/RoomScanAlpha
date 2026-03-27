@@ -1,4 +1,4 @@
-name: "Phase 2-4: Scan Capture, Export & Packaging Tests"
+name: "Phase 2-10: Scan, Export, Upload, Result, Resilience & Polish Tests"
 
 on:
   push:

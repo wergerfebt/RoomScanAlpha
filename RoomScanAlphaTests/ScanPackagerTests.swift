@@ -46,6 +46,7 @@ final class ScanPackagerTests: XCTestCase {
             keyframes: keyframes,
             meshAnchors: [], // Empty mesh — PLY will have 0 verts/faces
             scanDuration: 45.2,
+            rfqContext: nil,
             onProgress: { _ in }
         )
     }

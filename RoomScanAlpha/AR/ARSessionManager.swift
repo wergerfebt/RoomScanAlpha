@@ -61,11 +61,16 @@ final class ARSessionManager: NSObject, ARSessionDelegate {
         print("[RoomScanAlpha] AR session error: \(error.localizedDescription)")
     }
 
+    var onSessionInterrupted: (() -> Void)?
+    var onSessionResumed: (() -> Void)?
+
     func sessionWasInterrupted(_ session: ARSession) {
         print("[RoomScanAlpha] AR session interrupted")
+        onSessionInterrupted?()
     }
 
     func sessionInterruptionEnded(_ session: ARSession) {
         print("[RoomScanAlpha] AR session interruption ended")
+        onSessionResumed?()
     }
 }

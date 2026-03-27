@@ -1,4 +1,6 @@
 // Converts ARMeshAnchor data to binary PLY format for upload to the cloud scan processor.
+// Uses a two-pass streaming approach: first pass counts totals for the header,
+// second pass writes binary data directly per-anchor without intermediate arrays.
 
 import ARKit
 
@@ -7,35 +9,25 @@ struct PLYExporter {
     /// Export mesh anchors to a binary PLY file at the given URL.
     /// Vertices are transformed to world space. Each face includes a classification label.
     static func export(meshAnchors: [ARMeshAnchor], to fileURL: URL) throws {
-        let mesh = mergeAnchors(meshAnchors)
-        let header = buildHeader(vertexCount: mesh.vertices.count, faceCount: mesh.faces.count)
+        // Pass 1: count totals for header
+        var totalVertices = 0
+        var totalFaces = 0
+        for anchor in meshAnchors {
+            totalVertices += anchor.geometry.vertices.count
+            totalFaces += anchor.geometry.faces.count
+        }
 
-        var data = Data(header.utf8)
-        serializeVertices(mesh.vertices, normals: mesh.normals, into: &data)
-        serializeFaces(mesh.faces, classifications: mesh.classifications, into: &data)
+        let header = buildHeader(vertexCount: totalVertices, faceCount: totalFaces)
 
-        try data.write(to: fileURL)
+        // Pass 2: stream binary data directly to file
+        FileManager.default.createFile(atPath: fileURL.path, contents: nil)
+        let fileHandle = try FileHandle(forWritingTo: fileURL)
+        defer { fileHandle.closeFile() }
 
-        print("[RoomScanAlpha] PLY exported: \(mesh.vertices.count) vertices, \(mesh.faces.count) faces, \(data.count / 1024)KB")
-    }
+        fileHandle.write(Data(header.utf8))
 
-    // MARK: - Mesh merging
-
-    private struct MergedMesh {
-        let vertices: [SIMD3<Float>]
-        let normals: [SIMD3<Float>]
-        let faces: [[UInt32]]
-        let classifications: [UInt8]
-    }
-
-    private static func mergeAnchors(_ anchors: [ARMeshAnchor]) -> MergedMesh {
-        var allVertices = [SIMD3<Float>]()
-        var allNormals = [SIMD3<Float>]()
-        var allFaces = [[UInt32]]()
-        var allClassifications = [UInt8]()
-        var vertexOffset: UInt32 = 0
-
-        for anchor in anchors {
+        // Write vertices per-anchor (no intermediate array)
+        for anchor in meshAnchors {
             let geometry = anchor.geometry
             let worldTransform = anchor.transform
             let normalTransform = simd_float3x3(
@@ -44,36 +36,54 @@ struct PLYExporter {
                 SIMD3<Float>(worldTransform.columns.2.x, worldTransform.columns.2.y, worldTransform.columns.2.z)
             )
 
-            let vertexCount = geometry.vertices.count
-            for i in 0..<vertexCount {
+            var vertexData = Data(capacity: geometry.vertices.count * 24)
+            for i in 0..<geometry.vertices.count {
                 let v = geometry.vertex(at: UInt32(i))
                 let local4 = SIMD4<Float>(v[0], v[1], v[2], 1.0)
                 let world4 = simd_mul(worldTransform, local4)
-                allVertices.append(SIMD3<Float>(world4.x, world4.y, world4.z))
 
                 let n = geometry.normal(at: UInt32(i))
                 let localN = SIMD3<Float>(n[0], n[1], n[2])
                 let worldN = simd_mul(normalTransform, localN)
-                allNormals.append(worldN)
+
+                var wx = world4.x, wy = world4.y, wz = world4.z
+                var nx = worldN.x, ny = worldN.y, nz = worldN.z
+                vertexData.append(Data(bytes: &wx, count: 4))
+                vertexData.append(Data(bytes: &wy, count: 4))
+                vertexData.append(Data(bytes: &wz, count: 4))
+                vertexData.append(Data(bytes: &nx, count: 4))
+                vertexData.append(Data(bytes: &ny, count: 4))
+                vertexData.append(Data(bytes: &nz, count: 4))
             }
-
-            let faceCount = geometry.faces.count
-            for i in 0..<faceCount {
-                let indices = geometry.faceIndices(at: i)
-                let offsetIndices = indices.map { $0 + vertexOffset }
-                allFaces.append(offsetIndices)
-
-                let classification = geometry.classificationOf(faceWithIndex: i)
-                allClassifications.append(UInt8(classification.rawValue))
-            }
-
-            vertexOffset += UInt32(vertexCount)
+            fileHandle.write(vertexData)
         }
 
-        return MergedMesh(vertices: allVertices, normals: allNormals, faces: allFaces, classifications: allClassifications)
-    }
+        // Write faces per-anchor with vertex offset tracking
+        var vertexOffset: UInt32 = 0
+        for anchor in meshAnchors {
+            let geometry = anchor.geometry
 
-    // MARK: - Header
+            var faceData = Data(capacity: geometry.faces.count * 14)
+            for i in 0..<geometry.faces.count {
+                let indices = geometry.faceIndices(at: i)
+                var count: UInt8 = UInt8(indices.count)
+                faceData.append(Data(bytes: &count, count: 1))
+                for idx in indices {
+                    var offsetIdx = idx + vertexOffset
+                    faceData.append(Data(bytes: &offsetIdx, count: 4))
+                }
+                let classification = geometry.classificationOf(faceWithIndex: i)
+                var classValue = UInt8(classification.rawValue)
+                faceData.append(Data(bytes: &classValue, count: 1))
+            }
+            fileHandle.write(faceData)
+
+            vertexOffset += UInt32(geometry.vertices.count)
+        }
+
+        let fileSize = fileHandle.offsetInFile
+        print("[RoomScanAlpha] PLY exported: \(totalVertices) vertices, \(totalFaces) faces, \(fileSize / 1024)KB (streaming)")
+    }
 
     private static func buildHeader(vertexCount: Int, faceCount: Int) -> String {
         """
@@ -91,33 +101,5 @@ struct PLYExporter {
         property uchar classification
         end_header\n
         """
-    }
-
-    // MARK: - Binary serialization
-
-    private static func serializeVertices(_ vertices: [SIMD3<Float>], normals: [SIMD3<Float>], into data: inout Data) {
-        for i in 0..<vertices.count {
-            var v = vertices[i]
-            var n = normals[i]
-            data.append(Data(bytes: &v.x, count: 4))
-            data.append(Data(bytes: &v.y, count: 4))
-            data.append(Data(bytes: &v.z, count: 4))
-            data.append(Data(bytes: &n.x, count: 4))
-            data.append(Data(bytes: &n.y, count: 4))
-            data.append(Data(bytes: &n.z, count: 4))
-        }
-    }
-
-    private static func serializeFaces(_ faces: [[UInt32]], classifications: [UInt8], into data: inout Data) {
-        for i in 0..<faces.count {
-            let face = faces[i]
-            var count: UInt8 = UInt8(face.count)
-            data.append(Data(bytes: &count, count: 1))
-            for var idx in face {
-                data.append(Data(bytes: &idx, count: 4))
-            }
-            var classification = classifications[i]
-            data.append(Data(bytes: &classification, count: 1))
-        }
     }
 }

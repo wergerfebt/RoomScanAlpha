@@ -29,6 +29,8 @@ struct ScanningView: View {
                         label: "anchors"
                     )
                 }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(viewModel.meshTriangleCount) triangles, \(viewModel.keyframeCount) frames, \(viewModel.meshAnchorCount) anchors")
                 .padding(.top, 8)
 
                 Spacer()
@@ -42,6 +44,7 @@ struct ScanningView: View {
                         .background(.ultraThinMaterial)
                         .clipShape(Capsule())
                 }
+                .accessibilityLabel("Stop scanning")
                 .padding(.bottom, 32)
             }
         }
@@ -49,6 +52,11 @@ struct ScanningView: View {
             sessionManager.onKeyframeCaptured = { count in
                 DispatchQueue.main.async {
                     viewModel.updateKeyframeCount(count)
+                }
+            }
+            sessionManager.onSessionInterrupted = {
+                DispatchQueue.main.async {
+                    viewModel.showInterruptionAlert = true
                 }
             }
             sessionManager.startSession()

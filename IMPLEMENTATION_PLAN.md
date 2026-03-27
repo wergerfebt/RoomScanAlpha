@@ -123,6 +123,8 @@ Phases 1–7 form the alpha critical path. Phases 8–10 layer on business logic
 | 1.8 | FCM notification permission requested | Launch app for first time | iOS presents notification permission prompt | `UNUserNotificationCenter` authorization status changes to `.authorized` or `.denied` |
 | 1.9 | FCM token registered | Grant notification permission, check console | Device token is generated | `Messaging.messaging().token` returns a non-nil string |
 
+> **CI workflow**: `tests.yml` — Build step covers `1.1` (compile verification). Tests `1.2`–`1.9` are device/runtime-only — no workflow changes needed for this phase.
+
 ---
 
 ## Phase 2: AR Session + Live Mesh Visualization
@@ -167,6 +169,8 @@ session.run(config)
 | 2.9 | Frame rate during scanning | Monitor FPS during active scanning | App maintains usable frame rate | Render loop stays ≥ 30 FPS (measured via Xcode GPU debugger or `CADisplayLink`) |
 | 2.10 | Scene depth data available | Check `ARFrame.sceneDepth` during scanning | Depth data is non-nil | `frame.sceneDepth?.depthMap` returns a valid `CVPixelBuffer` with format `kCVPixelFormatType_DepthFloat32` |
 
+> **CI workflow**: `tests.yml` — `MeshExtractorTests` covers `2.5` (classification color mapping) and `ScanViewModelTests` covers `2.6` (mesh stats) and `2.8` (state transitions). Tests `2.1`–`2.4`, `2.7`, `2.9`–`2.10` require LiDAR hardware and are device-only.
+
 ---
 
 ## Phase 3: Keyframe Capture + Memory Management
@@ -209,6 +213,10 @@ session.run(config)
 | 3.11 | Memory stays bounded during scan | Monitor memory usage during a 60-second scan | App memory stays within acceptable limits | Total memory usage < 500MB (measured via Xcode Memory Gauge); no memory warnings fired |
 | 3.12 | CVPixelBuffers released after JPEG conversion | Monitor memory per-keyframe | Memory does not grow linearly with keyframe count | Memory delta per keyframe < 0.5MB (JPEG data only, not raw buffer) |
 | 3.13 | Keyframe spatial coverage | Log all keyframe camera positions after scan | Positions span the scanned area | Bounding box of keyframe positions covers ≥ 80% of the room's footprint |
+
+> **CI workflow**: `tests.yml` — `FrameCaptureManagerTests` covers `3.1`–`3.5` (threshold constants and cap). `CapturedFrameTests` covers `3.6`–`3.9` (intrinsics, transform, depth storage), `3.11`–`3.12` (memory model — Data not CVPixelBuffer). Tests `3.3`, `3.5`, `3.10`, `3.13` require device AR session and are manual-only.
+>
+> **Efficiency note**: `FrameCaptureManagerTests` currently uses `Mirror` to verify private threshold constants — this is fragile and breaks on renames. Expose thresholds as a `static let configuration` struct or `internal` constants so tests verify behavior, not implementation.
 
 ---
 
@@ -281,6 +289,10 @@ scan_<timestamp>/
 | 4.15 | Export runs on background thread | Trigger export, interact with UI during processing | UI remains responsive | Main thread is not blocked; UI animations do not stutter (verified via Xcode Thread Checker) |
 | 4.16 | Depth map format documented in metadata | Check metadata.json for depth format spec | Depth encoding details present | `depth_format` field specifies pixel format, resolution, and byte order (matching cloud pipeline's expected input) |
 | 4.17 | Scan quality validation before export | Complete a scan with <10 keyframes and minimal mesh | App warns scan quality is insufficient | Warning displayed: "Scan may be incomplete"; user can retry or proceed; minimum thresholds: ≥15 keyframes, ≥500 mesh faces |
+
+> **CI workflow**: `tests.yml` — `PLYExporterTests` covers `4.1`–`4.5` (PLY format, header, classification). `ScanPackagerTests` covers `4.6`, `4.8`–`4.12`, `4.14`, `4.16` (JPEG export, metadata JSON schema, directory structure, depth format). `ScanViewModelTests` covers `4.17` (quality thresholds). Tests `4.7` (visual JPEG quality) and `4.13` (export timeout on real data) are device-only.
+>
+> **Efficiency note**: `PLYExporter` and `MeshExtractor` both independently implement the anchor-to-world-space vertex transform. Have `PLYExporter` call `MeshExtractor.worldSpaceVertices()` (and add a matching `worldSpaceNormals()`) to eliminate the duplicate and maintain a single source of truth for coordinate transforms.
 
 ---
 
@@ -384,6 +396,8 @@ CREATE TABLE scanned_rooms (
 6. Insert a test RFQ row: `INSERT INTO rfqs (id, status) VALUES ('test-rfq-001', 'scan_pending')`
 7. Verify the full flow manually: signed URL → upload → enqueue → process → scan_ready
 
+> **Efficiency note**: The Cloud Run REST API and Scan Processor both need a DB connection helper. Extract a shared `cloud/shared/db.py` module rather than duplicating `get_db_connection()` in both services — prevents config drift as connection settings evolve.
+
 ### Test Cases — Phase 5.1
 
 > Tests 5.1.1–5.1.17 run in CI via GitHub Actions against the deployed stub. Tests 5.1.18–5.1.21 validate the SQL schema and can run against a local PostgreSQL instance in CI.
@@ -411,6 +425,8 @@ CREATE TABLE scanned_rooms (
 | 5.1.19 | RFQS table exists with FK relationship | Insert an RFQ, insert a SCANNED_ROOMS row referencing it | FK constraint satisfied | Insert succeeds; `rfq_id` in SCANNED_ROOMS references valid RFQS row |
 | 5.1.20 | SCANNED_ROOMS rejects invalid rfq_id | Insert SCANNED_ROOMS with non-existent rfq_id | FK violation | Insert fails with foreign key constraint error |
 | 5.1.21 | Status endpoint returns correct status | Poll `/api/rfqs/test-rfq-001/scans/{scan_id}/status` after processing | Returns `scan_ready` | HTTP 200; response `status` equals `scan_ready`; response includes mock room dimensions and `scan_dimensions` bbox |
+
+> **CI workflow**: Add new workflow `cloud-stub-tests.yml`. Tests `5.1.18`–`5.1.20` (SQL schema validation) can run against a PostgreSQL service container in GitHub Actions. Tests `5.1.1`–`5.1.17`, `5.1.21` (API/processor integration) require the deployed Cloud Run stub and should run as a post-deploy smoke test workflow triggered on push to the `cloud/` directory.
 
 ---
 
@@ -442,6 +458,8 @@ CREATE TABLE scanned_rooms (
 
 > **Ship gate**: Do not proceed to Phase 6 until the stub pipeline successfully processes at least one real scan package. If it fails, fix the export format (Phase 4) or the stub processor (Phase 5.1) before building the upload flow.
 
+> **CI workflow**: No automated CI — Phase 5.2 is entirely manual (on-device scan → manual upload → inspect logs/DB). Results documented in a test report.
+
 ---
 
 ## Phase 6: Cloud Upload — Happy Path
@@ -457,6 +475,7 @@ CREATE TABLE scanned_rooms (
 - Upload zip directly to GCS using the signed URL (bypasses Cloud Run's 32MB request limit)
 - Notify the API that the upload is complete (triggers Cloud Tasks job)
 - Show upload progress bar in UI
+- Refactor `ContentView` so `ScanViewModel` owns `ARSessionManager` — ContentView currently wires callbacks between them manually and pulls internal state (`sessionManager.frameCaptureManager.capturedFrames`). This coupling will compound as upload logic is added in this phase. Have `ScanViewModel` expose what views need, reducing ContentView to pure UI.
 
 **Upload flow** (matches Quoterra architecture Flow 1):
 ```
@@ -492,6 +511,8 @@ Backend → Cloud Tasks Queue (enqueue scan processing job)
 | 6.11 | Scan ID persisted locally | Complete an upload | Scan ID saved to local storage | `UserDefaults` or local DB contains the scan ID; survives app restart |
 | 6.12 | Upload fails gracefully on no network | Enable airplane mode, attempt upload | User sees error message | Error alert displayed with "No network connection" message; app does not crash |
 
+> **CI workflow**: Update `tests.yml` — add `CloudUploaderTests` for `6.1`–`6.2` (zip creation/validation can run on simulator with mock data). Tests `6.3`–`6.12` require Firebase Auth, network, and the deployed cloud stub — add to `cloud-stub-tests.yml` as integration tests, or test manually on device. The GitHub Actions secrets required by `cloud-stub-tests.yml` (`SCAN_API_BASE_URL`, `FIREBASE_PROJECT_ID`, `FIREBASE_API_KEY`, `GOOGLE_SERVICE_INFO_PLIST`) are configured in **Phase 9** — see "GitHub Actions secrets setup" in that phase.
+
 ---
 
 ## Phase 7: Result Polling + Structured Data Display
@@ -518,6 +539,8 @@ Backend → Cloud Tasks Queue (enqueue scan processing job)
 | 7.6 | FCM notification received on scan completion | Upload scan, wait for cloud processing to finish | Push notification arrives on device | Notification displays "Scan ready" message; tapping it opens the result viewer for the correct scan |
 | 7.7 | FCM fallback to polling | Disable notifications, upload scan | App polls status endpoint as fallback | Polling fires every 5-10s; transitions to result view when status = `scan_ready` |
 
+> **CI workflow**: Update `tests.yml` — add `ScanResultViewTests` for `7.2`–`7.3` (state rendering with mock responses), `7.5` (status enum mapping). Tests `7.1`, `7.4`, `7.6`–`7.7` require the deployed cloud stub and a real upload — run via `cloud-stub-tests.yml` or manually on device.
+>
 > **Alpha complete**: At this point the full loop works end-to-end — scan a room, upload, see structured results. The remaining phases add business context, resilience, and richer features.
 
 ---
@@ -528,11 +551,18 @@ Backend → Cloud Tasks Queue (enqueue scan processing job)
 
 **Key files**: `RFQContext.swift`, `RFQSelectionView.swift`, `RoomLabelView.swift`
 
+**Unit convention** (enforced across all phases):
+- **On-device geometry** (ARKit vertices, PLY mesh, scan_dimensions bbox, origin_x/y): always **meters** — ARKit's native unit
+- **Cloud-computed room dimensions** (floor_area, wall_area, ceiling_height, perimeter): always **imperial (sq ft / ft)** — matches US construction/renovation conventions
+- **metadata.json**: origin coordinates in meters, no conversion
+- **ScanResultView**: display raw scan bbox in meters, room dimensions in feet — label units explicitly (e.g., "150 sq ft", "3.05 m")
+- **Never mix**: do not convert meters to feet in metadata.json or PLY. Do not store cloud room dimensions in meters. Each layer owns its unit and labels it.
+
 **Implementation**:
 - Build `RFQSelectionView` to select an RFQ from the backend before scanning
 - Build floor selection (select or create a floor within the RFQ)
 - Prompt for room label after scan completes
-- Capture room origin coordinates from the AR session's world transform
+- Capture room origin coordinates from the AR session's world transform (in meters)
 - Add RFQ context fields to metadata.json: `rfq_id`, `floor_id`, `room_label`, `origin_x`, `origin_y`, `rotation_deg`
 - Validate metadata.json maps to `SCANNED_ROOMS` schema
 
@@ -580,13 +610,15 @@ Backend → Cloud Tasks Queue (enqueue scan processing job)
 | 8.8 | RFQ-scoped endpoints used | Inspect all API calls during upload flow | URLs follow RFQ-centric pattern | All endpoints include `rfq_id` in path (e.g., `/api/rfqs/{rfq_id}/scans/...`); no orphaned `/api/scans/` calls |
 | 8.9 | JWT token refresh on expiry | Set token TTL to 5s (test config), wait, then make API call | Token auto-refreshes before request | New token fetched via `User.getIDToken()`; API call succeeds with refreshed token; no 401 response |
 
+> **CI workflow**: Update `tests.yml` — add `RFQContextTests` for `8.6`–`8.7` (metadata.json schema validation with mock RFQ context data). Tests `8.1`–`8.5` (UI selection flows) and `8.8`–`8.9` (live API + JWT) are device/integration tests — manual or via `cloud-stub-tests.yml`.
+
 ---
 
-## Phase 9: Upload Resilience + Network Hardening
+## Phase 9: Upload Resilience + Network Hardening + Cloud Security
 
-**Goal**: Handle real-world network conditions — retry, resume, offline queuing, cellular warnings.
+**Goal**: Handle real-world network conditions — retry, resume, offline queuing, cellular warnings. Lock down Cloud Run services with OIDC authentication for service-to-service calls.
 
-**Key files**: `CloudUploader.swift`
+**Key files**: `CloudUploader.swift`, Cloud Run service configs
 
 **Implementation**:
 - Handle network interruptions with retry and exponential backoff
@@ -595,6 +627,25 @@ Backend → Cloud Tasks Queue (enqueue scan processing job)
 - Warn on cellular data before uploading ~75MB
 - Prevent concurrent uploads
 - Register FCM token with the backend for push notifications
+- **OIDC hardening**: Redeploy scan-processor with `--no-allow-unauthenticated`. Grant `roles/run.invoker` to the App Engine default SA (`roomscanalpha@appspot.gserviceaccount.com`) so Cloud Tasks can invoke the processor with OIDC tokens. This ensures only Cloud Tasks (via the REST API's enqueue step) can trigger scan processing — not arbitrary external requests.
+- **GitHub Actions secrets for CI integration tests**: Configure the secrets required by `cloud-stub-tests.yml` (Phase 6 integration tests). Without these, the cloud integration test workflow cannot authenticate with Firebase or reach the Cloud Run API.
+
+**OIDC hardening steps**:
+1. Redeploy scan-processor: `gcloud run deploy scan-processor --no-allow-unauthenticated ...`
+2. Grant invoker role: `gcloud run services add-iam-policy-binding scan-processor --member="serviceAccount:roomscanalpha@appspot.gserviceaccount.com" --role="roles/run.invoker"`
+3. Verify Cloud Tasks job uses OIDC token with `service_account_email=roomscanalpha@appspot.gserviceaccount.com` (already configured in API code)
+4. Test: direct `curl` to `/process` should return 403; Cloud Tasks invocation should succeed
+
+**GitHub Actions secrets setup** (required for `cloud-stub-tests.yml`):
+
+These secrets enable the Phase 6–7 cloud integration tests (`cloud-stub-tests.yml`) to run in CI. Set them in the GitHub repo under Settings → Secrets and variables → Actions, scoped to the `staging` environment:
+
+1. `SCAN_API_BASE_URL` — Cloud Run REST API base URL (e.g. `https://scan-api-839349778883.us-central1.run.app`). Source: `gcloud run services describe scan-api --region=us-central1 --format='value(status.url)'`
+2. `FIREBASE_PROJECT_ID` — GCP project ID (e.g. `roomscanalpha`). Source: Firebase Console → Project Settings → General
+3. `FIREBASE_API_KEY` — Firebase Web API key for anonymous auth in CI. Source: Firebase Console → Project Settings → General → Web API Key
+4. `GOOGLE_SERVICE_INFO_PLIST` — Base64-encoded `GoogleService-Info.plist` for the iOS app. Generate with: `base64 -i RoomScanAlpha/GoogleService-Info.plist | pbcopy`, then paste as the secret value. Source: Firebase Console → Project Settings → iOS app → download `GoogleService-Info.plist`
+
+> **Security note**: Use a separate Firebase API key with restricted permissions for CI if possible. The `staging` environment in GitHub Actions should map to a staging GCP project or Firebase project to avoid polluting production data with test uploads.
 
 ### Test Cases — Phase 9
 
@@ -607,6 +658,11 @@ Backend → Cloud Tasks Queue (enqueue scan processing job)
 | 9.5 | Offline scan queued for later upload | Complete scan in airplane mode, re-enable network | Scan is persisted locally and uploads automatically | Scan package saved to disk; upload triggers within 30s of connectivity restoration; no data loss |
 | 9.6 | Multiple queued scans upload sequentially | Complete 3 scans offline, re-enable network | All 3 upload in order | All 3 scans reach "uploaded" status; no concurrent uploads; order matches scan timestamps |
 | 9.7 | Upload runs on background thread | Start upload, navigate to other screens | Upload continues in background | Upload progress continues; completion callback fires even if user navigated away |
+| 9.8 | Processor rejects unauthenticated requests | `curl -X POST .../process` with no auth | HTTP 403 returned | Direct calls without OIDC token are rejected; only Cloud Tasks invocations succeed |
+| 9.9 | Cloud Tasks invokes processor via OIDC | Enqueue a job via upload-complete endpoint, check processor logs | Processor receives and processes the request | Cloud Tasks attaches OIDC token; processor logs show successful processing; scan_status transitions to `scan_ready` |
+| 9.10 | CI secrets configured and cloud-stub-tests pass | Run `cloud-stub-tests.yml` workflow manually via GitHub Actions | All Phase 6 integration tests (6.3–6.12) pass in CI | Workflow completes successfully; Firebase Auth works in CI; signed URL obtained; upload reaches GCS |
+
+> **CI workflow**: Update `tests.yml` — add `UploadResilienceTests` for `9.2` (retry with mocked 503), `9.4` (concurrent upload prevention via state check). Tests `9.1`, `9.3`, `9.5`–`9.7` require network manipulation and device — manual-only. Tests `9.8`–`9.9` run against deployed cloud services. Test `9.10` validates that `cloud-stub-tests.yml` runs end-to-end after secrets are configured.
 
 ---
 
@@ -651,7 +707,36 @@ Backend → Cloud Tasks Queue (enqueue scan processing job)
 | 10.14 | Scan history shows RFQ grouping | View scan history after multi-room session | Scans grouped by RFQ/property | History UI groups scans under their RFQ; shows room labels and per-room status |
 | 10.15 | Scanning guidance appears | Start scanning and stay pointed at one wall | Guidance suggests looking at unscanned areas | Visual indicator (arrow or highlight) points toward unscanned regions after 10 seconds |
 
-### 10d: Error Recovery & Edge Cases
+### 10d: Real Room Dimensions from PLY Geometry
+
+**Goal**: Replace the stub processor's hardcoded mock room dimensions with real values computed from the classified PLY mesh.
+
+**Current state**: The scan processor (Phase 5.1 stub) writes `floor_area_sqft = 150.0`, `wall_area_sqft = 400.0`, `ceiling_height_ft = 8.0`, `perimeter_linear_ft = 50.0` for every scan regardless of actual geometry. The bounding box (`scan_dimensions`) is already real — computed from PLY vertices.
+
+**Implementation** (cloud/processor/main.py):
+1. Parse PLY face classifications (already stored as `uchar classification` per face)
+2. Compute **floor area**: sum triangle areas for faces with classification = floor (2). Convert m² → sq ft.
+3. Compute **wall area**: sum triangle areas for faces with classification = wall (1). Convert m² → sq ft.
+4. Compute **ceiling height**: (max Y of ceiling vertices) minus (min Y of floor vertices). Convert m → ft.
+5. Compute **perimeter**: project floor-classified vertices onto XZ plane, compute convex hull perimeter. Convert m → ft.
+6. **Detected components**: enumerate unique classifications present (wall, floor, ceiling, table, seat, window, door) instead of hardcoding `["wall", "floor", "ceiling"]`.
+
+**Unit convention**: All geometry math in meters (PLY native). Convert to imperial only when writing to `SCANNED_ROOMS` fields (`_sqft`, `_ft`).
+
+| ID | Test Case | Steps | Expected Result | Pass Criteria |
+|----|-----------|-------|-----------------|---------------|
+| 10d.1 | Floor area computed from mesh | Scan a ~10x12 ft room, check results | Floor area ≈ 120 sq ft | Computed value within ±20% of measured room area |
+| 10d.2 | Ceiling height derived from mesh | Scan a standard 8ft ceiling room | Ceiling height ≈ 8 ft | Computed value within ±0.5 ft of actual ceiling height |
+| 10d.3 | Wall area computed from mesh | Scan a room with 4 walls | Wall area is reasonable | Wall area > 0 and proportional to room perimeter × ceiling height |
+| 10d.4 | Perimeter computed from floor boundary | Scan a rectangular room | Perimeter ≈ 2×(length + width) | Computed value within ±20% of measured perimeter |
+| 10d.5 | Detected components reflect actual surfaces | Scan a room with visible floor, walls, ceiling | Components list matches scanned surfaces | `detected_components` contains at least the classifications present in the PLY (not hardcoded) |
+| 10d.6 | Values differ between rooms | Scan two rooms of different sizes | Dimensions differ | floor_area, wall_area, ceiling_height, perimeter are different between the two scans |
+
+### 10e: Export Performance
+
+> **Efficiency note**: `PLYExporter` currently accumulates all vertices, normals, faces, and classifications as Swift arrays, then iterates them again to write binary data — roughly doubling peak memory during export. For large scans (50K+ vertices), switch to a two-pass streaming approach: first pass counts totals for the header, second pass writes binary bytes directly per-anchor without intermediate arrays.
+
+### 10e: Error Recovery & Edge Cases
 
 | ID | Test Case | Steps | Expected Result | Pass Criteria |
 |----|-----------|-------|-----------------|---------------|
@@ -661,6 +746,8 @@ Backend → Cloud Tasks Queue (enqueue scan processing job)
 | 10.19 | Graceful degradation on low storage | Fill device storage to < 200MB free, attempt export | User warned about low storage | Alert: "Not enough storage to export scan" before attempting write |
 | 10.20 | No crashes on rapid state changes | Rapidly tap Start/Stop scan 10 times | App handles all transitions | No crashes; final state is consistent (either idle or scanning) |
 | 10.21 | Accessibility — VoiceOver | Enable VoiceOver, navigate through all screens | All buttons and status elements are announced | Every interactive element has an accessibility label; state changes are announced |
+
+> **CI workflow**: Update `tests.yml` — add `AccessibilityTests` for `10.21` (verify accessibility labels exist on all interactive elements via `XCUIApplication` accessibility audit). All other Phase 10 tests (`10.1`–`10.20`) require device hardware (SceneKit rendering, multi-room AR, phone calls, storage manipulation) and are manual-only.
 
 ---
 
@@ -678,28 +765,3 @@ Backend → Cloud Tasks Queue (enqueue scan processing job)
 | Offline scans lost | User scans with no connectivity and data is never uploaded | Queue scan packages to disk; auto-upload on connectivity restoration via NWPathMonitor | Phase 9 |
 | metadata.json schema drift vs SCANNED_ROOMS | Cloud pipeline rejects or misparses scan data | Validate metadata.json against SCANNED_ROOMS column list; version the schema | Phase 8 |
 
----
-
-## Performance & Efficiency
-
-Improvements identified via codebase audit. Ordered by impact — high priority items affect the AR render loop or export correctness; medium items reduce complexity and maintenance risk.
-
-### High Priority
-
-| ID | Issue | File(s) | Impact | Fix |
-|----|-------|---------|--------|-----|
-| P-1 | **CIContext created per keyframe** | `CapturedFrame.swift:60` | `CIContext()` allocates GPU resources on every call. At 60 keyframes during the AR render loop, this causes repeated expensive initialization. | Make `CIContext` a `static let` on `CapturedFrame`, or pass a shared instance in from `FrameCaptureManager`. Single allocation, reused for all frames. |
-| P-2 | **PLY export doubles peak memory** | `PLYExporter.swift:8-47` | Accumulates `allVertices`, `allNormals`, `allFaces`, and `allClassifications` as Swift arrays, then iterates them again to write binary data. For a 12K+ vertex mesh this roughly doubles peak memory during export. | Two-pass approach: first pass counts totals (cheap), second pass streams binary bytes directly into a `Data` buffer per-anchor. Eliminates intermediate arrays. |
-| P-3 | **PLY header has leading whitespace** | `PLYExporter.swift:53-67` | Swift multi-line string indentation inserts leading spaces on each header line. The `ply` magic and `end_header` lines must start at column 0. MeshLab and strict parsers may reject the file. The cloud stub handles this via `strip()` but third-party tools will not. | Use a non-indented string literal, or apply `components(separatedBy:).map { $0.trimmingCharacters(in: .whitespaces) }.joined(separator:)` to dedent. |
-| P-4 | **Mesh node fully rebuilt on every anchor update** | `ARScanningView.swift:39-42` | `didUpdate` removes all child nodes and rebuilds SCNGeometry from scratch. With dozens of mesh anchors updating at 30fps, this creates heavy GC pressure and SceneKit churn. | Cache `SCNNode` per anchor. Only rebuild geometry when the anchor's vertex count or face count changes (cheap dirty check). Skip rebuild if geometry hasn't changed. |
-| P-5 | **Triangle count recomputed from all anchors every frame** | `ARScanningView.swift:60-72` | On every `didUpdate` callback, `updateStats` pulls `currentFrame.anchors`, filters to mesh anchors, and sums triangle counts across all of them. This is O(anchors) work on the render thread at 30fps. | Maintain a running triangle count in `ARSessionManager`, incrementally updated in `session(_:didAdd:)` and `session(_:didUpdate:)`. Push the pre-computed total to the view model. |
-
-### Medium Priority
-
-| ID | Issue | File(s) | Impact | Fix |
-|----|-------|---------|--------|-----|
-| P-6 | **Duplicate world-space vertex transform** | `MeshExtractor.swift:43-56`, `PLYExporter.swift:24-28` | Both files independently implement the same anchor-to-world-space vertex transform. Divergence risk if one is updated without the other. | Have `PLYExporter` call `MeshExtractor.worldSpaceVertices()` (and add a matching `worldSpaceNormals()`). Single source of truth for the coordinate transform. |
-| P-7 | **Duplicate `get_db_connection()` in cloud services** | `cloud/api/main.py:34-41`, `cloud/processor/main.py:30-37` | Identical DB connection function and config blocks in both services. Copy-paste drift risk as config evolves. | Extract a shared `cloud/shared/db.py` module that both services import. |
-| P-8 | **Session paused twice on stop** | `ScanningView.swift:57`, `ContentView.swift:34` | `ScanningView.onDisappear` calls `pauseSession()`, and `ContentView.handleStopScan()` also calls `pauseSession()`. When the user taps Stop, both fire — `lastMeshAnchors` is snapshotted twice. | Remove `pauseSession()` from `ScanningView.onDisappear`, or add a guard in `pauseSession()` that no-ops if already paused. The explicit stop in `handleStopScan` is the authoritative path. |
-| P-9 | **ContentView acts as coordinator between ViewModel and SessionManager** | `ContentView.swift:4-5, 47-49` | `ScanViewModel` and `ARSessionManager` are both `@State` on `ContentView` with no relationship. ContentView manually wires callbacks and pulls internal state (`sessionManager.frameCaptureManager.capturedFrames`). This coupling will grow as upload/RFQ logic arrives in later phases. | Have `ScanViewModel` own `ARSessionManager` and expose what views need. Or introduce a lightweight coordinator. Reduces ContentView's responsibilities before Phase 6+ adds more. |
-| P-10 | **Tests use Mirror to verify private constants** | `FrameCaptureManagerTests.swift:44-65` | Mirror-based tests are fragile — they break on property renames and test implementation rather than behavior. | Expose thresholds as a `static let configuration` struct or `internal` constants on `FrameCaptureManager`. Alternatively, test behavior by feeding synthetic inputs with known deltas. |
