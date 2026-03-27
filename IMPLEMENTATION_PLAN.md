@@ -72,7 +72,10 @@ Phase 1 (Setup) ──→ Phase 2 (AR + Mesh) ──→ Phase 3 (Keyframes + Mem
                                               Phase 4 (Export)
                                                     │
                                                     v
-                                              Phase 5 (Cloud Smoke Test) ← manual gate
+                                        Phase 5.1 (Cloud Stub Pipeline) ← infra setup
+                                                    │
+                                                    v
+                                        Phase 5.2 (Cloud Smoke Test) ← manual gate
                                                     │
                                                     v
                                               Phase 6 (Upload — Happy Path)
@@ -281,33 +284,163 @@ scan_<timestamp>/
 
 ---
 
-## Phase 5: Cloud Integration Smoke Test
+## Phase 5.1: Cloud Stub Pipeline Setup
 
-**Goal**: Manually verify that the scan package produced by Phase 4 is consumable by the cloud pipeline. This is not app code — it is a manual validation gate that de-risks everything downstream.
+**Goal**: Stand up the minimum cloud infrastructure needed to accept, validate, and process a scan package from the iOS app. This is a stub processor — it validates the scan format and writes mock structured data to the database, without full CV/stitching or Vertex AI. This de-risks Phase 5.2 and unblocks Phase 7 (Upload) development.
+
+**Infrastructure to provision**:
+
+| Component | What to do |
+|-----------|-----------|
+| **GCS Bucket** | Create `gs://roomscanalpha-scans/` (or use existing Firebase Storage bucket) with a `scans/` prefix for uploads |
+| **Cloud SQL PostgreSQL** | Provision a `db-f1-micro` instance; create the `quoterra` database; run the `SCANNED_ROOMS` + `RFQS` table migrations from the Miro DB schema |
+| **Cloud Run REST API** | Deploy a minimal Python/Node service with 3 endpoints: signed URL generation, upload-complete webhook, and status polling |
+| **Cloud Tasks Queue** | Create a `scan-processing` queue in the same region as Cloud Run |
+| **Cloud Run Scan Processor (stub)** | Deploy a minimal service that: unzips the package, validates PLY/JPEG/metadata structure, writes mock room data to `SCANNED_ROOMS`, and sets status to `scan_ready` |
+
+**Cloud Run REST API endpoints** (stub):
+```
+GET  /api/rfqs/{rfq_id}/scans/upload-url
+  → Generates a GCS signed URL (15 min TTL) for direct upload
+  → Returns { "signed_url": "...", "scan_id": "uuid" }
+  → Requires: Authorization: Bearer <JWT>
+
+POST /api/rfqs/{rfq_id}/scans/complete
+  → Enqueues a Cloud Tasks job for the scan processor
+  → Inserts SCANNED_ROOMS row with status = "processing"
+  → Returns { "scan_id": "uuid", "status": "queued" }
+
+GET  /api/rfqs/{rfq_id}/scans/{scan_id}/status
+  → Returns current scan_status from SCANNED_ROOMS
+  → Returns { "status": "processing" | "scan_ready" | "failed", ... }
+```
+
+**Cloud Run Scan Processor (stub) logic**:
+```
+1. Download zip from GCS
+2. Unzip and validate structure (reject with scan_status = "failed" + error message if any check fails):
+   - mesh.ply exists and has valid PLY header (element vertex N, element face M)
+   - metadata.json is valid JSON with all required keys
+   - keyframes/ contains N files matching metadata.keyframe_count
+   - depth/ contains N .depth files matching keyframe count
+3. Validate file contents:
+   - Each frame_NNN.jpg starts with JPEG SOI marker (0xFFD8) and has size > 0
+   - Each frame_NNN.json is valid JSON containing a 16-element camera_transform array
+   - Each depth file has size > 0
+   - PLY vertex/face counts in header match metadata mesh_vertex_count / mesh_face_count
+4. Parse PLY vertices and compute bounding box (min/max x, y, z extents in meters)
+5. Parse metadata.json: extract device info, keyframe_count, mesh counts
+6. Write MOCK room data to SCANNED_ROOMS:
+   - floor_area_sqft = 150.0 (hardcoded)
+   - wall_area_sqft = 400.0
+   - ceiling_height_ft = 8.0
+   - perimeter_linear_ft = 50.0
+   - detected_components = '["wall", "floor", "ceiling"]'
+   - scan_mesh_url = GCS path to uploaded zip
+   - scan_dimensions = { "bbox_x": ..., "bbox_y": ..., "bbox_z": ... } (from step 4)
+   - scan_status = "scan_ready"
+7. Send FCM push notification to the device (scan_id + status in payload)
+```
+
+**SQL schema** (minimum for stub — from Miro DB diagrams):
+```sql
+CREATE TABLE rfqs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    homeowner_account_id UUID,
+    property_id UUID,
+    job_category_id UUID,
+    description TEXT,
+    status VARCHAR(50) DEFAULT 'scan_pending',
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE scanned_rooms (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    rfq_id UUID REFERENCES rfqs(id),
+    room_label VARCHAR(100),
+    floor_id UUID,
+    scan_status VARCHAR(50) DEFAULT 'processing',
+    scan_mesh_url TEXT,
+    floor_plan_url TEXT,
+    origin_x FLOAT,
+    origin_y FLOAT,
+    rotation_deg FLOAT,
+    floor_area_sqft FLOAT,
+    wall_area_sqft FLOAT,
+    ceiling_height_ft FLOAT,
+    perimeter_linear_ft FLOAT,
+    detected_components JSONB,
+    scan_dimensions JSONB,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+```
+
+**Steps**:
+1. Create GCS bucket with appropriate IAM permissions for signed URL generation
+2. Provision Cloud SQL PostgreSQL instance and run the schema above
+3. Deploy Cloud Run REST API with the 3 endpoints (signed URLs, upload-complete, status)
+4. Create Cloud Tasks queue (`scan-processing`) and configure it to call the Scan Processor
+5. Deploy Cloud Run Scan Processor stub with validation + mock data logic
+6. Insert a test RFQ row: `INSERT INTO rfqs (id, status) VALUES ('test-rfq-001', 'scan_pending')`
+7. Verify the full flow manually: signed URL → upload → enqueue → process → scan_ready
+
+### Test Cases — Phase 5.1
+
+> Tests 5.1.1–5.1.17 run in CI via GitHub Actions against the deployed stub. Tests 5.1.18–5.1.21 validate the SQL schema and can run against a local PostgreSQL instance in CI.
+
+| ID | Test Case | Steps | Expected Result | Pass Criteria |
+|----|-----------|-------|-----------------|---------------|
+| 5.1.1 | GCS bucket exists and is accessible | `gsutil ls gs://roomscanalpha-scans/` | Bucket listed without permission error | Exit code 0; bucket URL returned |
+| 5.1.2 | Signed URL endpoint returns valid URL | `curl -H "Authorization: Bearer <JWT>" GET /api/rfqs/test-rfq-001/scans/upload-url` | JSON response with signed_url and scan_id | HTTP 200; `signed_url` starts with `https://storage.googleapis.com/`; `scan_id` is a valid UUID |
+| 5.1.3 | Signed URL accepts file upload | Upload a test zip to the signed URL via `curl -X PUT` | File appears in GCS bucket | HTTP 200; `gsutil ls` shows the uploaded file at the expected path |
+| 5.1.4 | Upload-complete endpoint enqueues job | `POST /api/rfqs/test-rfq-001/scans/complete` with scan_id | Cloud Tasks job created; SCANNED_ROOMS row inserted | HTTP 200; response contains `status: "queued"`; DB row has `scan_status = 'processing'` |
+| 5.1.5 | Unauthenticated request rejected | Call signed URL endpoint with no Authorization header | HTTP 401 returned | Response status is 401; no signed URL in body |
+| 5.1.6 | Invalid JWT rejected | Call signed URL endpoint with an expired or malformed JWT | HTTP 401 returned | Response status is 401; error message indicates invalid token |
+| 5.1.7 | Stub processor validates PLY header | Upload a valid scan zip, trigger processing | Processor logs PLY vertex/face counts | Log output: `PLY valid: N vertices, M faces`; counts match metadata.json |
+| 5.1.8 | Stub processor validates metadata.json | Upload a valid scan zip, trigger processing | Processor logs all required keys found | Log output: `metadata.json valid: N keyframes, device: iPhone` |
+| 5.1.9 | Stub processor validates JPEG headers | Upload a valid scan zip, trigger processing | Processor verifies each keyframe is a valid JPEG | Log output: `N/N keyframes valid JPEG`; each file starts with SOI marker (0xFFD8) |
+| 5.1.10 | Stub processor validates per-frame JSON | Upload a valid scan zip, trigger processing | Processor parses each frame JSON | Log output: `N/N frame JSONs valid`; each contains 16-element `camera_transform` array |
+| 5.1.11 | Stub processor computes PLY bounding box | Upload a valid scan zip, trigger processing, query DB | `scan_dimensions` populated with bbox | `scan_dimensions` contains `bbox_x`, `bbox_y`, `bbox_z` with positive float values |
+| 5.1.12 | Stub processor validates keyframe count | Upload a zip with mismatched keyframe count | Processor rejects the package | `scan_status` set to `failed`; error logged: `keyframe count mismatch` |
+| 5.1.13 | Stub rejects zip with missing mesh.ply | Upload a zip that has no mesh.ply file | Processor rejects the package | `scan_status` set to `failed`; error logged: `missing mesh.ply` |
+| 5.1.14 | Stub rejects invalid PLY header | Upload a zip where mesh.ply has a corrupted/invalid header | Processor rejects the package | `scan_status` set to `failed`; error logged: `invalid PLY header` |
+| 5.1.15 | Stub rejects non-zip file | Upload a file that is not a valid zip archive | Processor rejects the package | `scan_status` set to `failed`; error logged: `invalid zip archive` |
+| 5.1.16 | Stub processor writes mock room data | Upload a valid scan zip, trigger processing, query DB | SCANNED_ROOMS row has mock dimensions | `floor_area_sqft = 150.0`, `ceiling_height_ft = 8.0`, `scan_status = 'scan_ready'`, `detected_components` contains `["wall", "floor", "ceiling"]` |
+| 5.1.17 | Stub sends FCM notification on completion | Upload a valid scan zip, trigger processing, check FCM delivery | Device receives push notification | Notification payload contains `scan_id` and `status: "scan_ready"`; delivered within 10s of processing completion |
+| 5.1.18 | SCANNED_ROOMS schema matches Miro ERD | Run schema SQL, inspect table columns | All columns from Miro diagram exist | Table has columns: `id`, `rfq_id`, `room_label`, `floor_id`, `scan_status`, `scan_mesh_url`, `origin_x`, `origin_y`, `rotation_deg`, `floor_area_sqft`, `wall_area_sqft`, `ceiling_height_ft`, `perimeter_linear_ft`, `detected_components`, `scan_dimensions` |
+| 5.1.19 | RFQS table exists with FK relationship | Insert an RFQ, insert a SCANNED_ROOMS row referencing it | FK constraint satisfied | Insert succeeds; `rfq_id` in SCANNED_ROOMS references valid RFQS row |
+| 5.1.20 | SCANNED_ROOMS rejects invalid rfq_id | Insert SCANNED_ROOMS with non-existent rfq_id | FK violation | Insert fails with foreign key constraint error |
+| 5.1.21 | Status endpoint returns correct status | Poll `/api/rfqs/test-rfq-001/scans/{scan_id}/status` after processing | Returns `scan_ready` | HTTP 200; response `status` equals `scan_ready`; response includes mock room dimensions and `scan_dimensions` bbox |
+
+---
+
+## Phase 5.2: Cloud Integration Smoke Test
+
+**Goal**: Manually verify that a real scan package produced by Phase 4 (from an actual on-device room scan) is consumable by the stub cloud pipeline deployed in Phase 5.1. This is the validation gate before building the upload flow in the iOS app.
 
 **Steps**:
 1. Complete a room scan on-device and export the scan package (Phase 4 output)
 2. Copy the scan directory off-device (via Xcode file transfer, AirDrop, or `idevice` tools)
 3. Zip the package: `zip -r scan_test.zip scan_<timestamp>/`
-4. Upload to GCS manually: `gsutil cp scan_test.zip gs://<bucket>/scans/smoke-test/`
-5. Trigger the cloud processing pipeline manually (Cloud Run endpoint or Cloud Tasks enqueue)
-6. Verify the pipeline accepts and processes the package without errors
-7. Inspect cloud output: does it produce valid stitched results, object detections, and structured room data?
+4. Upload to GCS manually: `gsutil cp scan_test.zip gs://roomscanalpha-scans/scans/smoke-test/`
+5. Trigger the cloud processing pipeline manually (call upload-complete endpoint)
+6. Verify the stub processor accepts and validates the package without errors
+7. Inspect cloud output: does it produce valid mock structured room data in the DB?
 
-### Test Cases — Phase 5
+### Test Cases — Phase 5.2
 
 | ID | Test Case | Steps | Expected Result | Pass Criteria |
 |----|-----------|-------|-----------------|---------------|
-| 5.1 | Cloud pipeline accepts scan package | Upload zipped scan to GCS, trigger processing | Pipeline starts without parse errors | No errors in Cloud Run logs during ingestion; job status transitions to "processing" |
-| 5.2 | PLY mesh parsed by cloud | Inspect cloud pipeline mesh ingestion logs | Mesh loaded successfully | Vertex and face counts in cloud logs match metadata.json values |
-| 5.3 | Keyframe images readable by cloud | Inspect cloud ORB/homography step logs | All JPEGs loaded and feature-extracted | No "failed to load image" errors; feature extraction runs on all keyframes |
-| 5.4 | Depth maps consumed by cloud | Inspect depth map loading in pipeline | Depth maps loaded with correct format | Depth resolution and pixel format match `depth_format` in metadata.json |
-| 5.5 | Camera poses used for stitching | Inspect homography/alignment logs | Camera transforms used for image registration | Stitching step references camera_transform values from per-frame JSONs |
-| 5.6 | Vertex AI object recognition runs | Check Vertex AI step output | Objects detected and classified | At least 1 classification returned (e.g., "floor", "wall", "cabinet") |
-| 5.7 | Structured room data produced | Inspect final pipeline output | Room dimensions and components generated | Output includes floor area, wall area, ceiling height, detected components |
-| 5.8 | Coordinate system alignment correct | Compare cloud output geometry to on-device mesh | Surfaces and dimensions are consistent | Cloud-reconstructed room dimensions within ±10% of on-device mesh bounding box |
+| 5.2.1 | Cloud pipeline accepts real scan package | Upload zipped real scan to GCS, trigger processing | Pipeline starts without parse errors | No errors in Cloud Run logs during ingestion; job status transitions to "processing" |
+| 5.2.2 | PLY mesh parsed by cloud | Inspect cloud pipeline mesh ingestion logs | Mesh loaded successfully | Vertex and face counts in cloud logs match metadata.json values |
+| 5.2.3 | Keyframe images readable by cloud | Inspect cloud pipeline keyframe validation logs | All JPEGs found and readable | No "failed to load image" errors; file count matches metadata.json `keyframe_count` |
+| 5.2.4 | Depth maps consumed by cloud | Inspect depth map validation in pipeline | Depth maps found with correct count | Depth file count matches keyframe count; sizes are non-zero |
+| 5.2.5 | Camera poses present in per-frame JSON | Inspect per-frame JSON parsing logs | Camera transforms loaded | Each frame JSON contains 16-element `camera_transform` array |
+| 5.2.6 | Structured room data produced | Query SCANNED_ROOMS after processing | Mock dimensions written to DB | `scan_status = 'scan_ready'`; `floor_area_sqft`, `ceiling_height_ft`, `detected_components` are non-null |
+| 5.2.7 | Status endpoint reflects completion | Poll status endpoint after processing | Returns `scan_ready` | HTTP 200; status = `scan_ready` |
+| 5.2.8 | Coordinate system preserved | Compare `scan_dimensions` bbox in SCANNED_ROOMS to on-device `RoomMesh` bounding box | Spatial extents are consistent | PLY bounding box dimensions (x, y, z extents in meters) from the stub match on-device mesh bounding box within ±10%; Y-up orientation confirmed (floor vertices cluster near min Y) |
 
-> **Ship gate**: Do not proceed to Phase 6 until the cloud pipeline successfully processes at least one real scan package. If it fails, fix the export format (Phase 4) before building the upload flow.
+> **Ship gate**: Do not proceed to Phase 6 until the stub pipeline successfully processes at least one real scan package. If it fails, fix the export format (Phase 4) or the stub processor (Phase 5.1) before building the upload flow.
 
 ---
 
@@ -377,7 +510,7 @@ Backend → Cloud Tasks Queue (enqueue scan processing job)
 
 | ID | Test Case | Steps | Expected Result | Pass Criteria |
 |----|-----------|-------|-----------------|---------------|
-| 7.1 | Status polling works | After upload, poll status endpoint | Receives valid status response | Response contains `status` field with value in ["queued", "processing", "completed", "failed"] |
+| 7.1 | Status polling works | After upload, poll status endpoint | Receives valid status response | Response contains `status` field with value in ["queued", "processing", "scan_ready", "failed"] |
 | 7.2 | Handles "processing" state | Check viewer while cloud is still processing | Shows "Processing your scan..." with spinner | Status message visible; viewer does not show empty/broken state |
 | 7.3 | Handles "failed" state | Mock a failed processing response | Shows error with option to retry | Error message displayed; "Retry" button is functional |
 | 7.4 | Structured room data displayed | Open result for a completed scan | Screen shows detected dimensions and components | Displays: room dimensions (sq ft, ceiling height, perimeter), detected components list (hardwood, carpet, baseboards, etc.), appliance labels with positions |
@@ -443,7 +576,7 @@ Backend → Cloud Tasks Queue (enqueue scan processing job)
 | 8.4 | Room label assigned to scan | After stopping scan, prompt for room label | User enters label (e.g., "Kitchen") | `scanViewModel.roomLabel` is a non-empty string |
 | 8.5 | Room origin coordinates captured | Stop scan, inspect session data | Room origin and rotation stored from AR world origin | `origin_x`, `origin_y`, `rotation_deg` are valid floats derived from the AR session's world transform |
 | 8.6 | metadata.json includes RFQ context | Export scan, parse metadata.json | RFQ and room fields present | `rfq_id`, `floor_id`, `room_label`, `origin_x`, `origin_y`, `rotation_deg` are all present and non-null |
-| 8.7 | metadata.json maps to SCANNED_ROOMS schema | Compare metadata.json keys to SCANNED_ROOMS columns | All DB-required fields are represented | Fields present for: `rfq_id`, `room_label`, `floor_id`, `scan_mesh_url` (path), `floor_plan_url` (if applicable), `origin_x`, `origin_y`, `rotation_deg`, `floor_area_sqft`, `wall_area_sqft`, `ceiling_height_ft`, `perimeter_linear_ft`, `detected_components` |
+| 8.7 | metadata.json includes all app-side SCANNED_ROOMS inputs | Compare metadata.json keys to SCANNED_ROOMS columns the app is responsible for | All app-exported fields present | Fields present for: `rfq_id`, `room_label`, `floor_id`, `origin_x`, `origin_y`, `rotation_deg`. Note: `floor_area_sqft`, `wall_area_sqft`, `ceiling_height_ft`, `perimeter_linear_ft`, `detected_components` are cloud-computed — NOT expected in app metadata.json |
 | 8.8 | RFQ-scoped endpoints used | Inspect all API calls during upload flow | URLs follow RFQ-centric pattern | All endpoints include `rfq_id` in path (e.g., `/api/rfqs/{rfq_id}/scans/...`); no orphaned `/api/scans/` calls |
 | 8.9 | JWT token refresh on expiry | Set token TTL to 5s (test config), wait, then make API call | Token auto-refreshes before request | New token fetched via `User.getIDToken()`; API call succeeds with refreshed token; no 401 response |
 
@@ -536,11 +669,37 @@ Backend → Cloud Tasks Queue (enqueue scan processing job)
 | Risk | Impact | Mitigation | When addressed |
 |------|--------|------------|----------------|
 | Memory pressure (60 keyframes × ~8MB) | App crash / termination | Convert to JPEG and release CVPixelBuffers immediately; cap at 60 keyframes | **Phase 3** (core behavior) |
-| Cloud pipeline rejects scan format | Entire upload flow is wasted | Manual smoke test before building upload code | **Phase 5** (gate) |
-| PLY coordinate system mismatch | Misaligned textures in cloud pipeline | Document and enforce ARKit Y-up right-handed; add coordinate system validation in cloud ingestion | Phase 4 + 5 |
+| Cloud pipeline rejects scan format | Entire upload flow is wasted | Stub pipeline validates format before full CV pipeline | **Phase 5.1** (stub) → **Phase 5.2** (gate) |
+| PLY coordinate system mismatch | Misaligned textures in cloud pipeline | Document and enforce ARKit Y-up right-handed; add coordinate system validation in cloud ingestion | Phase 4 + 5.2 |
 | Upload size on cellular (~75MB) | Poor UX, data cost | Warn on cellular; implement resumable uploads; compress aggressively | Phase 9 |
 | Cross-platform mesh format differences | Cloud pipeline breaks on Android scans | Both platforms export standardized PLY; add format validation tests on cloud side | Phase 4 |
 | ARKit mesh resolution limits | Low-detail geometry for distant surfaces | Guide user to scan within 3-5m range; show mesh density indicator | Phase 10 |
 | Firebase Auth token expiry during upload | Upload fails mid-stream with 401 | Auto-refresh JWT via `User.getIDToken(forceRefresh: true)` before each API call | Phase 8 |
 | Offline scans lost | User scans with no connectivity and data is never uploaded | Queue scan packages to disk; auto-upload on connectivity restoration via NWPathMonitor | Phase 9 |
 | metadata.json schema drift vs SCANNED_ROOMS | Cloud pipeline rejects or misparses scan data | Validate metadata.json against SCANNED_ROOMS column list; version the schema | Phase 8 |
+
+---
+
+## Performance & Efficiency
+
+Improvements identified via codebase audit. Ordered by impact — high priority items affect the AR render loop or export correctness; medium items reduce complexity and maintenance risk.
+
+### High Priority
+
+| ID | Issue | File(s) | Impact | Fix |
+|----|-------|---------|--------|-----|
+| P-1 | **CIContext created per keyframe** | `CapturedFrame.swift:60` | `CIContext()` allocates GPU resources on every call. At 60 keyframes during the AR render loop, this causes repeated expensive initialization. | Make `CIContext` a `static let` on `CapturedFrame`, or pass a shared instance in from `FrameCaptureManager`. Single allocation, reused for all frames. |
+| P-2 | **PLY export doubles peak memory** | `PLYExporter.swift:8-47` | Accumulates `allVertices`, `allNormals`, `allFaces`, and `allClassifications` as Swift arrays, then iterates them again to write binary data. For a 12K+ vertex mesh this roughly doubles peak memory during export. | Two-pass approach: first pass counts totals (cheap), second pass streams binary bytes directly into a `Data` buffer per-anchor. Eliminates intermediate arrays. |
+| P-3 | **PLY header has leading whitespace** | `PLYExporter.swift:53-67` | Swift multi-line string indentation inserts leading spaces on each header line. The `ply` magic and `end_header` lines must start at column 0. MeshLab and strict parsers may reject the file. The cloud stub handles this via `strip()` but third-party tools will not. | Use a non-indented string literal, or apply `components(separatedBy:).map { $0.trimmingCharacters(in: .whitespaces) }.joined(separator:)` to dedent. |
+| P-4 | **Mesh node fully rebuilt on every anchor update** | `ARScanningView.swift:39-42` | `didUpdate` removes all child nodes and rebuilds SCNGeometry from scratch. With dozens of mesh anchors updating at 30fps, this creates heavy GC pressure and SceneKit churn. | Cache `SCNNode` per anchor. Only rebuild geometry when the anchor's vertex count or face count changes (cheap dirty check). Skip rebuild if geometry hasn't changed. |
+| P-5 | **Triangle count recomputed from all anchors every frame** | `ARScanningView.swift:60-72` | On every `didUpdate` callback, `updateStats` pulls `currentFrame.anchors`, filters to mesh anchors, and sums triangle counts across all of them. This is O(anchors) work on the render thread at 30fps. | Maintain a running triangle count in `ARSessionManager`, incrementally updated in `session(_:didAdd:)` and `session(_:didUpdate:)`. Push the pre-computed total to the view model. |
+
+### Medium Priority
+
+| ID | Issue | File(s) | Impact | Fix |
+|----|-------|---------|--------|-----|
+| P-6 | **Duplicate world-space vertex transform** | `MeshExtractor.swift:43-56`, `PLYExporter.swift:24-28` | Both files independently implement the same anchor-to-world-space vertex transform. Divergence risk if one is updated without the other. | Have `PLYExporter` call `MeshExtractor.worldSpaceVertices()` (and add a matching `worldSpaceNormals()`). Single source of truth for the coordinate transform. |
+| P-7 | **Duplicate `get_db_connection()` in cloud services** | `cloud/api/main.py:34-41`, `cloud/processor/main.py:30-37` | Identical DB connection function and config blocks in both services. Copy-paste drift risk as config evolves. | Extract a shared `cloud/shared/db.py` module that both services import. |
+| P-8 | **Session paused twice on stop** | `ScanningView.swift:57`, `ContentView.swift:34` | `ScanningView.onDisappear` calls `pauseSession()`, and `ContentView.handleStopScan()` also calls `pauseSession()`. When the user taps Stop, both fire — `lastMeshAnchors` is snapshotted twice. | Remove `pauseSession()` from `ScanningView.onDisappear`, or add a guard in `pauseSession()` that no-ops if already paused. The explicit stop in `handleStopScan` is the authoritative path. |
+| P-9 | **ContentView acts as coordinator between ViewModel and SessionManager** | `ContentView.swift:4-5, 47-49` | `ScanViewModel` and `ARSessionManager` are both `@State` on `ContentView` with no relationship. ContentView manually wires callbacks and pulls internal state (`sessionManager.frameCaptureManager.capturedFrames`). This coupling will grow as upload/RFQ logic arrives in later phases. | Have `ScanViewModel` own `ARSessionManager` and expose what views need. Or introduce a lightweight coordinator. Reduces ContentView's responsibilities before Phase 6+ adds more. |
+| P-10 | **Tests use Mirror to verify private constants** | `FrameCaptureManagerTests.swift:44-65` | Mirror-based tests are fragile — they break on property renames and test implementation rather than behavior. | Expose thresholds as a `static let configuration` struct or `internal` constants on `FrameCaptureManager`. Alternatively, test behavior by feeding synthetic inputs with known deltas. |

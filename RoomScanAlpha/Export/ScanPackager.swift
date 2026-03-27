@@ -1,3 +1,5 @@
+// Bundles keyframes, PLY mesh, depth maps, and metadata into a scan package directory for cloud upload.
+
 import ARKit
 import UIKit
 
@@ -30,7 +32,6 @@ struct ScanPackager {
         let plyURL = scanDir.appendingPathComponent("mesh.ply")
         try PLYExporter.export(meshAnchors: meshAnchors, to: plyURL)
 
-        // Count mesh stats
         var totalVertices = 0
         var totalFaces = 0
         for anchor in meshAnchors {
@@ -43,17 +44,14 @@ struct ScanPackager {
         for frame in keyframes {
             let frameName = String(format: "frame_%03d", frame.index)
 
-            // JPEG
             let jpegURL = keyframesDir.appendingPathComponent("\(frameName).jpg")
             try frame.jpegData.write(to: jpegURL)
 
-            // Per-frame JSON (camera pose + metadata)
-            let frameJSON = frameMetadata(for: frame)
+            let frameJSON = FrameMetadata.from(frame)
             let frameJSONURL = keyframesDir.appendingPathComponent("\(frameName).json")
-            let jsonData = try JSONSerialization.data(withJSONObject: frameJSON, options: [.prettyPrinted, .sortedKeys])
+            let jsonData = try JSONEncoder.prettyPrinted.encode(frameJSON)
             try jsonData.write(to: frameJSONURL)
 
-            // Depth map
             if let depthData = frame.depthData {
                 let depthURL = depthDir.appendingPathComponent("\(frameName).depth")
                 try depthData.write(to: depthURL)
@@ -62,17 +60,16 @@ struct ScanPackager {
 
         // 3. Build metadata.json
         onProgress("Writing metadata...")
-        let metadata = buildMetadata(
+        let metadata = ScanMetadata.build(
             keyframes: keyframes,
             meshVertexCount: totalVertices,
             meshFaceCount: totalFaces,
             scanDuration: scanDuration
         )
-        let metadataData = try JSONSerialization.data(withJSONObject: metadata, options: [.prettyPrinted, .sortedKeys])
+        let metadataData = try JSONEncoder.prettyPrinted.encode(metadata)
         let metadataURL = scanDir.appendingPathComponent("metadata.json")
         try metadataData.write(to: metadataURL)
 
-        // Calculate total size
         let totalSize = directorySize(url: scanDir)
         print("[RoomScanAlpha] Scan packaged at \(scanDir.path) — \(totalSize / 1024 / 1024)MB")
 
@@ -80,92 +77,6 @@ struct ScanPackager {
     }
 
     // MARK: - Private
-
-    private static func frameMetadata(for frame: CapturedFrame) -> [String: Any] {
-        let transform = frame.cameraTransform
-        let transformArray: [Float] = [
-            transform.columns.0.x, transform.columns.0.y, transform.columns.0.z, transform.columns.0.w,
-            transform.columns.1.x, transform.columns.1.y, transform.columns.1.z, transform.columns.1.w,
-            transform.columns.2.x, transform.columns.2.y, transform.columns.2.z, transform.columns.2.w,
-            transform.columns.3.x, transform.columns.3.y, transform.columns.3.z, transform.columns.3.w,
-        ]
-
-        return [
-            "index": frame.index,
-            "timestamp": frame.timestamp,
-            "camera_transform": transformArray,
-            "image_width": frame.imageWidth,
-            "image_height": frame.imageHeight,
-            "depth_width": frame.depthWidth,
-            "depth_height": frame.depthHeight,
-        ]
-    }
-
-    private static func buildMetadata(
-        keyframes: [CapturedFrame],
-        meshVertexCount: Int,
-        meshFaceCount: Int,
-        scanDuration: TimeInterval
-    ) -> [String: Any] {
-        let device = UIDevice.current
-
-        // Use first frame's intrinsics as reference
-        let intrinsics: [String: Any]
-        if let first = keyframes.first {
-            let k = first.cameraIntrinsics
-            intrinsics = [
-                "fx": k[0][0],
-                "fy": k[1][1],
-                "cx": k[2][0],
-                "cy": k[2][1],
-            ]
-        } else {
-            intrinsics = [:]
-        }
-
-        let imageResolution: [String: Any]
-        if let first = keyframes.first {
-            imageResolution = ["width": first.imageWidth, "height": first.imageHeight]
-        } else {
-            imageResolution = [:]
-        }
-
-        let depthFormat: [String: Any]
-        if let first = keyframes.first, first.depthData != nil {
-            depthFormat = [
-                "pixel_format": "kCVPixelFormatType_DepthFloat32",
-                "width": first.depthWidth,
-                "height": first.depthHeight,
-                "byte_order": "little_endian",
-            ]
-        } else {
-            depthFormat = [:]
-        }
-
-        let keyframeList: [[String: Any]] = keyframes.map { frame in
-            let frameName = String(format: "frame_%03d", frame.index)
-            return [
-                "index": frame.index,
-                "filename": "\(frameName).jpg",
-                "depth_filename": "\(frameName).depth",
-                "timestamp": frame.timestamp,
-            ]
-        }
-
-        return [
-            "device": device.model,
-            "device_name": device.name,
-            "ios_version": device.systemVersion,
-            "scan_duration_seconds": round(scanDuration * 10) / 10,
-            "camera_intrinsics": intrinsics,
-            "image_resolution": imageResolution,
-            "depth_format": depthFormat,
-            "keyframe_count": keyframes.count,
-            "mesh_vertex_count": meshVertexCount,
-            "mesh_face_count": meshFaceCount,
-            "keyframes": keyframeList,
-        ]
-    }
 
     private static func directorySize(url: URL) -> Int {
         let files = FileManager.default.enumerator(at: url, includingPropertiesForKeys: [.fileSizeKey])
@@ -176,4 +87,174 @@ struct ScanPackager {
         }
         return total
     }
+}
+
+// MARK: - Metadata schema
+
+struct ScanMetadata: Codable {
+    let device: String
+    let deviceName: String
+    let iosVersion: String
+    let scanDurationSeconds: Double
+    let cameraIntrinsics: CameraIntrinsics
+    let imageResolution: ImageResolution
+    let depthFormat: DepthFormat
+    let keyframeCount: Int
+    let meshVertexCount: Int
+    let meshFaceCount: Int
+    let keyframes: [KeyframeEntry]
+
+    enum CodingKeys: String, CodingKey {
+        case device
+        case deviceName = "device_name"
+        case iosVersion = "ios_version"
+        case scanDurationSeconds = "scan_duration_seconds"
+        case cameraIntrinsics = "camera_intrinsics"
+        case imageResolution = "image_resolution"
+        case depthFormat = "depth_format"
+        case keyframeCount = "keyframe_count"
+        case meshVertexCount = "mesh_vertex_count"
+        case meshFaceCount = "mesh_face_count"
+        case keyframes
+    }
+
+    static func build(
+        keyframes: [CapturedFrame],
+        meshVertexCount: Int,
+        meshFaceCount: Int,
+        scanDuration: TimeInterval
+    ) -> ScanMetadata {
+        let device = UIDevice.current
+        let firstFrame = keyframes.first
+
+        return ScanMetadata(
+            device: device.model,
+            deviceName: device.name,
+            iosVersion: device.systemVersion,
+            scanDurationSeconds: round(scanDuration * 10) / 10,
+            cameraIntrinsics: CameraIntrinsics.from(firstFrame?.cameraIntrinsics),
+            imageResolution: ImageResolution(
+                width: firstFrame?.imageWidth ?? 0,
+                height: firstFrame?.imageHeight ?? 0
+            ),
+            depthFormat: DepthFormat.from(firstFrame),
+            keyframeCount: keyframes.count,
+            meshVertexCount: meshVertexCount,
+            meshFaceCount: meshFaceCount,
+            keyframes: keyframes.map { KeyframeEntry.from($0) }
+        )
+    }
+}
+
+struct CameraIntrinsics: Codable {
+    let fx: Float
+    let fy: Float
+    let cx: Float
+    let cy: Float
+
+    static func from(_ matrix: simd_float3x3?) -> CameraIntrinsics {
+        guard let k = matrix else { return CameraIntrinsics(fx: 0, fy: 0, cx: 0, cy: 0) }
+        return CameraIntrinsics(fx: k[0][0], fy: k[1][1], cx: k[2][0], cy: k[2][1])
+    }
+}
+
+struct ImageResolution: Codable {
+    let width: Int
+    let height: Int
+}
+
+struct DepthFormat: Codable {
+    let pixelFormat: String
+    let width: Int
+    let height: Int
+    let byteOrder: String
+
+    enum CodingKeys: String, CodingKey {
+        case pixelFormat = "pixel_format"
+        case width, height
+        case byteOrder = "byte_order"
+    }
+
+    static func from(_ frame: CapturedFrame?) -> DepthFormat {
+        guard let frame = frame, frame.depthData != nil else {
+            return DepthFormat(pixelFormat: "", width: 0, height: 0, byteOrder: "")
+        }
+        return DepthFormat(
+            pixelFormat: "kCVPixelFormatType_DepthFloat32",
+            width: frame.depthWidth,
+            height: frame.depthHeight,
+            byteOrder: "little_endian"
+        )
+    }
+}
+
+struct KeyframeEntry: Codable {
+    let index: Int
+    let filename: String
+    let depthFilename: String
+    let timestamp: TimeInterval
+
+    enum CodingKeys: String, CodingKey {
+        case index, filename, timestamp
+        case depthFilename = "depth_filename"
+    }
+
+    static func from(_ frame: CapturedFrame) -> KeyframeEntry {
+        let name = String(format: "frame_%03d", frame.index)
+        return KeyframeEntry(
+            index: frame.index,
+            filename: "\(name).jpg",
+            depthFilename: "\(name).depth",
+            timestamp: frame.timestamp
+        )
+    }
+}
+
+struct FrameMetadata: Codable {
+    let index: Int
+    let timestamp: TimeInterval
+    let cameraTransform: [Float]
+    let imageWidth: Int
+    let imageHeight: Int
+    let depthWidth: Int
+    let depthHeight: Int
+
+    enum CodingKeys: String, CodingKey {
+        case index, timestamp
+        case cameraTransform = "camera_transform"
+        case imageWidth = "image_width"
+        case imageHeight = "image_height"
+        case depthWidth = "depth_width"
+        case depthHeight = "depth_height"
+    }
+
+    static func from(_ frame: CapturedFrame) -> FrameMetadata {
+        let t = frame.cameraTransform
+        let transformArray: [Float] = [
+            t.columns.0.x, t.columns.0.y, t.columns.0.z, t.columns.0.w,
+            t.columns.1.x, t.columns.1.y, t.columns.1.z, t.columns.1.w,
+            t.columns.2.x, t.columns.2.y, t.columns.2.z, t.columns.2.w,
+            t.columns.3.x, t.columns.3.y, t.columns.3.z, t.columns.3.w,
+        ]
+
+        return FrameMetadata(
+            index: frame.index,
+            timestamp: frame.timestamp,
+            cameraTransform: transformArray,
+            imageWidth: frame.imageWidth,
+            imageHeight: frame.imageHeight,
+            depthWidth: frame.depthWidth,
+            depthHeight: frame.depthHeight
+        )
+    }
+}
+
+// MARK: - JSONEncoder convenience
+
+extension JSONEncoder {
+    static let prettyPrinted: JSONEncoder = {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return encoder
+    }()
 }

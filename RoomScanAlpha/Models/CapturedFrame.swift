@@ -1,3 +1,6 @@
+// Stores a single keyframe's data (JPEG image, depth map, camera pose) captured during a room scan.
+// All pixel buffers are converted to Data immediately on capture to prevent memory pressure.
+
 import ARKit
 import UIKit
 
@@ -19,7 +22,7 @@ struct CapturedFrame {
     static func from(
         frame: ARFrame,
         index: Int,
-        jpegQuality: CGFloat = 0.8
+        jpegQuality: CGFloat = 0.8 // 0.8 balances file size (~150-300KB) vs. detail for ORB feature extraction
     ) -> CapturedFrame? {
         // Convert camera image (YCbCr CVPixelBuffer) → JPEG Data
         guard let jpegData = jpegFromPixelBuffer(frame.capturedImage, quality: jpegQuality) else {

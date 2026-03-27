@@ -25,6 +25,9 @@
 		A11111110000000000000015 /* FrameCaptureManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000023 /* FrameCaptureManager.swift */; };
 		A11111110000000000000016 /* PLYExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000024 /* PLYExporter.swift */; };
 		A11111110000000000000017 /* ScanPackager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000025 /* ScanPackager.swift */; };
+		A11111110000000000000018 /* ARMeshGeometry+Accessors.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000026 /* ARMeshGeometry+Accessors.swift */; };
+		A11111110000000000000019 /* ExportingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000027 /* ExportingView.swift */; };
+		A1111111000000000000001A /* PrimaryButtonStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000028 /* PrimaryButtonStyle.swift */; };
 		B11111110000000000000001 /* ScanViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000001 /* ScanViewModelTests.swift */; };
 		B11111110000000000000002 /* MeshExtractorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000002 /* MeshExtractorTests.swift */; };
 		B11111110000000000000003 /* CapturedFrameTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000003 /* CapturedFrameTests.swift */; };
@@ -61,6 +64,9 @@
 		A10000000000000000000023 /* FrameCaptureManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameCaptureManager.swift; sourceTree = "<group>"; };
 		A10000000000000000000024 /* PLYExporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PLYExporter.swift; sourceTree = "<group>"; };
 		A10000000000000000000025 /* ScanPackager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanPackager.swift; sourceTree = "<group>"; };
+		A10000000000000000000026 /* ARMeshGeometry+Accessors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ARMeshGeometry+Accessors.swift"; sourceTree = "<group>"; };
+		A10000000000000000000027 /* ExportingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportingView.swift; sourceTree = "<group>"; };
+		A10000000000000000000028 /* PrimaryButtonStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrimaryButtonStyle.swift; sourceTree = "<group>"; };
 		B10000000000000000000001 /* ScanViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanViewModelTests.swift; sourceTree = "<group>"; };
 		B10000000000000000000002 /* MeshExtractorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeshExtractorTests.swift; sourceTree = "<group>"; };
 		B10000000000000000000003 /* CapturedFrameTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CapturedFrameTests.swift; sourceTree = "<group>"; };
@@ -139,6 +145,8 @@
 			children = (
 				A10000000000000000000009 /* ARScanningView.swift */,
 				A1000000000000000000000A /* ScanningView.swift */,
+				A10000000000000000000027 /* ExportingView.swift */,
+				A10000000000000000000028 /* PrimaryButtonStyle.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -149,6 +157,7 @@
 				A10000000000000000000007 /* ARSessionManager.swift */,
 				A10000000000000000000008 /* MeshExtractor.swift */,
 				A10000000000000000000023 /* FrameCaptureManager.swift */,
+				A10000000000000000000026 /* ARMeshGeometry+Accessors.swift */,
 			);
 			path = AR;
 			sourceTree = "<group>";
@@ -305,6 +314,9 @@
 				A11111110000000000000015 /* FrameCaptureManager.swift in Sources */,
 				A11111110000000000000016 /* PLYExporter.swift in Sources */,
 				A11111110000000000000017 /* ScanPackager.swift in Sources */,
+				A11111110000000000000018 /* ARMeshGeometry+Accessors.swift in Sources */,
+				A11111110000000000000019 /* ExportingView.swift in Sources */,
+				A1111111000000000000001A /* PrimaryButtonStyle.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

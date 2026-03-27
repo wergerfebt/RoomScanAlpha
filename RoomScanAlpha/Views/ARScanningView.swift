@@ -1,3 +1,5 @@
+// UIViewRepresentable wrapping ARSCNView that renders LiDAR mesh as a color-coded wireframe overlay.
+
 import SwiftUI
 import ARKit
 import SceneKit

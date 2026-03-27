@@ -19,7 +19,7 @@ struct ContentView: View {
                     onStop: { handleStopScan() }
                 )
             case .exporting:
-                exportingView
+                ExportingView(viewModel: viewModel, onDone: { viewModel.stopScan() })
             }
         }
         .alert("Scan May Be Incomplete", isPresented: $viewModel.showQualityWarning) {
@@ -76,67 +76,6 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Exporting View
-
-    private var exportingView: some View {
-        VStack(spacing: 24) {
-            Spacer()
-
-            if viewModel.lastExportURL != nil {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 64))
-                    .foregroundStyle(.green)
-            } else if viewModel.exportError != nil {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 64))
-                    .foregroundStyle(.red)
-            } else {
-                ProgressView()
-                    .scaleEffect(2)
-            }
-
-            Text(viewModel.exportProgress)
-                .font(.headline)
-                .multilineTextAlignment(.center)
-
-            if let error = viewModel.exportError {
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 40)
-            }
-
-            if viewModel.lastExportURL != nil {
-                VStack(spacing: 8) {
-                    Text("\(viewModel.keyframeCount) keyframes")
-                    Text("\(viewModel.meshTriangleCount) triangles")
-                    Text("\(viewModel.meshAnchorCount) mesh anchors")
-                }
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            }
-
-            if viewModel.lastExportURL != nil || viewModel.exportError != nil {
-                Button {
-                    viewModel.stopScan()
-                } label: {
-                    Label("Done", systemImage: "house")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(.blue)
-                        .foregroundStyle(.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                }
-                .padding(.horizontal, 40)
-            }
-
-            Spacer()
-        }
-        .padding()
-    }
-
     // MARK: - Idle View
 
     private var idleView: some View {
@@ -160,12 +99,7 @@ struct ContentView: View {
                     viewModel.startScan()
                 } label: {
                     Label("Start Scan", systemImage: "viewfinder")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(.blue)
-                        .foregroundStyle(.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .primaryButtonStyle()
                 }
                 .padding(.horizontal, 40)
                 .padding(.top, 8)
@@ -182,12 +116,7 @@ struct ContentView: View {
 
                 Button {} label: {
                     Label("Start Scan", systemImage: "viewfinder")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(.gray.opacity(0.3))
-                        .foregroundStyle(.gray)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .disabledButtonStyle()
                 }
                 .disabled(true)
                 .padding(.horizontal, 40)

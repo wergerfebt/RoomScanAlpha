@@ -108,20 +108,14 @@ final class ScanPackagerTests: XCTestCase {
         let jsonURL = keyframesDir.appendingPathComponent("frame_000.json")
 
         let data = try Data(contentsOf: jsonURL)
-        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let frameMetadata = try JSONDecoder().decode(FrameMetadata.self, from: data)
 
         // Must contain camera_transform with 16 elements
-        let transform = json["camera_transform"] as? [NSNumber]
-        XCTAssertNotNil(transform, "Per-frame JSON must contain camera_transform")
-        XCTAssertEqual(transform?.count, 16, "camera_transform must have exactly 16 float values")
-
-        // Must contain index and timestamp
-        XCTAssertNotNil(json["index"])
-        XCTAssertNotNil(json["timestamp"])
+        XCTAssertEqual(frameMetadata.cameraTransform.count, 16, "camera_transform must have exactly 16 float values")
 
         // Must contain image dimensions
-        XCTAssertNotNil(json["image_width"])
-        XCTAssertNotNil(json["image_height"])
+        XCTAssertGreaterThan(frameMetadata.imageWidth, 0)
+        XCTAssertGreaterThan(frameMetadata.imageHeight, 0)
     }
 
     func testPerFrameTransformIsOrthonormal() throws {
@@ -131,8 +125,8 @@ final class ScanPackagerTests: XCTestCase {
             .appendingPathComponent("frame_000.json")
 
         let data = try Data(contentsOf: jsonURL)
-        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
-        let transform = (json["camera_transform"] as! [NSNumber]).map { $0.floatValue }
+        let frameMetadata = try JSONDecoder().decode(FrameMetadata.self, from: data)
+        let transform = frameMetadata.cameraTransform
 
         // Column 0: [0..3], Column 1: [4..7], Column 2: [8..11]
         let col0 = SIMD3<Float>(transform[0], transform[1], transform[2])
@@ -153,30 +147,23 @@ final class ScanPackagerTests: XCTestCase {
         let metadataURL = result.directoryURL.appendingPathComponent("metadata.json")
 
         let data = try Data(contentsOf: metadataURL)
-        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        // Decoding with Codable struct validates all required keys are present and correctly typed
+        let metadata = try JSONDecoder().decode(ScanMetadata.self, from: data)
 
-        // All required keys per Implementation Plan 4.9
-        XCTAssertNotNil(json["device"], "metadata.json must contain 'device'")
-        XCTAssertNotNil(json["ios_version"], "metadata.json must contain 'ios_version'")
-        XCTAssertNotNil(json["camera_intrinsics"], "metadata.json must contain 'camera_intrinsics'")
-        XCTAssertNotNil(json["keyframe_count"], "metadata.json must contain 'keyframe_count'")
-        XCTAssertNotNil(json["mesh_vertex_count"], "metadata.json must contain 'mesh_vertex_count'")
-        XCTAssertNotNil(json["mesh_face_count"], "metadata.json must contain 'mesh_face_count'")
-        XCTAssertNotNil(json["keyframes"], "metadata.json must contain 'keyframes' array")
-        XCTAssertNotNil(json["scan_duration_seconds"], "metadata.json must contain 'scan_duration_seconds'")
-        XCTAssertNotNil(json["image_resolution"], "metadata.json must contain 'image_resolution'")
+        XCTAssertFalse(metadata.device.isEmpty, "metadata.json must contain 'device'")
+        XCTAssertFalse(metadata.iosVersion.isEmpty, "metadata.json must contain 'ios_version'")
+        XCTAssertEqual(metadata.keyframeCount, 5, "metadata.json must contain correct 'keyframe_count'")
+        XCTAssertEqual(metadata.keyframes.count, 5, "metadata.json must contain 'keyframes' array")
+        XCTAssertGreaterThanOrEqual(metadata.scanDurationSeconds, 0, "metadata.json must contain 'scan_duration_seconds'")
     }
 
     func testMetadataCameraIntrinsicsKeys() throws {
         let result = try packageTestScan()
         let data = try Data(contentsOf: result.directoryURL.appendingPathComponent("metadata.json"))
-        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
-        let intrinsics = json["camera_intrinsics"] as! [String: Any]
+        let metadata = try JSONDecoder().decode(ScanMetadata.self, from: data)
 
-        XCTAssertNotNil(intrinsics["fx"])
-        XCTAssertNotNil(intrinsics["fy"])
-        XCTAssertNotNil(intrinsics["cx"])
-        XCTAssertNotNil(intrinsics["cy"])
+        XCTAssertGreaterThan(metadata.cameraIntrinsics.fx, 0)
+        XCTAssertGreaterThan(metadata.cameraIntrinsics.fy, 0)
     }
 
     // MARK: - Keyframe count match (4.10)
@@ -187,8 +174,8 @@ final class ScanPackagerTests: XCTestCase {
 
         // Check metadata says 7
         let data = try Data(contentsOf: result.directoryURL.appendingPathComponent("metadata.json"))
-        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
-        XCTAssertEqual(json["keyframe_count"] as? Int, count)
+        let metadata = try JSONDecoder().decode(ScanMetadata.self, from: data)
+        XCTAssertEqual(metadata.keyframeCount, count)
 
         // Check 7 files exist in keyframes/
         let keyframesDir = result.directoryURL.appendingPathComponent("keyframes")
@@ -197,8 +184,7 @@ final class ScanPackagerTests: XCTestCase {
         XCTAssertEqual(jpegFiles.count, count, "JPEG file count must match keyframe_count in metadata")
 
         // Check keyframes array length matches
-        let keyframesArray = json["keyframes"] as! [[String: Any]]
-        XCTAssertEqual(keyframesArray.count, count, "keyframes array length must match keyframe_count")
+        XCTAssertEqual(metadata.keyframes.count, count, "keyframes array length must match keyframe_count")
     }
 
     // MARK: - Depth maps (4.11)
@@ -225,14 +211,13 @@ final class ScanPackagerTests: XCTestCase {
     func testDepthFormatDocumentedInMetadata() throws {
         let result = try packageTestScan()
         let data = try Data(contentsOf: result.directoryURL.appendingPathComponent("metadata.json"))
-        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
-        let depthFormat = json["depth_format"] as! [String: Any]
+        let metadata = try JSONDecoder().decode(ScanMetadata.self, from: data)
 
-        XCTAssertEqual(depthFormat["pixel_format"] as? String, "kCVPixelFormatType_DepthFloat32",
+        XCTAssertEqual(metadata.depthFormat.pixelFormat, "kCVPixelFormatType_DepthFloat32",
                        "Depth format must specify Float32")
-        XCTAssertNotNil(depthFormat["width"], "Depth format must include width")
-        XCTAssertNotNil(depthFormat["height"], "Depth format must include height")
-        XCTAssertEqual(depthFormat["byte_order"] as? String, "little_endian",
+        XCTAssertGreaterThan(metadata.depthFormat.width, 0, "Depth format must include width")
+        XCTAssertGreaterThan(metadata.depthFormat.height, 0, "Depth format must include height")
+        XCTAssertEqual(metadata.depthFormat.byteOrder, "little_endian",
                        "Depth format must specify byte order")
     }
 
@@ -248,11 +233,11 @@ final class ScanPackagerTests: XCTestCase {
     func testMeshCountsInMetadata() throws {
         let result = try packageTestScan()
         let data = try Data(contentsOf: result.directoryURL.appendingPathComponent("metadata.json"))
-        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let metadata = try JSONDecoder().decode(ScanMetadata.self, from: data)
 
         // With empty mesh anchors, counts should be 0
-        XCTAssertEqual(json["mesh_vertex_count"] as? Int, 0)
-        XCTAssertEqual(json["mesh_face_count"] as? Int, 0)
+        XCTAssertEqual(metadata.meshVertexCount, 0)
+        XCTAssertEqual(metadata.meshFaceCount, 0)
     }
 
     // MARK: - Scan duration in metadata
@@ -260,10 +245,8 @@ final class ScanPackagerTests: XCTestCase {
     func testScanDurationInMetadata() throws {
         let result = try packageTestScan()
         let data = try Data(contentsOf: result.directoryURL.appendingPathComponent("metadata.json"))
-        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let metadata = try JSONDecoder().decode(ScanMetadata.self, from: data)
 
-        let duration = json["scan_duration_seconds"] as? Double
-        XCTAssertNotNil(duration)
-        XCTAssertEqual(duration!, 45.2, accuracy: 0.1)
+        XCTAssertEqual(metadata.scanDurationSeconds, 45.2, accuracy: 0.1)
     }
 }

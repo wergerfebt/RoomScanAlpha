@@ -1,3 +1,5 @@
+// Converts ARMeshAnchor data to binary PLY format for upload to the cloud scan processor.
+
 import ARKit
 
 struct PLYExporter {
@@ -5,13 +7,35 @@ struct PLYExporter {
     /// Export mesh anchors to a binary PLY file at the given URL.
     /// Vertices are transformed to world space. Each face includes a classification label.
     static func export(meshAnchors: [ARMeshAnchor], to fileURL: URL) throws {
+        let mesh = mergeAnchors(meshAnchors)
+        let header = buildHeader(vertexCount: mesh.vertices.count, faceCount: mesh.faces.count)
+
+        var data = Data(header.utf8)
+        serializeVertices(mesh.vertices, normals: mesh.normals, into: &data)
+        serializeFaces(mesh.faces, classifications: mesh.classifications, into: &data)
+
+        try data.write(to: fileURL)
+
+        print("[RoomScanAlpha] PLY exported: \(mesh.vertices.count) vertices, \(mesh.faces.count) faces, \(data.count / 1024)KB")
+    }
+
+    // MARK: - Mesh merging
+
+    private struct MergedMesh {
+        let vertices: [SIMD3<Float>]
+        let normals: [SIMD3<Float>]
+        let faces: [[UInt32]]
+        let classifications: [UInt8]
+    }
+
+    private static func mergeAnchors(_ anchors: [ARMeshAnchor]) -> MergedMesh {
         var allVertices = [SIMD3<Float>]()
         var allNormals = [SIMD3<Float>]()
         var allFaces = [[UInt32]]()
         var allClassifications = [UInt8]()
         var vertexOffset: UInt32 = 0
 
-        for anchor in meshAnchors {
+        for anchor in anchors {
             let geometry = anchor.geometry
             let worldTransform = anchor.transform
             let normalTransform = simd_float3x3(
@@ -46,32 +70,35 @@ struct PLYExporter {
             vertexOffset += UInt32(vertexCount)
         }
 
-        let totalVertices = allVertices.count
-        let totalFaces = allFaces.count
+        return MergedMesh(vertices: allVertices, normals: allNormals, faces: allFaces, classifications: allClassifications)
+    }
 
-        // Build binary PLY
-        var header = """
+    // MARK: - Header
+
+    private static func buildHeader(vertexCount: Int, faceCount: Int) -> String {
+        """
         ply
         format binary_little_endian 1.0
-        element vertex \(totalVertices)
+        element vertex \(vertexCount)
         property float x
         property float y
         property float z
         property float nx
         property float ny
         property float nz
-        element face \(totalFaces)
+        element face \(faceCount)
         property list uchar uint vertex_indices
         property uchar classification
         end_header\n
         """
+    }
 
-        var data = Data(header.utf8)
+    // MARK: - Binary serialization
 
-        // Vertex data
-        for i in 0..<totalVertices {
-            var v = allVertices[i]
-            var n = allNormals[i]
+    private static func serializeVertices(_ vertices: [SIMD3<Float>], normals: [SIMD3<Float>], into data: inout Data) {
+        for i in 0..<vertices.count {
+            var v = vertices[i]
+            var n = normals[i]
             data.append(Data(bytes: &v.x, count: 4))
             data.append(Data(bytes: &v.y, count: 4))
             data.append(Data(bytes: &v.z, count: 4))
@@ -79,21 +106,18 @@ struct PLYExporter {
             data.append(Data(bytes: &n.y, count: 4))
             data.append(Data(bytes: &n.z, count: 4))
         }
+    }
 
-        // Face data
-        for i in 0..<totalFaces {
-            let face = allFaces[i]
+    private static func serializeFaces(_ faces: [[UInt32]], classifications: [UInt8], into data: inout Data) {
+        for i in 0..<faces.count {
+            let face = faces[i]
             var count: UInt8 = UInt8(face.count)
             data.append(Data(bytes: &count, count: 1))
             for var idx in face {
                 data.append(Data(bytes: &idx, count: 4))
             }
-            var classification = allClassifications[i]
+            var classification = classifications[i]
             data.append(Data(bytes: &classification, count: 1))
         }
-
-        try data.write(to: fileURL)
-
-        print("[RoomScanAlpha] PLY exported: \(totalVertices) vertices, \(totalFaces) faces, \(data.count / 1024)KB")
     }
 }

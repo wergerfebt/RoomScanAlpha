@@ -1,3 +1,6 @@
+// Selects keyframes from the AR session based on camera movement thresholds, converting each to
+// JPEG immediately to avoid retaining large CVPixelBuffers in memory.
+
 import ARKit
 import simd
 
@@ -8,10 +11,15 @@ final class FrameCaptureManager {
     private var lastCaptureTime: TimeInterval = 0
     private var nextIndex: Int = 0
 
-    // Thresholds
-    private let translationThreshold: Float = 0.15   // meters
-    private let rotationThreshold: Float = 15.0       // degrees
-    private let minimumInterval: TimeInterval = 0.5   // seconds
+    // Thresholds — tuned for 30-60 keyframes when walking the perimeter of a ~4x4m room.
+    // 0.15m translation: captures a new angle every ~6 inches — enough overlap for ORB matching
+    // without excessive redundancy.
+    private let translationThreshold: Float = 0.15
+    // 15 deg rotation: captures new viewpoints when turning corners or looking up/down.
+    private let rotationThreshold: Float = 15.0
+    // 0.5s minimum: prevents burst captures from hand tremor or rapid panning.
+    private let minimumInterval: TimeInterval = 0.5
+    // 60 cap: keeps total package under ~100MB (60 JPEGs + PLY + depth maps).
     private let maxKeyframes: Int = 60
 
     var keyframeCount: Int { capturedFrames.count }

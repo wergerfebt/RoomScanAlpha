@@ -35,6 +35,8 @@ final class ScanViewModel {
         return Date().timeIntervalSince(start)
     }
 
+    // Minimum quality: 15 keyframes provides enough views for ORB feature matching;
+    // 500 triangles ensures the mesh covers more than a single small surface.
     var scanQualitySufficient: Bool {
         keyframeCount >= 15 && meshTriangleCount >= 500
     }
