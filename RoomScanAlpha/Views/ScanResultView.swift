@@ -125,9 +125,12 @@ struct ScanResultView: View {
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .padding(.horizontal, 24)
 
-            // Scan Dimensions (bounding box)
+            // Scan Dimensions (bounding box) — nested under scan_dimensions.bbox
             if let dims = result.scanDimensions,
-               let bx = dims["bbox_x"], let by = dims["bbox_y"], let bz = dims["bbox_z"] {
+               let bbox = dims["bbox"] as? [String: Any],
+               let bx = bbox["x_m"] as? Double,
+               let by = bbox["y_m"] as? Double,
+               let bz = bbox["z_m"] as? Double {
                 VStack(alignment: .leading, spacing: 12) {
                     sectionHeader("Scan Bounding Box")
 

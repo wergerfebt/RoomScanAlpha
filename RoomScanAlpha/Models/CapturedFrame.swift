@@ -33,22 +33,24 @@ struct CapturedFrame {
         let imageWidth = CVPixelBufferGetWidth(frame.capturedImage)
         let imageHeight = CVPixelBufferGetHeight(frame.capturedImage)
 
-        // Copy depth map to raw Data (Float32 bytes)
+        // Copy depth map pixels to a contiguous Data blob (Float32, little-endian, row-major).
+        // The raw bytes are written directly to the .depth export file — the cloud processor
+        // reads them back using the width/height/format from metadata.json.
         var depthBytes: Data? = nil
-        var dw = 0
-        var dh = 0
+        var depthWidth = 0
+        var depthHeight = 0
         if let depthMap = frame.sceneDepth?.depthMap {
             depthBytes = copyDepthBuffer(depthMap)
-            dw = CVPixelBufferGetWidth(depthMap)
-            dh = CVPixelBufferGetHeight(depthMap)
+            depthWidth = CVPixelBufferGetWidth(depthMap)
+            depthHeight = CVPixelBufferGetHeight(depthMap)
         }
 
         return CapturedFrame(
             index: index,
             jpegData: jpegData,
             depthData: depthBytes,
-            depthWidth: dw,
-            depthHeight: dh,
+            depthWidth: depthWidth,
+            depthHeight: depthHeight,
             cameraIntrinsics: frame.camera.intrinsics,
             cameraTransform: frame.camera.transform,
             imageWidth: imageWidth,
@@ -63,6 +65,8 @@ struct CapturedFrame {
     // CIContext() allocates GPU resources, so creating one per frame wastes ~1-2ms each time.
     private static let sharedCIContext = CIContext()
 
+    /// Convert an ARKit camera image (YCbCr biplanar CVPixelBuffer) to JPEG Data.
+    /// Uses CIContext for the colorspace conversion, then UIImage for JPEG compression.
     private static func jpegFromPixelBuffer(_ pixelBuffer: CVPixelBuffer, quality: CGFloat) -> Data? {
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
         guard let cgImage = sharedCIContext.createCGImage(ciImage, from: ciImage.extent) else { return nil }
@@ -70,6 +74,10 @@ struct CapturedFrame {
         return uiImage.jpegData(compressionQuality: quality)
     }
 
+    /// Copy a depth map CVPixelBuffer's pixels into a contiguous Data blob.
+    /// The buffer must be locked for reading before accessing the base address;
+    /// the defer block ensures it is always unlocked, even on early return.
+    /// Output is raw Float32 bytes in row-major order, little-endian (native ARM).
     private static func copyDepthBuffer(_ pixelBuffer: CVPixelBuffer) -> Data? {
         CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }

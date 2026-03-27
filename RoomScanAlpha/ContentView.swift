@@ -27,7 +27,8 @@ struct ContentView: View {
                 )
             case .labelingRoom:
                 RoomLabelView(roomLabel: $viewModel.roomLabel) {
-                    // Build RFQ context with AR world origin
+                    // Build RFQ context with the AR session's current camera transform
+                    // as the room origin. Falls back to identity matrix if no frame is available.
                     if let frame = sessionManager.session.currentFrame {
                         viewModel.buildRFQContext(worldTransform: frame.camera.transform)
                     } else {
@@ -59,7 +60,7 @@ struct ContentView: View {
             Button("Export Anyway") { viewModel.state = .labelingRoom }
             Button("Continue Scanning") { viewModel.state = .scanning }
         } message: {
-            Text("Only \(viewModel.keyframeCount) keyframes and \(viewModel.meshTriangleCount) triangles captured. For best results, capture at least 15 keyframes and 500 triangles.")
+            Text("Only \(viewModel.keyframeCount) keyframes and \(viewModel.meshTriangleCount) triangles captured. For best results, capture at least \(ScanViewModel.minKeyframes) keyframes and \(ScanViewModel.minMeshTriangles) triangles.")
         }
         .alert("Cellular Data Warning", isPresented: $viewModel.showCellularWarning) {
             Button("Upload Anyway") {
@@ -96,6 +97,10 @@ struct ContentView: View {
         }
     }
 
+    /// Package the captured scan data and begin the upload flow.
+    ///
+    /// Flow: export on background thread → check network → either upload (Wi-Fi),
+    /// prompt for cellular confirmation, or show error (no connection).
     private func startExport() {
         viewModel.state = .exporting
         viewModel.exportProgress = "Preparing export..."
@@ -118,13 +123,17 @@ struct ContentView: View {
                         }
                     }
                 )
+                // Check network before touching UI state
+                let network = await CloudUploader.shared.checkNetwork()
+
                 await MainActor.run {
                     viewModel.lastExportURL = result.directoryURL
                     let sizeMB = result.totalSizeBytes / 1024 / 1024
                     viewModel.exportProgress = "Export complete — \(sizeMB)MB"
                     print("[RoomScanAlpha] Export complete: \(result.directoryURL.path)")
-                    // Check network before uploading
-                    let network = CloudUploader.shared.checkNetwork()
+
+                    // Gate upload on network availability: proceed on Wi-Fi, warn on cellular,
+                    // or show error if offline.
                     if !network.connected {
                         viewModel.uploadError = "No network connection"
                         viewModel.uploadStatus = "Upload failed"
@@ -178,6 +187,9 @@ struct ContentView: View {
         }
     }
 
+    /// Poll the backend for scan processing results. On failure, we still show the result
+    /// view with a "failed" status so the user can see something went wrong and retry,
+    /// rather than being stuck on a loading screen.
     private func startPolling(scanId: String, rfqId: String) {
         viewModel.state = .viewingResults
 
@@ -189,6 +201,7 @@ struct ContentView: View {
                 print("[RoomScanAlpha] Scan result: \(result.status)")
             } catch {
                 viewModel.saveToHistory(scanId: scanId, status: "failed")
+                // Create a placeholder "failed" result so the UI can display the error state
                 viewModel.scanResult = CloudUploader.ScanResult(
                     scanId: scanId,
                     status: "failed",

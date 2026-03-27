@@ -11,3 +11,12 @@ build/
 
 # SPM
 .build/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# Test fixture artifacts
+cloud/processor/tests/fixtures/*.ply

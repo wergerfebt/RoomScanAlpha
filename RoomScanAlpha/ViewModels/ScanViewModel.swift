@@ -1,8 +1,23 @@
 import SwiftUI
 import ARKit
 
+/// Orchestrates the room scan lifecycle: AR capture, export, upload, and result polling.
+///
+/// Owns all scan session state and is the single source of truth for what ContentView displays.
+/// State transitions follow the `ScanState` enum — see its documentation for the valid graph.
 @Observable
 final class ScanViewModel {
+    // MARK: - Scan Quality Thresholds
+
+    /// Minimum keyframes for reliable ORB feature matching across viewpoints.
+    static let minKeyframes = 15
+    /// Minimum mesh faces to ensure the mesh covers more than a single small surface.
+    static let minMeshTriangles = 500
+    /// Minimum free disk space (in bytes) required before exporting a scan package.
+    static let minStorageBytes: Int64 = 200 * 1024 * 1024  // 200 MB
+
+    // MARK: - Scan State
+
     var state: ScanState = .idle
     var meshTriangleCount: Int = 0
     var meshAnchorCount: Int = 0
@@ -14,24 +29,26 @@ final class ScanViewModel {
     var showCellularWarning: Bool = false
     var pendingUploadURL: URL?
 
-    // Upload state
+    // MARK: - Upload State
+
     var uploadProgress: Double = 0.0
     var uploadStatus: String = ""
     var uploadError: String?
     var lastScanId: String?
 
-    // Result state
+    // MARK: - Result State
+
     var scanResult: CloudUploader.ScanResult?
 
-    // RFQ context
+    // MARK: - RFQ Context
+
     var selectedRFQ: RFQ?
     var roomLabel: String = ""
     var rfqContext: RFQContext?
 
-    // History
-    var showHistory = false
+    // MARK: - UI Flags
 
-    // Error recovery
+    var showHistory = false
     var showInterruptionAlert = false
     var showLowStorageAlert = false
 
@@ -41,6 +58,7 @@ final class ScanViewModel {
         selectedRFQ != nil
     }
 
+    /// Reset all scan session state and begin a new scan.
     func startScan() {
         meshTriangleCount = 0
         meshAnchorCount = 0
@@ -65,11 +83,14 @@ final class ScanViewModel {
     }
 
     /// Build RFQ context from current state + AR session world origin.
+    /// Origin coordinates are stored in meters (ARKit's native unit).
     func buildRFQContext(worldTransform: simd_float4x4) {
         guard let rfq = selectedRFQ else { return }
 
         let position = worldTransform.columns.3
-        // Extract Y rotation (heading) from the transform matrix
+        // Extract Y-axis rotation (heading/yaw) from the transform matrix.
+        // The X-axis basis vector (column 0) projected onto the XZ plane gives the
+        // forward direction; atan2(z, x) yields the heading angle.
         let rotationRad = atan2(worldTransform.columns.0.z, worldTransform.columns.0.x)
         let rotationDeg = rotationRad * 180.0 / .pi
 
@@ -89,10 +110,8 @@ final class ScanViewModel {
         return Date().timeIntervalSince(start)
     }
 
-    // Minimum quality: 15 keyframes provides enough views for ORB feature matching;
-    // 500 triangles ensures the mesh covers more than a single small surface.
     var scanQualitySufficient: Bool {
-        keyframeCount >= 15 && meshTriangleCount >= 500
+        keyframeCount >= Self.minKeyframes && meshTriangleCount >= Self.minMeshTriangles
     }
 
     func updateMeshStats(triangleCount: Int, anchorCount: Int) {
@@ -104,13 +123,13 @@ final class ScanViewModel {
         keyframeCount = count
     }
 
-    /// Check if device has at least 200MB free before export.
+    /// Check if device has enough free disk space for the export package.
     var hasEnoughStorage: Bool {
         let paths = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
         guard let path = paths.first else { return true }
         let values = try? path.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
         let available = values?.volumeAvailableCapacityForImportantUsage ?? 0
-        return available > 200 * 1024 * 1024 // 200MB
+        return available > Self.minStorageBytes
     }
 
     func saveToHistory(scanId: String, status: String) {

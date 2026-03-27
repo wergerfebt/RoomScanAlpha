@@ -41,23 +41,6 @@ struct MeshExtractor {
         return SCNGeometry(sources: [vertexSource, normalSource], elements: [element])
     }
 
-    /// Transform vertices from anchor-local to world space.
-    /// Use this for export (PLY) where we need absolute positions.
-    static func worldSpaceVertices(from meshAnchor: ARMeshAnchor) -> [SIMD3<Float>] {
-        let geometry = meshAnchor.geometry
-        let worldTransform = meshAnchor.transform
-        var result = [SIMD3<Float>]()
-        result.reserveCapacity(geometry.vertices.count)
-
-        for i in 0..<geometry.vertices.count {
-            let v = geometry.vertex(at: UInt32(i))
-            let local4 = SIMD4<Float>(v[0], v[1], v[2], 1.0)
-            let world4 = simd_mul(worldTransform, local4)
-            result.append(SIMD3<Float>(world4.x, world4.y, world4.z))
-        }
-        return result
-    }
-
     static func classificationColor(for classification: ARMeshClassification) -> UIColor {
         switch classification {
         case .wall:    return .systemBlue

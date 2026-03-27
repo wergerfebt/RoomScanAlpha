@@ -31,14 +31,9 @@ struct ScanPackager {
         // 1. Export PLY mesh
         onProgress("Exporting mesh...")
         let plyURL = scanDir.appendingPathComponent("mesh.ply")
-        try PLYExporter.export(meshAnchors: meshAnchors, to: plyURL)
-
-        var totalVertices = 0
-        var totalFaces = 0
-        for anchor in meshAnchors {
-            totalVertices += anchor.geometry.vertices.count
-            totalFaces += anchor.geometry.faces.count
-        }
+        let meshCounts = try PLYExporter.export(meshAnchors: meshAnchors, to: plyURL)
+        let totalVertices = meshCounts.vertexCount
+        let totalFaces = meshCounts.faceCount
 
         // 2. Export keyframes (JPEG + per-frame JSON) and depth maps
         onProgress("Exporting keyframes...")
@@ -50,7 +45,7 @@ struct ScanPackager {
 
             let frameJSON = FrameMetadata.from(frame)
             let frameJSONURL = keyframesDir.appendingPathComponent("\(frameName).json")
-            let jsonData = try JSONEncoder.prettyPrinted.encode(frameJSON)
+            let jsonData = try JSONEncoder.compact.encode(frameJSON)
             try jsonData.write(to: frameJSONURL)
 
             if let depthData = frame.depthData {
@@ -279,6 +274,12 @@ extension JSONEncoder {
     static let prettyPrinted: JSONEncoder = {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return encoder
+    }()
+
+    static let compact: JSONEncoder = {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
         return encoder
     }()
 }

@@ -26,11 +26,11 @@ struct ARScanningView: UIViewRepresentable {
     final class Coordinator: NSObject, ARSCNViewDelegate {
         let viewModel: ScanViewModel
 
-        // P-4: Cache geometry signature per anchor to avoid rebuilding unchanged meshes.
+        // Performance: cache geometry signature per anchor to avoid rebuilding unchanged meshes.
         // Key is the anchor's UUID; value is (vertexCount, faceCount) at last rebuild.
         private var anchorGeometryCache: [UUID: (vertices: Int, faces: Int)] = [:]
 
-        // P-5: Running triangle count, updated incrementally instead of recomputed from all anchors.
+        // Performance: running triangle count, updated incrementally instead of recomputed from all anchors.
         private var totalTriangleCount: Int = 0
         private var anchorTriangleCounts: [UUID: Int] = [:]
         private var totalAnchorCount: Int = 0
@@ -50,7 +50,7 @@ struct ARScanningView: UIViewRepresentable {
                 faces: faceCount
             )
 
-            // P-5: Track this anchor's contribution to the total
+            // Track this anchor's triangle contribution to the running total
             anchorTriangleCounts[meshAnchor.identifier] = faceCount
             totalTriangleCount += faceCount
             totalAnchorCount += 1
@@ -65,7 +65,7 @@ struct ARScanningView: UIViewRepresentable {
             let newVertexCount = meshAnchor.geometry.vertices.count
             let newFaceCount = meshAnchor.geometry.faces.count
 
-            // P-4: Only rebuild geometry if vertex or face count changed
+            // Skip rebuild if geometry hasn't changed (same vertex/face counts)
             if let cached = anchorGeometryCache[meshAnchor.identifier],
                cached.vertices == newVertexCount && cached.faces == newFaceCount {
                 return
@@ -75,7 +75,7 @@ struct ARScanningView: UIViewRepresentable {
             node.addChildNode(buildMeshNode(for: meshAnchor))
             anchorGeometryCache[meshAnchor.identifier] = (vertices: newVertexCount, faces: newFaceCount)
 
-            // P-5: Update delta instead of recomputing from all anchors
+            // Update triangle count incrementally (delta) instead of recomputing from all anchors
             let oldCount = anchorTriangleCounts[meshAnchor.identifier] ?? 0
             anchorTriangleCounts[meshAnchor.identifier] = newFaceCount
             totalTriangleCount += (newFaceCount - oldCount)

@@ -11,6 +11,23 @@ protocol URLSessionProtocol: Sendable {
 
 extension URLSession: URLSessionProtocol {}
 
+/// Handles the full scan upload lifecycle: zip → signed URL → GCS upload → backend notification.
+///
+/// Upload flow:
+///   1. Authenticate via Firebase Auth (anonymous or email/password).
+///   2. Zip the scan package directory (~50-100MB compressed).
+///   3. Request a time-limited signed URL from the REST API.
+///   4. PUT the zip directly to GCS (bypasses Cloud Run's 32MB request limit).
+///   5. Notify the backend that upload is complete (triggers Cloud Tasks processing).
+///
+/// Progress is reported as a 0.0–1.0 fraction mapped across all steps:
+///   0.00–0.05  auth + zip
+///   0.05–0.15  signed URL + upload start
+///   0.15–0.90  GCS upload (proportional to bytes sent)
+///   0.90–1.00  backend notification
+///
+/// Resilience: all HTTP requests use `executeWithRetry()` with exponential backoff for
+/// transient failures (408, 429, 5xx). Only one upload is allowed at a time.
 final class CloudUploader {
     static let shared = CloudUploader()
 
@@ -19,7 +36,7 @@ final class CloudUploader {
     /// Injected session for testability. Defaults to URLSession.shared.
     var session: URLSessionProtocol = URLSession.shared
 
-    /// Whether an upload is currently in progress. Prevents concurrent uploads (9.4).
+    /// Whether an upload is currently in progress. Prevents concurrent uploads.
     private(set) var isUploading = false
 
     // MARK: - Retry Configuration
@@ -28,6 +45,8 @@ final class CloudUploader {
         var maxRetries: Int = 3
         var initialDelaySeconds: TimeInterval = 1.0
         var maxDelaySeconds: TimeInterval = 30.0
+        /// HTTP status codes considered transient/retryable:
+        /// 408 (timeout), 429 (rate limited), 500-504 (server errors).
         var retryableStatusCodes: Set<Int> = [408, 429, 500, 502, 503, 504]
     }
 
@@ -39,19 +58,15 @@ final class CloudUploader {
     private init() {}
 
     /// Check current network path — returns (isConnected, isCellular).
-    func checkNetwork() -> (connected: Bool, cellular: Bool) {
-        let monitor = NWPathMonitor()
-        let semaphore = DispatchSemaphore(value: 0)
-        var result: (Bool, Bool) = (false, false)
-
-        monitor.pathUpdateHandler = { path in
-            result = (path.status == .satisfied, path.usesInterfaceType(.cellular))
-            semaphore.signal()
+    func checkNetwork() async -> (connected: Bool, cellular: Bool) {
+        await withCheckedContinuation { continuation in
+            let monitor = NWPathMonitor()
+            monitor.pathUpdateHandler = { path in
+                monitor.cancel()
+                continuation.resume(returning: (path.status == .satisfied, path.usesInterfaceType(.cellular)))
+            }
+            monitor.start(queue: DispatchQueue(label: "network-check"))
         }
-        monitor.start(queue: DispatchQueue(label: "network-check"))
-        _ = semaphore.wait(timeout: .now() + 3)
-        monitor.cancel()
-        return result
     }
 
     struct UploadResult {
@@ -66,13 +81,16 @@ final class CloudUploader {
         let wallAreaSqft: Double?
         let ceilingHeightFt: Double?
         let perimeterLinearFt: Double?
+        /// Miro format: label_keys from SCAN_COMPONENT_LABELS (e.g. "floor_hardwood").
+        /// Extracted from detected_components JSONB `{ "detected": ["label_key", ...] }`.
         let detectedComponents: [String]?
-        let scanDimensions: [String: Double]?
+        /// Standardized scan dimension keys for auto-population, plus nested bbox.
+        let scanDimensions: [String: Any]?
     }
 
     /// Full upload flow: zip → sign → upload → complete.
     /// Calls onProgress with (step description, fraction 0.0–1.0).
-    /// Throws `UploadError.concurrentUpload` if another upload is already in progress (9.4).
+    /// Throws `UploadError.concurrentUpload` if another upload is already in progress.
     func upload(
         scanDirectoryURL: URL,
         rfqId: String,
@@ -126,9 +144,10 @@ final class CloudUploader {
         return UploadResult(scanId: scanId, status: status)
     }
 
-    // MARK: - Retry with Exponential Backoff (9.2)
+    // MARK: - Retry with Exponential Backoff
 
     /// Execute an HTTP request with retry and exponential backoff for transient failures.
+    /// Delay doubles each attempt (1s, 2s, 4s, ...) up to `maxDelaySeconds`.
     func executeWithRetry(
         _ request: URLRequest,
         using networkSession: URLSessionProtocol? = nil
@@ -169,6 +188,9 @@ final class CloudUploader {
 
     // MARK: - Private
 
+    /// Create a zip archive of a directory using NSFileCoordinator.
+    /// NSFileCoordinator with `.forUploading` automatically produces a zip of the directory
+    /// at a temporary path; we copy it to our own temp location for upload.
     func zipDirectory(_ directoryURL: URL) throws -> URL {
         let zipURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("scan_upload_\(Int(Date().timeIntervalSince1970)).zip")
@@ -267,12 +289,18 @@ final class CloudUploader {
         print("[RoomScanAlpha] Persisted scan ID: \(scanId)")
     }
 
-    /// Poll the status endpoint until scan_ready or failed. Returns structured room data.
-    func pollForResult(scanId: String, rfqId: String, intervalSeconds: TimeInterval = 5.0) async throws -> ScanResult {
+    /// Poll the status endpoint until the scan reaches a terminal state ("scan_ready" or "failed").
+    /// Times out after maxAttempts polls (default 120 = 10 minutes at 5s intervals).
+    func pollForResult(
+        scanId: String,
+        rfqId: String,
+        intervalSeconds: TimeInterval = 5.0,
+        maxAttempts: Int = 120
+    ) async throws -> ScanResult {
         let token = try await AuthManager.shared.getToken()
         let url = URL(string: "\(apiBaseURL)/api/rfqs/\(rfqId)/scans/\(scanId)/status")!
 
-        while true {
+        for attempt in 1...maxAttempts {
             var request = URLRequest(url: url)
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 
@@ -285,11 +313,15 @@ final class CloudUploader {
             let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
             let status = json["status"] as? String ?? "unknown"
 
-            print("[RoomScanAlpha] Poll status: \(status)")
+            print("[RoomScanAlpha] Poll status: \(status) (attempt \(attempt)/\(maxAttempts))")
 
             if status == "scan_ready" || status == "failed" {
-                let components = json["detected_components"] as? [String]
-                let dimensions = json["scan_dimensions"] as? [String: Double]
+                // detected_components: Miro format { "detected": ["label_key", ...] }
+                let componentsObj = json["detected_components"] as? [String: Any]
+                let components = componentsObj?["detected"] as? [String]
+
+                // scan_dimensions: contains standard keys + nested "bbox" object
+                let dimensions = json["scan_dimensions"] as? [String: Any]
 
                 return ScanResult(
                     scanId: scanId,
@@ -305,13 +337,21 @@ final class CloudUploader {
 
             try await Task.sleep(for: .seconds(intervalSeconds))
         }
+
+        throw UploadError.pollTimeout
     }
 
     enum UploadError: LocalizedError {
+        /// NSFileCoordinator zip creation failed.
         case zipFailed
+        /// REST API call failed (signed URL, upload-complete notification).
         case apiError(String)
+        /// GCS PUT upload failed.
         case uploadFailed(String)
+        /// Another upload is already in progress.
         case concurrentUpload
+        /// Status polling exceeded maxAttempts without reaching a terminal state.
+        case pollTimeout
 
         var errorDescription: String? {
             switch self {
@@ -319,6 +359,7 @@ final class CloudUploader {
             case .apiError(let msg): return msg
             case .uploadFailed(let msg): return msg
             case .concurrentUpload: return "Upload already in progress"
+            case .pollTimeout: return "Scan processing timed out — try again later"
             }
         }
     }

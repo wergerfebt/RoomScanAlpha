@@ -5,7 +5,7 @@ struct ScanRecord: Codable, Identifiable {
     let rfqId: String
     let rfqDescription: String?
     let roomLabel: String
-    let status: String      // processing, scan_ready, failed
+    let status: String      // processing, complete, failed
     let keyframeCount: Int
     let meshTriangleCount: Int
     let timestamp: Date
@@ -16,7 +16,7 @@ struct ScanRecord: Codable, Identifiable {
         case "processing": return "Processing"
         case "failed": return "Failed"
         case "uploading": return "Uploading"
-        default: return status.capitalized
+        default: return status.replacingOccurrences(of: "_", with: " ").capitalized
         }
     }
 

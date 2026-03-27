@@ -121,7 +121,7 @@ final class ScanResultViewTests: XCTestCase {
             ceilingHeightFt: 8.5,
             perimeterLinearFt: 62.0,
             detectedComponents: ["hardwood", "baseboards", "cabinets"],
-            scanDimensions: ["bbox_x": 4.5, "bbox_y": 2.6, "bbox_z": 5.2]
+            scanDimensions: ["x_m": 4.5, "y_m": 2.6, "z_m": 5.2]
         )
 
         viewModel.scanResult = readyResult
@@ -146,16 +146,16 @@ final class ScanResultViewTests: XCTestCase {
             ceilingHeightFt: nil,
             perimeterLinearFt: nil,
             detectedComponents: nil,
-            scanDimensions: ["bbox_x": 3.8, "bbox_y": 2.4, "bbox_z": 4.1]
+            scanDimensions: ["x_m": 3.8, "y_m": 2.4, "z_m": 4.1]
         )
 
         viewModel.scanResult = readyResult
 
         let dims = viewModel.scanResult?.scanDimensions
         XCTAssertNotNil(dims)
-        XCTAssertEqual(dims?["bbox_x"] ?? 0, 3.8, accuracy: 0.01)
-        XCTAssertEqual(dims?["bbox_y"] ?? 0, 2.4, accuracy: 0.01)
-        XCTAssertEqual(dims?["bbox_z"] ?? 0, 4.1, accuracy: 0.01)
+        XCTAssertEqual(dims?["x_m"] as? Double ?? 0, 3.8, accuracy: 0.01)
+        XCTAssertEqual(dims?["y_m"] as? Double ?? 0, 2.4, accuracy: 0.01)
+        XCTAssertEqual(dims?["z_m"] as? Double ?? 0, 4.1, accuracy: 0.01)
     }
 
     func testScanReadyState_viewBranching() {

@@ -322,15 +322,15 @@ This distinction matters because:
 ### Data contracts
 
 **detected_components JSONB** (materials/surfaces on SCANNED_ROOMS):
+
+Per Miro DB Board Section 5 (updated), the format is a list of `label_key` strings inside a `detected` wrapper — **not** an array of objects with label_id/confidence:
 ```json
-[
-  {"label_id": "uuid-floor-hardwood", "label_key": "floor_hardwood", "confidence": 0.94},
-  {"label_id": "uuid-baseboard",      "label_key": "baseboard",      "confidence": 0.87},
-  {"label_id": "uuid-shoe-molding",   "label_key": "shoe_molding",   "confidence": 0.82}
-]
+{ "detected": ["floor_hardwood", "baseboard", "shoe_molding"] }
 ```
 
-Label IDs reference `SCAN_COMPONENT_LABELS`. The quote builder looks up `SCAN_COMPONENT_TEMPLATES` for each label → gets bundle of `LINE_ITEM_TEMPLATES` → seeds LINE_ITEMS with `quantity = scan_dimensions[template.scan_dimension_key]`.
+The auto-population logic iterates `detected_components.detected` and looks up each `label_key` in `SCAN_COMPONENT_LABELS` → `SCAN_COMPONENT_TEMPLATES` → `LINE_ITEM_TEMPLATES` → seeds LINE_ITEMS with `quantity = scan_dimensions[template.scan_dimension_key]`.
+
+During Phase 2 (mock DNN), this is hardcoded as a list of label_key strings — same format the real DNN will return.
 
 **ROOM_APPLIANCES rows** (appliance instances):
 ```sql
@@ -365,7 +365,7 @@ For items where the quantity is a count rather than a dimension:
 ```python
 # Hardcoded fallback when VERTEX_ENDPOINT_ID is not configured
 PHASE2_MATERIAL_MAP = {
-    # ARKit classification → default material labels
+    # ARKit classification → default material label_keys (from SCAN_COMPONENT_LABELS)
     "floor":   ["floor_hardwood"],
     "wall":    [],                   # no wall material detection yet
     "ceiling": ["ceiling_drywall"],
@@ -373,20 +373,16 @@ PHASE2_MATERIAL_MAP = {
 
 PHASE2_APPLIANCES = []  # no appliance detection until DNN is active
 
-def detect_components_stub(classified_groups, scan_id, db_conn):
-    """Phase 2: return hardcoded labels based on ARKit classifications."""
-    detected = []
+def detect_components_stub(classified_groups):
+    """Phase 2: return hardcoded label_keys based on ARKit classifications.
+
+    Returns the Miro-compliant format: { "detected": ["label_key_1", ...] }
+    """
+    detected_keys = []
     for arkit_class, label_keys in PHASE2_MATERIAL_MAP.items():
         if arkit_class in classified_groups:
-            for key in label_keys:
-                label = lookup_scan_component_label(key, db_conn)
-                if label:
-                    detected.append({
-                        "label_id": label["id"],
-                        "label_key": key,
-                        "confidence": 1.0,  # hardcoded = full confidence
-                    })
-    return detected
+            detected_keys.extend(label_keys)
+    return {"detected": detected_keys}
     # ROOM_APPLIANCES: no rows written in Phase 2 stub
 ```
 
@@ -394,9 +390,9 @@ def detect_components_stub(classified_groups, scan_id, db_conn):
 
 | ID | Test | Expected | Pass Criteria |
 |----|------|----------|---------------|
-| S4b.1 | Phase 2 stub returns labels | Process room with floor + ceiling | detected_components has floor_hardwood + ceiling_drywall | label_ids are valid UUIDs in SCAN_COMPONENT_LABELS |
-| S4b.2 | detected_components JSONB format correct | Check SCANNED_ROOMS after processing | Array of objects with label_id, label_key, confidence | Each element has all three fields |
-| S4b.3 | Label IDs resolve against SCAN_COMPONENT_LABELS | Stub returns "floor_hardwood" | UUID looked up from label table | Label ID is a valid UUID; label_key matches |
+| S4b.1 | Phase 2 stub returns labels | Process room with floor + ceiling | detected_components has `{ "detected": ["floor_hardwood", "ceiling_drywall"] }` | label_keys are valid entries in SCAN_COMPONENT_LABELS |
+| S4b.2 | detected_components JSONB format correct | Check SCANNED_ROOMS after processing | Object with `detected` array of label_key strings | `detected_components.detected` is a non-empty array |
+| S4b.3 | Label keys resolve against SCAN_COMPONENT_LABELS | Stub returns "floor_hardwood" | label_key exists in SCAN_COMPONENT_LABELS | `SELECT id FROM scan_component_labels WHERE label_key = 'floor_hardwood'` returns a row |
 | S4b.4 | Auto-population chain works end-to-end | detected_components written → quote created | Line items seeded with correct quantities | LINE_ITEMS.quantity matches scan_dimensions[template.scan_dimension_key] |
 | S4b.5 | Unknown label keys are skipped | Stub tries a key not in SCAN_COMPONENT_LABELS | No entry in detected_components for that key | No error; label is logged and skipped |
 | S4b.6 | ROOM_APPLIANCES empty in Phase 2 | Check ROOM_APPLIANCES after stub processing | No rows for this scan_id | Count = 0 (appliance detection requires DNN) |
