@@ -59,10 +59,13 @@ struct CapturedFrame {
 
     // MARK: - Private helpers
 
+    // Shared CIContext — allocated once, reused for all keyframe JPEG conversions.
+    // CIContext() allocates GPU resources, so creating one per frame wastes ~1-2ms each time.
+    private static let sharedCIContext = CIContext()
+
     private static func jpegFromPixelBuffer(_ pixelBuffer: CVPixelBuffer, quality: CGFloat) -> Data? {
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-        let context = CIContext()
-        guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else { return nil }
+        guard let cgImage = sharedCIContext.createCGImage(ciImage, from: ciImage.extent) else { return nil }
         let uiImage = UIImage(cgImage: cgImage)
         return uiImage.jpegData(compressionQuality: quality)
     }

@@ -9,6 +9,7 @@ final class ARSessionManager: NSObject, ARSessionDelegate {
 
     /// Snapshot of mesh anchors at the time the session was paused, for export.
     private(set) var lastMeshAnchors: [ARMeshAnchor] = []
+    private var isPaused = true
 
     override init() {
         super.init()
@@ -23,12 +24,17 @@ final class ARSessionManager: NSObject, ARSessionDelegate {
         config.sceneReconstruction = .meshWithClassification
         config.frameSemantics.insert(.sceneDepth)
         config.environmentTexturing = .automatic
+        isPaused = false
         session.run(config)
         print("[RoomScanAlpha] AR session started with LiDAR mesh reconstruction")
     }
 
     func pauseSession() {
-        // Snapshot mesh anchors before pausing
+        // Guard against double-pause (ScanningView.onDisappear + ContentView.handleStopScan both call this).
+        // The snapshot and log should only happen once.
+        guard !isPaused else { return }
+        isPaused = true
+
         if let frame = session.currentFrame {
             lastMeshAnchors = frame.anchors.compactMap { $0 as? ARMeshAnchor }
         }
