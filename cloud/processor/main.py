@@ -440,6 +440,10 @@ def compute_room_metrics(ply_path: str) -> dict:
     Uses Stage 1 (parse_and_classify) for PLY parsing and classification grouping,
     then computes surface areas, ceiling height, and perimeter from the classified mesh.
 
+    When USE_DNN_STAGE3=true, runs Stage 3 with the BEV DNN (RoomFormer) to extract
+    a room polygon and derives floor area, wall area, and perimeter from the polygon
+    instead of raw triangle summation. Falls back to raw triangles if DNN fails.
+
     All vertex positions are in meters (ARKit Y-up, right-handed coordinate system).
     Output dimensions are converted to imperial (sq ft / ft) at the return boundary.
 
@@ -452,6 +456,108 @@ def compute_room_metrics(ply_path: str) -> dict:
     except ValueError:
         return _empty_metrics()
 
+    # --- Try DNN-based Stage 3 if enabled ---
+    use_dnn = os.environ.get("USE_DNN_STAGE3", "false").lower() == "true"
+    model_path = os.environ.get("ROOMFORMER_MODEL_PATH", None)
+    dnn_metrics = None
+
+    if use_dnn:
+        dnn_metrics = _compute_metrics_via_stage3(mesh, model_path)
+
+    if dnn_metrics is not None:
+        return dnn_metrics
+
+    # --- Fallback: raw triangle summation (original path) ---
+    return _compute_metrics_raw(mesh)
+
+
+def _compute_metrics_via_stage3(mesh: ParsedMesh, model_path: str | None) -> dict | None:
+    """Compute metrics using Stage 3 DNN polygon.
+
+    Returns the metrics dict, or None if Stage 3 fails (triggers raw fallback).
+    """
+    try:
+        from pipeline.stage2 import fit_planes
+        from pipeline.stage3 import assemble_geometry
+
+        plan_result = fit_planes(mesh)
+        smesh = assemble_geometry(plan_result, mesh=mesh, use_dnn=True, model_path=model_path)
+
+        # Derive metrics from the SimplifiedMesh surface_map
+        floor_area_m2 = smesh.surface_map.get("floor", {}).get("area_sqm", 0.0)
+        wall_area_m2 = sum(
+            v["area_sqm"] for k, v in smesh.surface_map.items() if k.startswith("wall_")
+        )
+
+        # Ceiling height from Stage 2 RANSAC (most reliable measurement)
+        ceiling_height_m = _compute_ceiling_height(mesh)
+
+        # Perimeter from polygon edges (sum of wall widths)
+        perimeter_m = sum(
+            v["area_sqm"] / max(ceiling_height_m, 0.01)
+            for k, v in smesh.surface_map.items() if k.startswith("wall_")
+        )
+
+        # Door count from surface_map
+        door_count = sum(
+            1 for k, v in smesh.surface_map.items()
+            if k.startswith("wall_") and v.get("has_door", False)
+        )
+
+        floor_area_sf = round(floor_area_m2 * SQM_TO_SQFT, 1)
+        wall_area_sf = round(wall_area_m2 * SQM_TO_SQFT, 1)
+        ceiling_height_ft = round(ceiling_height_m * M_TO_FT, 1)
+        perimeter_lf = round(perimeter_m * M_TO_FT, 1)
+
+        print(f"[Processor] Stage3 DNN: Floor: {floor_area_m2:.2f}m² ({floor_area_sf:.0f}sqft), "
+              f"Walls: {wall_area_m2:.2f}m² ({wall_area_sf:.0f}sqft), "
+              f"Ceiling: {ceiling_height_m:.2f}m ({ceiling_height_ft:.1f}ft), "
+              f"Perimeter: {perimeter_m:.2f}m ({perimeter_lf:.0f}ft)")
+
+        # Detected components (same stub as raw path)
+        arkit_labels = [
+            g.classification_name
+            for cid, g in sorted(mesh.classification_groups.items())
+            if cid != CLASSIFICATION_NONE
+        ]
+        PHASE2_MATERIAL_MAP = {
+            "floor": ["floor_hardwood"],
+            "ceiling": ["ceiling_drywall"],
+        }
+        detected_label_keys = []
+        for arkit_class in arkit_labels:
+            detected_label_keys.extend(PHASE2_MATERIAL_MAP.get(arkit_class, []))
+
+        scan_dims = {
+            "floor_area_sf": floor_area_sf,
+            "wall_area_sf": wall_area_sf,
+            "ceiling_sf": floor_area_sf,
+            "perimeter_lf": perimeter_lf,
+            "ceiling_height_ft": ceiling_height_ft,
+            "ceiling_height_min_ft": None,
+            "ceiling_height_max_ft": None,
+            "door_count": door_count,
+            "door_opening_lf": None,
+            "transition_count": None,
+            "bbox": mesh.bbox,
+        }
+
+        return {
+            "floor_area_sqft": floor_area_sf,
+            "wall_area_sqft": wall_area_sf,
+            "ceiling_height_ft": ceiling_height_ft,
+            "perimeter_linear_ft": perimeter_lf,
+            "detected_components": {"detected": detected_label_keys},
+            "scan_dimensions": scan_dims,
+        }
+
+    except Exception as e:
+        print(f"[Processor] Stage3 DNN failed ({e}) — falling back to raw triangle metrics")
+        return None
+
+
+def _compute_metrics_raw(mesh: ParsedMesh) -> dict:
+    """Compute metrics using raw triangle area summation (original path)."""
     # Compute surface areas by classification (in meters²)
     floor_area_m2 = _sum_triangle_area(mesh, CLASSIFICATION_FLOOR)
     wall_area_m2 = _sum_triangle_area(mesh, CLASSIFICATION_WALL)

@@ -1,0 +1,5 @@
+# Model files are too large for git. Download or export them locally.
+*.onnx
+*.pt
+*.pth
+*.mar
