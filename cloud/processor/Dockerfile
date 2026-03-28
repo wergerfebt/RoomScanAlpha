@@ -32,6 +32,6 @@ RUN mkdir -p models && \
 # USE_DNN_STAGE3: set to "true" to enable DNN room polygon extraction
 # ROOMFORMER_MODEL_PATH: path to TorchScript model inside the container
 ENV USE_DNN_STAGE3=false
-ENV ROOMFORMER_MODEL_PATH=/app/models/roomformer_s3d.pt
+ENV ROOMFORMER_MODEL_PATH=/app/models/roomformer_finetuned.pt
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]

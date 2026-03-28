@@ -25,7 +25,17 @@ from typing import Optional
 
 import numpy as np
 
+import os
+
 from .bev_projection import BEVProjection
+
+# Default model filename. Override via ROOMFORMER_MODEL_PATH env var or model_path parameter.
+# When fine-tuning produces new models, save them with descriptive names:
+#   roomformer_pretrained.pt   — original Structured3D weights
+#   roomformer_finetuned.pt    — fine-tuned on synthetic data
+#   roomformer_finetuned_v2.pt — fine-tuned on synthetic + 50 real scans
+#   etc.
+DEFAULT_MODEL_NAME = "roomformer_finetuned.pt"
 
 # Lazy-import torch to avoid import cost when not using DNN path
 _torch = None
@@ -103,12 +113,20 @@ def predict_room_polygon(
 
 
 def _load_model(model_path: Optional[str] = None):
-    """Load TorchScript model with caching (singleton per path)."""
+    """Load TorchScript model with caching (singleton per path).
+
+    Resolution order for model path:
+      1. Explicit model_path parameter (if provided)
+      2. ROOMFORMER_MODEL_PATH environment variable (if set)
+      3. Default: models/{DEFAULT_MODEL_NAME} relative to this package
+    """
     torch = _get_torch()
 
     if model_path is None:
-        # Default path relative to this file
-        model_path = str(Path(__file__).parent.parent / "models" / "roomformer_s3d.pt")
+        model_path = os.environ.get("ROOMFORMER_MODEL_PATH")
+
+    if model_path is None:
+        model_path = str(Path(__file__).parent.parent / "models" / DEFAULT_MODEL_NAME)
 
     model_path = str(Path(model_path).resolve())
 
