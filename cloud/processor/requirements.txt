@@ -5,3 +5,9 @@ cloud-sql-python-connector[pg8000]>=1.12.0
 firebase-admin==6.5.0
 numpy>=2.1.0
 scipy>=1.14.0
+
+# BEV DNN dependencies (Step 3-6)
+# torch is only needed when USE_DNN_STAGE3=true.
+# Using CPU-only build to keep image smaller (~200MB vs ~800MB for full torch).
+torch>=2.0.0
+shapely>=2.0.0
