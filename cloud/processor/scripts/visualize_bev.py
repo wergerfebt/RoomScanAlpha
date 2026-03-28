@@ -39,11 +39,21 @@ COLOR_TO_CLASS = {
 
 
 def parse_debug_ply(ply_path: str) -> ParsedMesh:
-    """Parse a debug PLY (vertex colors, no normals, no face classifications).
+    """Parse a debug PLY file (from diagnose_pipeline.py) into a ParsedMesh.
 
-    Debug PLYs have per-vertex RGB colors encoding the classification.
-    Format: x, y, z (float32) + r, g, b (uint8) per vertex.
-    Faces have 3 uint32 indices, no classification byte.
+    Debug PLYs differ from production PLYs:
+      - Production: vertices have normals (6 floats), faces have classification byte
+      - Debug: vertices have RGB colors (3 uint8), faces have NO classification byte
+
+    Debug vertex layout (15 bytes each):
+      [x: float32][y: float32][z: float32][r: uint8][g: uint8][b: uint8]
+
+    Debug face layout (13 bytes each):
+      [count: uint8 (always 3)][idx0: uint32][idx1: uint32][idx2: uint32]
+
+    Classification is recovered by mapping vertex RGB colors to ARKit class IDs
+    using the COLOR_TO_CLASS lookup table. Each face's classification is the
+    majority vote of its three vertices' classifications.
     """
     with open(ply_path, "rb") as f:
         # Read header

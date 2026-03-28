@@ -74,7 +74,8 @@ def polygon_iou(poly_a: np.ndarray, poly_b: np.ndarray, cell_size: float = 0.01)
     nx = int(np.ceil((xmax - xmin) / cell_size))
     nz = int(np.ceil((zmax - zmin) / cell_size))
 
-    # Cap grid size to prevent OOM on large rooms
+    # Cap grid size to prevent OOM on large rooms.
+    # 2000x2000 = 4M cells — fits in ~32MB of RAM. Larger rooms get coarser cells.
     max_grid = 2000
     if nx > max_grid or nz > max_grid:
         scale = max(nx, nz) / max_grid

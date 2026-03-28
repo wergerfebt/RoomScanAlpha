@@ -472,9 +472,17 @@ def compute_room_metrics(ply_path: str) -> dict:
 
 
 def _compute_metrics_via_stage3(mesh: ParsedMesh, model_path: str | None) -> dict | None:
-    """Compute metrics using Stage 3 DNN polygon.
+    """Compute room metrics using the Stage 3 DNN polygon instead of raw triangles.
 
-    Returns the metrics dict, or None if Stage 3 fails (triggers raw fallback).
+    Runs Stage 2 (RANSAC plane fitting) then Stage 3 (BEV DNN polygon extraction)
+    and derives floor area, wall area, and perimeter from the resulting polygon.
+    Ceiling height always comes from Stage 2 RANSAC regardless of the polygon source.
+
+    Returns the metrics dict, or None if any step fails — which triggers the caller
+    to fall back to raw triangle summation (_compute_metrics_raw).
+
+    Note: detected_components is still a Phase 2 stub (hardcoded material map).
+    It will be replaced by real DNN label detection in a future step.
     """
     try:
         from pipeline.stage2 import fit_planes
@@ -484,21 +492,27 @@ def _compute_metrics_via_stage3(mesh: ParsedMesh, model_path: str | None) -> dic
         smesh = assemble_geometry(plan_result, mesh=mesh, use_dnn=True, model_path=model_path)
 
         # Derive metrics from the SimplifiedMesh surface_map
+        # (surface_map keys: "floor", "ceiling", "wall_0", "wall_1", ... each with "area_sqm")
         floor_area_m2 = smesh.surface_map.get("floor", {}).get("area_sqm", 0.0)
         wall_area_m2 = sum(
             v["area_sqm"] for k, v in smesh.surface_map.items() if k.startswith("wall_")
         )
 
-        # Ceiling height from Stage 2 RANSAC (most reliable measurement)
+        # Ceiling height from Stage 2 RANSAC — this is the most reliable measurement
+        # in the pipeline (simple Y-distance between floor and ceiling vertex clusters).
+        # It does NOT depend on the room polygon and works well even when polygon fails.
         ceiling_height_m = _compute_ceiling_height(mesh)
 
-        # Perimeter from polygon edges (sum of wall widths)
+        # Perimeter: each wall's area = width * height, so width = area / height.
+        # Sum of wall widths = perimeter. The 0.01 guard prevents division by zero
+        # if ceiling height detection fails (shouldn't happen, but defensive).
         perimeter_m = sum(
             v["area_sqm"] / max(ceiling_height_m, 0.01)
             for k, v in smesh.surface_map.items() if k.startswith("wall_")
         )
 
-        # Door count from surface_map
+        # Door count: how many wall segments have a door nearby (detected via
+        # proximity of door-classified vertices to each wall edge, threshold=0.5m)
         door_count = sum(
             1 for k, v in smesh.surface_map.items()
             if k.startswith("wall_") and v.get("has_door", False)
@@ -552,7 +566,10 @@ def _compute_metrics_via_stage3(mesh: ParsedMesh, model_path: str | None) -> dic
         }
 
     except Exception as e:
-        print(f"[Processor] Stage3 DNN failed ({e}) — falling back to raw triangle metrics")
+        import traceback
+        print(f"[Processor] Stage3 DNN failed — falling back to raw triangle metrics")
+        print(f"[Processor]   Error: {type(e).__name__}: {e}")
+        traceback.print_exc()
         return None
 
 

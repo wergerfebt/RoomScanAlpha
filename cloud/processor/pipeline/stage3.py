@@ -190,12 +190,25 @@ def _extract_dnn_polygon(
 ) -> np.ndarray | None:
     """Extract room polygon using BEV DNN (RoomFormer).
 
-    Projects mesh to a BEV density map, runs the DNN, and converts
-    predicted pixel corners back to XZ meter coordinates.
+    How it works:
+      1. Project mesh vertices to a 256x256 bird's-eye-view density map
+         (top-down view where walls appear as bright lines)
+      2. Run the RoomFormer neural network, which predicts room corner positions
+      3. Convert predicted pixel coordinates back to real-world XZ meters
+
+    The 256x256 resolution matches RoomFormer's training data (Structured3D).
+    Using a different resolution would require retraining the model.
+
+    Args:
+        mesh: ParsedMesh from Stage 1 with classified vertices.
+        model_path: Path to TorchScript .pt model file. If None, uses the
+                     default location: cloud/processor/models/roomformer_s3d.pt
 
     Returns:
         Kx2 array of XZ corner positions (meters) in CCW order,
         or None if the DNN fails or produces an invalid polygon.
+        Callers must handle the None case (typically by falling back
+        to geometric extraction).
     """
     try:
         from pipeline.bev_projection import project_to_bev, pixels_to_meters
