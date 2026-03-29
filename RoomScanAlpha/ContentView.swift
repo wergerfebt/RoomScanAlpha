@@ -103,6 +103,10 @@ struct ContentView: View {
         // Snapshot mesh but do NOT pause — session stays running during annotation
         sessionManager.snapshotMeshAnchors()
         viewModel.stopScan()
+
+        // Kick off post-scan frame selection in the background.
+        // Runs while the user annotates corners — no blocking.
+        sessionManager.frameCaptureManager.selectBestFrames()
     }
 
     private func handleRedoScan() {
@@ -113,7 +117,7 @@ struct ContentView: View {
     // MARK: - Annotating Placeholder
 
     /// Temporary view until Step 3 (corner annotation) is implemented.
-    /// Auto-advances to labeling so the existing flow keeps working.
+    /// Waits for frame selection to complete, then auto-advances to labeling.
     private var annotatingPlaceholderView: some View {
         VStack(spacing: 24) {
             Spacer()
@@ -125,11 +129,29 @@ struct ContentView: View {
         .onAppear {
             // Pause the AR session now that we're past annotation placeholder
             sessionManager.pauseSession()
-            if viewModel.scanQualitySufficient {
-                viewModel.state = .labelingRoom
-            } else {
-                viewModel.showQualityWarning = true
+            advanceAfterFrameSelection()
+        }
+    }
+
+    /// Wait for post-scan frame selection to finish before advancing.
+    /// If selection already completed (or no pruning needed), advances immediately.
+    private func advanceAfterFrameSelection() {
+        let fcm = sessionManager.frameCaptureManager
+        if fcm.selectionComplete || !fcm.isSelecting {
+            advanceToLabelingOrWarning()
+        } else {
+            // Poll briefly — selection typically takes < 2s for 80 frames
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                advanceAfterFrameSelection()
             }
+        }
+    }
+
+    private func advanceToLabelingOrWarning() {
+        if viewModel.scanQualitySufficient {
+            viewModel.state = .labelingRoom
+        } else {
+            viewModel.showQualityWarning = true
         }
     }
 

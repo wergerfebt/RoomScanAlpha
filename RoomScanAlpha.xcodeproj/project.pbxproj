@@ -50,6 +50,8 @@
 		B1111111000000000000000A /* ScanHistoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000A /* ScanHistoryTests.swift */; };
 		B1111111000000000000000B /* ErrorRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000B /* ErrorRecoveryTests.swift */; };
 		B1111111000000000000000C /* AccessibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000C /* AccessibilityTests.swift */; };
+		A11111110000000000000025 /* FrameQualityScorer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000033 /* FrameQualityScorer.swift */; };
+		B1111111000000000000000D /* FrameQualityScorerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000D /* FrameQualityScorerTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -105,6 +107,8 @@
 		B1000000000000000000000A /* ScanHistoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanHistoryTests.swift; sourceTree = "<group>"; };
 		B1000000000000000000000B /* ErrorRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ErrorRecoveryTests.swift; sourceTree = "<group>"; };
 		B1000000000000000000000C /* AccessibilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessibilityTests.swift; sourceTree = "<group>"; };
+		A10000000000000000000033 /* FrameQualityScorer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameQualityScorer.swift; sourceTree = "<group>"; };
+		B1000000000000000000000D /* FrameQualityScorerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameQualityScorerTests.swift; sourceTree = "<group>"; };
 		B10000000000000000000010 /* RoomScanAlphaTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RoomScanAlphaTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -198,6 +202,7 @@
 				A10000000000000000000008 /* MeshExtractor.swift */,
 				A10000000000000000000023 /* FrameCaptureManager.swift */,
 				A10000000000000000000026 /* ARMeshGeometry+Accessors.swift */,
+				A10000000000000000000033 /* FrameQualityScorer.swift */,
 			);
 			path = AR;
 			sourceTree = "<group>";
@@ -245,6 +250,7 @@
 				B1000000000000000000000A /* ScanHistoryTests.swift */,
 				B1000000000000000000000B /* ErrorRecoveryTests.swift */,
 				B1000000000000000000000C /* AccessibilityTests.swift */,
+				B1000000000000000000000D /* FrameQualityScorerTests.swift */,
 			);
 			path = RoomScanAlphaTests;
 			sourceTree = "<group>";
@@ -383,6 +389,7 @@
 				A11111110000000000000022 /* MeshViewerView.swift in Sources */,
 				A11111110000000000000023 /* ScanRecord.swift in Sources */,
 				A11111110000000000000024 /* ScanHistoryView.swift in Sources */,
+				A11111110000000000000025 /* FrameQualityScorer.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -402,6 +409,7 @@
 				B1111111000000000000000A /* ScanHistoryTests.swift in Sources */,
 				B1111111000000000000000B /* ErrorRecoveryTests.swift in Sources */,
 				B1111111000000000000000C /* AccessibilityTests.swift in Sources */,
+				B1111111000000000000000D /* FrameQualityScorerTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -29,6 +29,8 @@ final class FrameCaptureManager {
         lastCaptureTransform = nil
         lastCaptureTime = 0
         nextIndex = 0
+        isSelecting = false
+        selectionComplete = false
     }
 
     /// Evaluate an ARFrame and capture a keyframe if selection criteria are met.
@@ -81,6 +83,54 @@ final class FrameCaptureManager {
         print("[RoomScanAlpha] Keyframe \(captured.index) captured — JPEG: \(jpegSizeKB)KB, depth: \(depthSizeKB)KB, total frames: \(capturedFrames.count)")
 
         return true
+    }
+
+    // MARK: - Post-Scan Frame Selection
+
+    /// Whether frame selection is currently running.
+    private(set) var isSelecting = false
+
+    /// Whether frame selection has completed.
+    private(set) var selectionComplete = false
+
+    /// Score all captured frames and keep the best `targetCount`.
+    /// Runs on a background queue; calls `completion` on the main queue when done.
+    func selectBestFrames(
+        targetCount: Int = FrameQualityScorer.targetFrameCount,
+        completion: (() -> Void)? = nil
+    ) {
+        guard capturedFrames.count > targetCount else {
+            selectionComplete = true
+            completion?()
+            return
+        }
+
+        isSelecting = true
+
+        DispatchQueue.global(qos: .userInitiated).async { [self] in
+            // Score each frame
+            let scored = self.capturedFrames.map { frame -> (frame: CapturedFrame, score: Float) in
+                let score = FrameQualityScorer.score(jpegData: frame.jpegData)
+                return (frame, score)
+            }
+
+            // Sort descending by score, keep top N
+            let sorted = scored.sorted { $0.score > $1.score }
+            let kept = sorted.prefix(targetCount).map(\.frame)
+
+            // Re-sort by original index to maintain temporal order
+            let reordered = kept.sorted { $0.index < $1.index }
+
+            let discardedCount = self.capturedFrames.count - targetCount
+            print("[RoomScanAlpha] Frame selection: kept \(targetCount) of \(self.capturedFrames.count) — discarded \(discardedCount) lowest-scoring frames")
+
+            DispatchQueue.main.async {
+                self.capturedFrames = reordered
+                self.isSelecting = false
+                self.selectionComplete = true
+                completion?()
+            }
+        }
     }
 
     /// Angle in radians between two quaternions.
