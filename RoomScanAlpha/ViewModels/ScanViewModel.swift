@@ -58,8 +58,9 @@ final class ScanViewModel {
         selectedRFQ != nil
     }
 
-    /// Reset all scan session state and begin a new scan.
-    func startScan() {
+    /// Reset all scan session state and transition to the pre-scan ready state.
+    /// The AR preview is visible but capture has not started.
+    func prepareScan() {
         meshTriangleCount = 0
         meshAnchorCount = 0
         keyframeCount = 0
@@ -74,11 +75,37 @@ final class ScanViewModel {
         scanResult = nil
         roomLabel = ""
         rfqContext = nil
+        scanStartTime = nil
+        state = .scanReady
+    }
+
+    /// Begin AR capture. Transitions from scanReady → scanning.
+    func startScan() {
         scanStartTime = Date()
         state = .scanning
     }
 
+    /// Stop capturing and transition to corner annotation.
+    /// The AR session stays running — mesh reconstruction continues.
     func stopScan() {
+        state = .annotatingCorners
+    }
+
+    /// Clear all captured data and return to the pre-scan ready state.
+    func redoScan() {
+        meshTriangleCount = 0
+        meshAnchorCount = 0
+        keyframeCount = 0
+        exportProgress = ""
+        exportError = nil
+        lastExportURL = nil
+        showQualityWarning = false
+        scanStartTime = nil
+        state = .scanReady
+    }
+
+    /// Return to idle (used by Done buttons, error recovery, etc.)
+    func returnToIdle() {
         state = .idle
     }
 

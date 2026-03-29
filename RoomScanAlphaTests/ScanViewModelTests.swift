@@ -2,6 +2,11 @@ import XCTest
 @testable import RoomScanAlpha
 
 /// Tests mapping to Implementation Plan test cases:
+/// - 1.1  State: idle → scanReady (after selecting RFQ, state is scanReady)
+/// - 1.2  State: scanReady → scanning (startScan begins AR capture)
+/// - 1.3  State: scanning → annotatingCorners (stopScan transitions; AR session still running)
+/// - 1.4  Redo clears all state (redoScan returns to scanReady; keyframeCount == 0)
+/// - 1.6  "Scan Another Room" routes to scanReady (from viewingResults, goes to scanReady not .scanning)
 /// - 2.8  State transitions (idle <-> scanning)
 /// - 3.11 Memory stays bounded (quality gate prevents bad scans)
 /// - 4.17 Scan quality validation before export
@@ -14,43 +19,97 @@ final class ScanViewModelTests: XCTestCase {
         viewModel = ScanViewModel()
     }
 
+    // MARK: - Step 1 Test Cases
+
+    /// 1.1: After selecting RFQ, prepareScan() sets state to scanReady
+    func testPrepareScanSetsScanReady() {
+        viewModel.prepareScan()
+        XCTAssertEqual(viewModel.state, .scanReady)
+    }
+
+    /// 1.2: startScan() transitions from scanReady → scanning
+    func testStartScanFromScanReadySetsScanning() {
+        viewModel.prepareScan()
+        viewModel.startScan()
+        XCTAssertEqual(viewModel.state, .scanning)
+    }
+
+    /// 1.3: stopScan() transitions to annotatingCorners
+    func testStopScanSetsAnnotatingCorners() {
+        viewModel.prepareScan()
+        viewModel.startScan()
+        viewModel.stopScan()
+        XCTAssertEqual(viewModel.state, .annotatingCorners)
+    }
+
+    /// 1.4: redoScan() returns to scanReady with all counters cleared
+    func testRedoScanClearsStateAndReturnsScanReady() {
+        viewModel.prepareScan()
+        viewModel.startScan()
+        viewModel.updateMeshStats(triangleCount: 5000, anchorCount: 10)
+        viewModel.updateKeyframeCount(40)
+        viewModel.redoScan()
+
+        XCTAssertEqual(viewModel.state, .scanReady)
+        XCTAssertEqual(viewModel.meshTriangleCount, 0)
+        XCTAssertEqual(viewModel.meshAnchorCount, 0)
+        XCTAssertEqual(viewModel.keyframeCount, 0)
+    }
+
+    /// 1.6: "Scan Another Room" routes to scanReady, not scanning
+    func testScanAnotherRoomRoutesToScanReady() {
+        viewModel.state = .viewingResults
+        viewModel.prepareScan()
+        XCTAssertEqual(viewModel.state, .scanReady,
+                       "Scan Another Room should route to scanReady, not scanning")
+    }
+
+    /// returnToIdle() goes back to idle
+    func testReturnToIdleSetsIdle() {
+        viewModel.prepareScan()
+        viewModel.returnToIdle()
+        XCTAssertEqual(viewModel.state, .idle)
+    }
+
     // MARK: - State transitions (2.8)
 
     func testInitialStateIsIdle() {
         XCTAssertEqual(viewModel.state, .idle)
     }
 
-    func testStartScanSetsScanning() {
-        viewModel.startScan()
-        XCTAssertEqual(viewModel.state, .scanning)
-    }
-
-    func testStopScanSetsIdle() {
-        viewModel.startScan()
-        viewModel.stopScan()
-        XCTAssertEqual(viewModel.state, .idle)
-    }
-
-    func testStartScanResetsCounters() {
+    func testPrepareScanResetsCounters() {
         viewModel.updateMeshStats(triangleCount: 5000, anchorCount: 10)
         viewModel.updateKeyframeCount(40)
-        viewModel.startScan()
+        viewModel.prepareScan()
 
         XCTAssertEqual(viewModel.meshTriangleCount, 0)
         XCTAssertEqual(viewModel.meshAnchorCount, 0)
         XCTAssertEqual(viewModel.keyframeCount, 0)
     }
 
-    func testStartScanResetsExportState() {
+    func testPrepareScanResetsExportState() {
         viewModel.exportProgress = "Export complete"
         viewModel.exportError = "some error"
         viewModel.showQualityWarning = true
-        viewModel.startScan()
+        viewModel.prepareScan()
 
         XCTAssertEqual(viewModel.exportProgress, "")
         XCTAssertNil(viewModel.exportError)
         XCTAssertNil(viewModel.lastExportURL)
         XCTAssertFalse(viewModel.showQualityWarning)
+    }
+
+    func testPrepareScanResetsUploadState() {
+        viewModel.uploadProgress = 0.75
+        viewModel.uploadStatus = "Uploading..."
+        viewModel.uploadError = "timeout"
+        viewModel.lastScanId = "scan-123"
+        viewModel.prepareScan()
+
+        XCTAssertEqual(viewModel.uploadProgress, 0.0)
+        XCTAssertEqual(viewModel.uploadStatus, "")
+        XCTAssertNil(viewModel.uploadError)
+        XCTAssertNil(viewModel.lastScanId)
     }
 
     func testExportingState() {
@@ -119,7 +178,14 @@ final class ScanViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.scanDuration, 0)
     }
 
+    func testScanDurationZeroDuringPrepareScan() {
+        viewModel.prepareScan()
+        // scanStartTime is nil during scanReady — duration should be 0
+        XCTAssertEqual(viewModel.scanDuration, 0)
+    }
+
     func testScanDurationPositiveAfterStart() {
+        viewModel.prepareScan()
         viewModel.startScan()
         // scanStartTime is set, so duration should be >= 0
         XCTAssertGreaterThanOrEqual(viewModel.scanDuration, 0)

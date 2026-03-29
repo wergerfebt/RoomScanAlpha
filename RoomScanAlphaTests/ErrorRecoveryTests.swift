@@ -34,15 +34,16 @@ final class ErrorRecoveryTests: XCTestCase {
     func testRapidStartStop_nocrash() {
         let vm = ScanViewModel()
 
-        // Rapidly toggle 10 times
+        // Rapidly toggle 10 times: prepareScan → startScan → stopScan
         for _ in 0..<10 {
+            vm.prepareScan()
             vm.startScan()
             vm.stopScan()
         }
 
-        // Final state should be consistent
-        XCTAssertEqual(vm.state, .idle,
-                       "After rapid start/stop, state should be idle")
+        // Final state should be annotatingCorners (last stopScan)
+        XCTAssertEqual(vm.state, .annotatingCorners,
+                       "After rapid prepare/start/stop, state should be annotatingCorners")
     }
 
     func testRapidStartStop_countersResetEachTime() {
@@ -51,10 +52,11 @@ final class ErrorRecoveryTests: XCTestCase {
         for i in 0..<5 {
             vm.updateKeyframeCount(i * 10)
             vm.updateMeshStats(triangleCount: i * 1000, anchorCount: i)
+            vm.prepareScan()
+            // After prepareScan, counters should be zero
+            XCTAssertEqual(vm.keyframeCount, 0, "Keyframe count should reset on prepareScan (iteration \(i))")
+            XCTAssertEqual(vm.meshTriangleCount, 0, "Triangle count should reset on prepareScan (iteration \(i))")
             vm.startScan()
-            // After startScan, counters should be zero
-            XCTAssertEqual(vm.keyframeCount, 0, "Keyframe count should reset on start (iteration \(i))")
-            XCTAssertEqual(vm.meshTriangleCount, 0, "Triangle count should reset on start (iteration \(i))")
             vm.stopScan()
         }
     }
@@ -75,7 +77,7 @@ final class ErrorRecoveryTests: XCTestCase {
         XCTAssertEqual(vm.state, .idle, "Should end in idle state")
     }
 
-    func testStartScan_resetsAllUploadState() {
+    func testPrepareScan_resetsAllUploadState() {
         let vm = ScanViewModel()
         // Set all state as if an upload just completed
         vm.uploadProgress = 1.0
@@ -89,7 +91,7 @@ final class ErrorRecoveryTests: XCTestCase {
         )
         vm.showQualityWarning = true
 
-        vm.startScan()
+        vm.prepareScan()
 
         XCTAssertEqual(vm.uploadProgress, 0.0)
         XCTAssertEqual(vm.uploadStatus, "")
@@ -97,7 +99,7 @@ final class ErrorRecoveryTests: XCTestCase {
         XCTAssertNil(vm.lastScanId)
         XCTAssertNil(vm.scanResult)
         XCTAssertFalse(vm.showQualityWarning)
-        XCTAssertEqual(vm.state, .scanning)
+        XCTAssertEqual(vm.state, .scanReady)
     }
 
     // MARK: - 10.16 Interruption alert

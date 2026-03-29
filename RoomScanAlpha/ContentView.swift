@@ -16,19 +16,23 @@ struct ContentView: View {
                 RFQSelectionView(selectedRFQ: $viewModel.selectedRFQ)
                     .onChange(of: viewModel.selectedRFQ) { _, newValue in
                         if newValue != nil {
-                            viewModel.startScan()
+                            viewModel.prepareScan()
                         }
                     }
-            case .scanning:
+            case .scanReady, .scanning:
                 ScanningView(
                     sessionManager: sessionManager,
                     viewModel: viewModel,
-                    onStop: { handleStopScan() }
+                    onStart: { handleStartScan() },
+                    onStop: { handleStopScan() },
+                    onRedo: { handleRedoScan() }
                 )
+            case .annotatingCorners:
+                // Placeholder — annotation UI is implemented in Step 3.
+                // For now, skip straight to labeling.
+                annotatingPlaceholderView
             case .labelingRoom:
                 RoomLabelView(roomLabel: $viewModel.roomLabel) {
-                    // Build RFQ context with the AR session's current camera transform
-                    // as the room origin. Falls back to identity matrix if no frame is available.
                     if let frame = sessionManager.session.currentFrame {
                         viewModel.buildRFQContext(worldTransform: frame.camera.transform)
                     } else {
@@ -41,17 +45,17 @@ struct ContentView: View {
                     }
                 }
             case .exporting:
-                ExportingView(viewModel: viewModel, onDone: { viewModel.stopScan() })
+                ExportingView(viewModel: viewModel, onDone: { viewModel.returnToIdle() })
             case .uploading:
                 uploadingView
             case .viewingResults:
                 ScanResultView(
                     viewModel: viewModel,
                     meshAnchors: sessionManager.lastMeshAnchors,
-                    onDone: { viewModel.stopScan() },
+                    onDone: { viewModel.returnToIdle() },
                     onScanAnother: {
-                        // Keep same RFQ, start a new scan for another room
-                        viewModel.startScan()
+                        // Keep same RFQ, go to scanReady for another room
+                        viewModel.prepareScan()
                     }
                 )
             }
@@ -87,13 +91,45 @@ struct ContentView: View {
         }
     }
 
-    private func handleStopScan() {
-        sessionManager.pauseSession()
+    // MARK: - Scan Control Handlers
 
-        if viewModel.scanQualitySufficient {
-            viewModel.state = .labelingRoom
-        } else {
-            viewModel.showQualityWarning = true
+    private func handleStartScan() {
+        sessionManager.isCapturing = true
+        viewModel.startScan()
+    }
+
+    private func handleStopScan() {
+        sessionManager.isCapturing = false
+        // Snapshot mesh but do NOT pause — session stays running during annotation
+        sessionManager.snapshotMeshAnchors()
+        viewModel.stopScan()
+    }
+
+    private func handleRedoScan() {
+        sessionManager.resetSession()
+        viewModel.redoScan()
+    }
+
+    // MARK: - Annotating Placeholder
+
+    /// Temporary view until Step 3 (corner annotation) is implemented.
+    /// Auto-advances to labeling so the existing flow keeps working.
+    private var annotatingPlaceholderView: some View {
+        VStack(spacing: 24) {
+            Spacer()
+            ProgressView()
+            Text("Preparing...")
+                .font(.headline)
+            Spacer()
+        }
+        .onAppear {
+            // Pause the AR session now that we're past annotation placeholder
+            sessionManager.pauseSession()
+            if viewModel.scanQualitySufficient {
+                viewModel.state = .labelingRoom
+            } else {
+                viewModel.showQualityWarning = true
+            }
         }
     }
 
@@ -257,7 +293,7 @@ struct ContentView: View {
 
             if viewModel.lastScanId != nil || viewModel.uploadError != nil {
                 Button {
-                    viewModel.stopScan()
+                    viewModel.returnToIdle()
                 } label: {
                     Label("Done", systemImage: "house")
                         .primaryButtonStyle()
@@ -312,7 +348,7 @@ struct ContentView: View {
 
                 Button {
                     if viewModel.hasRFQSelected {
-                        viewModel.startScan()
+                        viewModel.prepareScan()
                     } else {
                         viewModel.state = .selectingRFQ
                     }

@@ -19,8 +19,8 @@ final class FrameCaptureManager {
     private let rotationThreshold: Float = 15.0
     // 0.5s minimum: prevents burst captures from hand tremor or rapid panning.
     private let minimumInterval: TimeInterval = 0.5
-    // 60 cap: keeps total package under ~100MB (60 JPEGs + PLY + depth maps).
-    private let maxKeyframes: Int = 60
+    // 80 cap: capture ~80 frames during scan, then post-scan selection keeps best 60.
+    private let maxKeyframes: Int = 80
 
     var keyframeCount: Int { capturedFrames.count }
 

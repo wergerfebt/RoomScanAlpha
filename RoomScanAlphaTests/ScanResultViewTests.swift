@@ -190,12 +190,12 @@ final class ScanResultViewTests: XCTestCase {
             scanDimensions: nil
         )
 
-        viewModel.startScan()
+        viewModel.prepareScan()
 
         XCTAssertNil(viewModel.scanResult,
-                     "startScan() must clear previous scan result")
+                     "prepareScan() must clear previous scan result")
         XCTAssertNil(viewModel.lastScanId,
-                     "startScan() must clear previous scan ID")
+                     "prepareScan() must clear previous scan ID")
     }
 
     func testUploadStateResetOnNewScan() {
@@ -204,7 +204,7 @@ final class ScanResultViewTests: XCTestCase {
         viewModel.uploadError = "some error"
         viewModel.lastScanId = "prev-scan"
 
-        viewModel.startScan()
+        viewModel.prepareScan()
 
         XCTAssertEqual(viewModel.uploadProgress, 0.0)
         XCTAssertEqual(viewModel.uploadStatus, "")

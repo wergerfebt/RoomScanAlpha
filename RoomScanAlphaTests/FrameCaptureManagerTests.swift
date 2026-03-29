@@ -2,10 +2,11 @@ import XCTest
 @testable import RoomScanAlpha
 
 /// Tests mapping to Implementation Plan test cases:
+/// - 1.5  FrameCaptureManager.reset() clears frames (after reset, capturedFrames.count == 0)
 /// - 3.1  Keyframe captured on translation (threshold = 0.15m)
 /// - 3.2  Keyframe captured on rotation (threshold = 15 deg)
 /// - 3.4  Minimum interval enforced (0.5s)
-/// - 3.5  Keyframe count max cap (60)
+/// - 3.5  Keyframe count max cap (80, raised from 60 for post-scan selection)
 final class FrameCaptureManagerTests: XCTestCase {
 
     var manager: FrameCaptureManager!
@@ -61,6 +62,16 @@ final class FrameCaptureManagerTests: XCTestCase {
     func testMaxKeyframesMatchesPlan() {
         let mirror = Mirror(reflecting: manager!)
         let max = mirror.children.first { $0.label == "maxKeyframes" }?.value as? Int
-        XCTAssertEqual(max, 60, "Max keyframes should be 60 per Implementation Plan 3.5")
+        XCTAssertEqual(max, 80, "Max keyframes should be 80 per MVP Plan Step 1 (raised from 60 for post-scan selection)")
+    }
+
+    // MARK: - Reset (1.5)
+
+    /// 1.5: After reset, capturedFrames.count == 0
+    func testResetClearsAllState() {
+        manager.reset()
+        XCTAssertEqual(manager.keyframeCount, 0)
+        XCTAssertTrue(manager.capturedFrames.isEmpty,
+                      "After reset, capturedFrames should be empty")
     }
 }
