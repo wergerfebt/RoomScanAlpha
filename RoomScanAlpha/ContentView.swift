@@ -41,6 +41,14 @@ struct ContentView: View {
                         handleRedoScan()
                     }
                 )
+            case .capturingPanorama:
+                PanoramaSweepView(
+                    sessionManager: sessionManager,
+                    viewModel: viewModel,
+                    firstCorner: firstAnnotationCorner,
+                    onDone: { handlePanoramaDone() },
+                    onSkip: { handlePanoramaSkip() }
+                )
             case .labelingRoom:
                 RoomLabelView(roomLabel: $viewModel.roomLabel) {
                     if let frame = sessionManager.session.currentFrame {
@@ -128,17 +136,42 @@ struct ContentView: View {
 
     private func handleAnnotationDone(annotation: CornerAnnotation?) {
         viewModel.cornerAnnotation = annotation
-        // Snapshot final mesh and pause session
+        // Snapshot mesh but keep session running for panoramic capture
         sessionManager.snapshotMeshAnchors()
+        // Advance to panoramic sweep (session stays running)
+        viewModel.state = .capturingPanorama
+    }
+
+    private func handleAnnotationSkip() {
+        viewModel.cornerAnnotation = nil
+        sessionManager.snapshotMeshAnchors()
+        // Skip annotation → skip panorama too, go to labeling
         sessionManager.pauseSession()
         waitForFrameSelectionThen {
             advanceToLabelingOrWarning()
         }
     }
 
-    private func handleAnnotationSkip() {
-        viewModel.cornerAnnotation = nil
-        sessionManager.snapshotMeshAnchors()
+    // MARK: - Panorama Handlers
+
+    /// First annotation corner in world space (for alignment guide).
+    private var firstAnnotationCorner: SIMD3<Float>? {
+        guard let annotation = viewModel.cornerAnnotation,
+              !annotation.corners_xz.isEmpty else { return nil }
+        let xz = annotation.corners_xz[0]
+        let y = annotation.corners_y[0]
+        return SIMD3<Float>(xz[0], y, xz[1])
+    }
+
+    private func handlePanoramaDone() {
+        sessionManager.pauseSession()
+        waitForFrameSelectionThen {
+            advanceToLabelingOrWarning()
+        }
+    }
+
+    private func handlePanoramaSkip() {
+        sessionManager.resetPanoramicCapture()
         sessionManager.pauseSession()
         waitForFrameSelectionThen {
             advanceToLabelingOrWarning()
@@ -178,6 +211,8 @@ struct ContentView: View {
         let duration = viewModel.scanDuration
         let rfqContext = viewModel.rfqContext
         let cornerAnnotation = viewModel.cornerAnnotation
+        let panoramicFrames = sessionManager.panoramicFrames
+        let panoramaStartTransform = viewModel.panoramaStartTransform
 
         Task.detached {
             do {
@@ -187,6 +222,8 @@ struct ContentView: View {
                     scanDuration: duration,
                     rfqContext: rfqContext,
                     cornerAnnotation: cornerAnnotation,
+                    panoramicFrames: panoramicFrames,
+                    panoramaStartTransform: panoramaStartTransform,
                     onProgress: { message in
                         Task { @MainActor in
                             viewModel.exportProgress = message

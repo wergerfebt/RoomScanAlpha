@@ -480,6 +480,84 @@ def load_keyframes(scan_root: str, metadata: dict) -> list[Keyframe]:
     return keyframes
 
 
+def load_panoramic_keyframes(scan_root: str, metadata: dict) -> list[Keyframe]:
+    """Load panoramic sweep keyframes if available. Falls back to empty list."""
+    pano_entries = metadata.get("panoramic_keyframes")
+    if not pano_entries:
+        return []
+
+    intrinsics = metadata.get("camera_intrinsics", {})
+    fx = intrinsics.get("fx", 1000.0)
+    fy = intrinsics.get("fy", 1000.0)
+    cx = intrinsics.get("cx", 960.0)
+    cy = intrinsics.get("cy", 540.0)
+
+    img_res = metadata.get("image_resolution", {})
+    img_w = img_res.get("width", 1920)
+    img_h = img_res.get("height", 1440)
+
+    depth_fmt = metadata.get("depth_format", {})
+    depth_w = depth_fmt.get("width", 256)
+    depth_h = depth_fmt.get("height", 192)
+
+    pano_dir = os.path.join(scan_root, "panoramic")
+    pano_depth_dir = os.path.join(scan_root, "panoramic_depth")
+
+    keyframes = []
+    for entry in pano_entries:
+        idx = entry["index"]
+        jpg_name = entry["filename"]
+        json_name = jpg_name.replace(".jpg", ".json")
+        depth_name = entry.get("depth_filename", jpg_name.replace(".jpg", ".depth"))
+
+        jpg_path = os.path.join(pano_dir, jpg_name)
+        json_path = os.path.join(pano_dir, json_name)
+        depth_path = os.path.join(pano_depth_dir, depth_name)
+
+        if not os.path.exists(jpg_path) or not os.path.exists(json_path):
+            continue
+
+        try:
+            img = ImageOps.exif_transpose(Image.open(jpg_path)).convert("RGB")
+            img_array = np.array(img)
+        except Exception:
+            continue
+
+        depth_map = None
+        if os.path.exists(depth_path):
+            try:
+                depth_data = np.fromfile(depth_path, dtype=np.float32)
+                if depth_data.size == depth_w * depth_h:
+                    depth_map = depth_data.reshape(depth_h, depth_w)
+            except Exception:
+                pass
+
+        with open(json_path, "r") as f:
+            frame_meta = json.load(f)
+
+        transform_flat = frame_meta.get("camera_transform", [])
+        if len(transform_flat) != 16:
+            continue
+
+        transform = np.array(transform_flat, dtype=np.float64).reshape(4, 4, order='F')
+
+        keyframes.append(Keyframe(
+            index=idx,
+            image=img_array,
+            depth_map=depth_map,
+            camera_transform=transform,
+            fx=fx, fy=fy, cx=cx, cy=cy,
+            image_width=img_w,
+            image_height=img_h,
+            depth_width=depth_w,
+            depth_height=depth_h,
+        ))
+
+    print(f"[TextureProjection] Loaded {len(keyframes)} panoramic keyframes "
+          f"({sum(1 for k in keyframes if k.depth_map is not None)} with depth)")
+    return keyframes
+
+
 def save_textures(
     results: list[TextureResult],
     output_dir: str,

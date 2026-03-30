@@ -57,6 +57,7 @@
 		A11111110000000000000028 /* CornerAnnotationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000036 /* CornerAnnotationView.swift */; };
 		B1111111000000000000000E /* CornerAnnotationViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000E /* CornerAnnotationViewModelTests.swift */; };
 		A11111110000000000000029 /* FloorPlanView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000037 /* FloorPlanView.swift */; };
+		A1111111000000000000002A /* PanoramaSweepView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000038 /* PanoramaSweepView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -120,6 +121,7 @@
 		B1000000000000000000000E /* CornerAnnotationViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CornerAnnotationViewModelTests.swift; sourceTree = "<group>"; };
 		B10000000000000000000010 /* RoomScanAlphaTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RoomScanAlphaTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A10000000000000000000037 /* FloorPlanView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloorPlanView.swift; sourceTree = "<group>"; };
+		A10000000000000000000038 /* PanoramaSweepView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanoramaSweepView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -205,6 +207,7 @@
 				A10000000000000000000032 /* ScanHistoryView.swift */,
 				A10000000000000000000036 /* CornerAnnotationView.swift */,
 				A10000000000000000000037 /* FloorPlanView.swift */,
+				A10000000000000000000038 /* PanoramaSweepView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -409,6 +412,7 @@
 				A11111110000000000000027 /* CornerAnnotationViewModel.swift in Sources */,
 				A11111110000000000000028 /* CornerAnnotationView.swift in Sources */,
 				A11111110000000000000029 /* FloorPlanView.swift in Sources */,
+				A1111111000000000000002A /* PanoramaSweepView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

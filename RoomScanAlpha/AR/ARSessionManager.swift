@@ -14,6 +14,17 @@ final class ARSessionManager: NSObject, ARSessionDelegate {
     /// When false, the AR session runs (for preview) but frames are not captured.
     var isCapturing = false
 
+    // MARK: - Panoramic Sweep
+
+    /// When true, captures panoramic frames using tighter rotation thresholds.
+    var isPanoramicCapture = false
+    /// Frames captured during the 360° panoramic sweep.
+    private(set) var panoramicFrames: [CapturedFrame] = []
+    /// Camera transform when the panoramic sweep started (user facing corner 0).
+    var panoramaStartTransform: simd_float4x4?
+    /// Callback for panoramic frame count updates.
+    var onPanoramicFrameCaptured: ((Int, Float) -> Void)?  // (count, yawDegrees)
+
     override init() {
         super.init()
         session.delegate = self
@@ -68,9 +79,36 @@ final class ARSessionManager: NSObject, ARSessionDelegate {
         print("[RoomScanAlpha] AR session reset for redo")
     }
 
+    func startPanoramicCapture() {
+        panoramicFrames = []
+        panoramaStartTransform = session.currentFrame?.camera.transform
+        isPanoramicCapture = true
+        print("[RoomScanAlpha] Panoramic capture started")
+    }
+
+    func stopPanoramicCapture() {
+        isPanoramicCapture = false
+        print("[RoomScanAlpha] Panoramic capture stopped — \(panoramicFrames.count) frames")
+    }
+
+    func resetPanoramicCapture() {
+        panoramicFrames = []
+        panoramaStartTransform = nil
+        isPanoramicCapture = false
+    }
+
     // MARK: - ARSessionDelegate
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
+        // Panoramic capture mode
+        if isPanoramicCapture {
+            if let result = frameCaptureManager.processPanoramicFrame(frame, startTransform: panoramaStartTransform) {
+                panoramicFrames.append(result.frame)
+                onPanoramicFrameCaptured?(panoramicFrames.count, result.yawDegrees)
+            }
+            return
+        }
+
         // Only capture keyframes when actively scanning (not during preview or annotation)
         guard isCapturing else {
             // Still forward mesh updates for live preview

@@ -133,6 +133,80 @@ final class FrameCaptureManager {
         }
     }
 
+    // MARK: - Panoramic Sweep Capture
+
+    struct PanoramicCaptureResult {
+        let frame: CapturedFrame
+        let yawDegrees: Float
+    }
+
+    private var lastPanoramicTransform: simd_float4x4?
+    private var lastPanoramicTime: TimeInterval = 0
+    private var panoramicIndex: Int = 0
+
+    /// Rotation-only threshold for panoramic sweep (5° vs 15° for walk-around).
+    private let panoramicRotationThreshold: Float = 5.0
+    private let panoramicMinInterval: TimeInterval = 0.15
+    private let maxPanoramicFrames: Int = 120
+
+    /// Process a frame during panoramic sweep capture.
+    /// Uses rotation-only threshold (5°), no translation threshold.
+    /// Returns the captured frame + current yaw relative to start, or nil if not captured.
+    func processPanoramicFrame(_ frame: ARFrame, startTransform: simd_float4x4?) -> PanoramicCaptureResult? {
+        guard panoramicIndex < maxPanoramicFrames else { return nil }
+
+        let currentTransform = frame.camera.transform
+        let currentTime = frame.timestamp
+
+        // First frame always captured
+        guard let lastTransform = lastPanoramicTransform else {
+            lastPanoramicTransform = currentTransform
+            lastPanoramicTime = currentTime
+            return capturePanoramicFrame(from: frame, startTransform: startTransform)
+        }
+
+        guard (currentTime - lastPanoramicTime) >= panoramicMinInterval else { return nil }
+
+        // Rotation-only check (ignore translation — user should be stationary)
+        let lastRot = simd_quatf(lastTransform)
+        let currentRot = simd_quatf(currentTransform)
+        let angle = angleBetween(lastRot, currentRot)
+
+        guard angle >= (panoramicRotationThreshold * .pi / 180.0) else { return nil }
+
+        lastPanoramicTransform = currentTransform
+        lastPanoramicTime = currentTime
+        return capturePanoramicFrame(from: frame, startTransform: startTransform)
+    }
+
+    private func capturePanoramicFrame(from frame: ARFrame, startTransform: simd_float4x4?) -> PanoramicCaptureResult? {
+        guard let captured = CapturedFrame.from(frame: frame, index: panoramicIndex) else {
+            return nil
+        }
+
+        panoramicIndex += 1
+
+        // Compute yaw relative to start heading
+        var yaw: Float = 0
+        if let start = startTransform {
+            let startForward = -SIMD3<Float>(start.columns.2.x, start.columns.2.y, start.columns.2.z)
+            let currentForward = -SIMD3<Float>(frame.camera.transform.columns.2.x, frame.camera.transform.columns.2.y, frame.camera.transform.columns.2.z)
+            let startYaw = atan2(startForward.x, startForward.z)
+            let currentYaw = atan2(currentForward.x, currentForward.z)
+            yaw = (currentYaw - startYaw) * 180.0 / .pi
+            if yaw < 0 { yaw += 360 }
+        }
+
+        print("[RoomScanAlpha] Panoramic frame \(captured.index) — yaw: \(String(format: "%.0f", yaw))°")
+        return PanoramicCaptureResult(frame: captured, yawDegrees: yaw)
+    }
+
+    func resetPanoramicState() {
+        lastPanoramicTransform = nil
+        lastPanoramicTime = 0
+        panoramicIndex = 0
+    }
+
     /// Angle in radians between two quaternions.
     private func angleBetween(_ q1: simd_quatf, _ q2: simd_quatf) -> Float {
         let dotProduct = abs(simd_dot(q1, q2))

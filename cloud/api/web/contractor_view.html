@@ -190,12 +190,29 @@ function drawFloorPlan(data) {
   ctx.scale(dpr, dpr);
   const w = rect.width, h = rect.height;
 
-  // Collect all polygon points for bounding box
-  let allPts = [];
-  (data.rooms || []).forEach(r => {
-    if (r.room_polygon_ft) r.room_polygon_ft.forEach(p => allPts.push(p));
+  // Each room's polygon is in its own AR coordinate system (origin ≈ 0,0).
+  // Offset each room so they tile side-by-side instead of overlapping.
+  const GAP_FT = 3; // gap between rooms in feet
+  const roomPolys = []; // [{poly: [[x,y],...], roomIdx}]
+  let cursorX = 0;
+  (data.rooms || []).forEach((r, i) => {
+    if (!r.room_polygon_ft || r.room_polygon_ft.length < 3) return;
+    const poly = r.room_polygon_ft;
+    // Compute this room's local bounding box
+    let rMinX = Infinity, rMaxX = -Infinity, rMinY = Infinity, rMaxY = -Infinity;
+    poly.forEach(([x, y]) => { rMinX = Math.min(rMinX, x); rMaxX = Math.max(rMaxX, x); rMinY = Math.min(rMinY, y); rMaxY = Math.max(rMaxY, y); });
+    // Offset: shift so room's left edge starts at cursorX, and center vertically
+    const offX = cursorX - rMinX;
+    const offY = -rMinY; // align top edges
+    const offsetPoly = poly.map(([x, y]) => [x + offX, y + offY]);
+    roomPolys.push({ poly: offsetPoly, roomIdx: i });
+    cursorX += (rMaxX - rMinX) + GAP_FT;
   });
-  if (allPts.length === 0) return;
+  if (roomPolys.length === 0) return;
+
+  // Collect all offset points for bounding box
+  let allPts = [];
+  roomPolys.forEach(rp => rp.poly.forEach(p => allPts.push(p)));
 
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
   allPts.forEach(([x, y]) => { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y); });
@@ -206,9 +223,11 @@ function drawFloorPlan(data) {
   const tx = x => w/2 + (x - cx) * scale;
   const ty = y => h/2 + (y - cy) * scale;
 
-  data.rooms.forEach((room, i) => {
-    if (!room.room_polygon_ft || room.room_polygon_ft.length < 3) return;
-    const poly = room.room_polygon_ft;
+  // Store offset polys on data.rooms for click hit-testing
+  roomPolys.forEach(rp => { data.rooms[rp.roomIdx]._offsetPoly = rp.poly; });
+
+  roomPolys.forEach(({ poly, roomIdx: i }) => {
+    const room = data.rooms[i];
     const isActive = i === activeRoomIndex;
 
     ctx.beginPath();
@@ -237,7 +256,7 @@ function drawFloorPlan(data) {
     const mx = (e.clientX - br.left), my = (e.clientY - br.top);
     const fpx = (mx - w/2) / scale + cx, fpy = (my - h/2) / scale + cy;
     for (let i = 0; i < data.rooms.length; i++) {
-      const poly = data.rooms[i].room_polygon_ft;
+      const poly = data.rooms[i]._offsetPoly;
       if (poly && pointInPoly(fpx, fpy, poly)) { window._selectRoom(i); return; }
     }
   };
@@ -427,6 +446,7 @@ async function loadRoom(index) {
         (err) => { console.error(`wall_${i} texture FAILED`, err); }
       );
       tex.colorSpace = THREE.SRGBColorSpace;
+      tex.flipY = false; // Projected texture row 0 = UV V=0 (floor), no flip needed
       // MeshBasicMaterial: projected photos don't need lighting, display at full brightness
       mat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide });
     } else {
@@ -515,6 +535,7 @@ function buildPolygonSurface(cornersM, y, textureUrl, fallbackColor, normalUp) {
       (err) => { console.error(`${normalUp ? 'floor' : 'ceiling'} texture FAILED`, err); }
     );
     tex.colorSpace = THREE.SRGBColorSpace;
+    tex.flipY = false; // Projected texture row 0 = UV V=0, no flip needed
     mat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide });
   } else {
     mat = new THREE.MeshBasicMaterial({ color: fallbackColor, side: THREE.DoubleSide });
@@ -545,45 +566,92 @@ function buildMeasurements(room, cornersM, floorY, ceilingY, ceilingHeightM) {
   measurementGroup = new THREE.Group();
   measurementGroup.visible = measurementsVisible;
 
-  // Wall lengths at ceiling
+  // Room center for nudging lines inward
+  const roomCx = cornersM.reduce((s, p) => s + p[0], 0) / cornersM.length;
+  const roomCz = cornersM.reduce((s, p) => s + p[1], 0) / cornersM.length;
+
+  // Helper: nudge a corner point slightly toward room center so lines sit in front of walls
+  const NUDGE = 0.005; // 5mm inward
+  function nudge(x, z) {
+    const dx = roomCx - x, dz = roomCz - z;
+    const d = Math.sqrt(dx * dx + dz * dz) || 1;
+    return [x + dx / d * NUDGE, z + dz / d * NUDGE];
+  }
+
+  // Line material that renders on top of surfaces (depthTest off, high renderOrder)
+  function edgeMat(color) {
+    const m = new THREE.LineBasicMaterial({ color, depthTest: false });
+    return m;
+  }
+
+  // Edge outline: ceiling, floor, and vertical edges at each corner
   for (let i = 0; i < cornersM.length; i++) {
     const j = (i + 1) % cornersM.length;
     const [x0, z0] = cornersM[i];
     const [x1, z1] = cornersM[j];
+    const [nx0, nz0] = nudge(x0, z0);
+    const [nx1, nz1] = nudge(x1, z1);
+
+    // Ceiling edge + wall length label
     const wallLen = Math.sqrt((x1-x0)**2 + (z1-z0)**2) * 3.28084; // back to feet
     const label = formatFtIn(wallLen);
-
-    const mid = new THREE.Vector3((x0+x1)/2, ceilingY + 0.1, (z0+z1)/2);
+    const mid = new THREE.Vector3((nx0+nx1)/2, ceilingY + 0.1, (nz0+nz1)/2);
     addLabel(label, mid, 'measure-label');
 
-    // Line at ceiling
-    const lineMat = new THREE.LineBasicMaterial({ color: 0x2196F3 });
-    const lineGeom = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(x0, ceilingY, z0),
-      new THREE.Vector3(x1, ceilingY, z1),
-    ]);
-    const line = new THREE.Line(lineGeom, lineMat);
-    measurementGroup.add(line);
+    const ceilLine = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(nx0, ceilingY, nz0),
+        new THREE.Vector3(nx1, ceilingY, nz1),
+      ]),
+      edgeMat(0x2196F3),
+    );
+    ceilLine.renderOrder = 999;
+    measurementGroup.add(ceilLine);
+
+    // Floor edge
+    const floorLine = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(nx0, floorY, nz0),
+        new THREE.Vector3(nx1, floorY, nz1),
+      ]),
+      edgeMat(0x2196F3),
+    );
+    floorLine.renderOrder = 999;
+    measurementGroup.add(floorLine);
+
+    // Vertical edge at corner i
+    const vertLine = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(nx0, floorY, nz0),
+        new THREE.Vector3(nx0, ceilingY, nz0),
+      ]),
+      edgeMat(0x2196F3),
+    );
+    vertLine.renderOrder = 999;
+    measurementGroup.add(vertLine);
   }
 
-  // Ceiling height — vertical line at first corner, nudged inward
+  // Ceiling height label — at first corner, nudged inward
   if (cornersM.length > 0) {
-    const roomCx = cornersM.reduce((s, p) => s + p[0], 0) / cornersM.length;
-    const roomCz = cornersM.reduce((s, p) => s + p[1], 0) / cornersM.length;
+    const [nx, nz] = nudge(cornersM[0][0], cornersM[0][1]);
+    // Nudge a bit more for the height label so it doesn't overlap the edge
     const dx = roomCx - cornersM[0][0], dz = roomCz - cornersM[0][1];
     const d = Math.sqrt(dx*dx + dz*dz) || 1;
-    const cx = cornersM[0][0] + dx/d * 0.15;
-    const cz = cornersM[0][1] + dz/d * 0.15;
+    const hx = cornersM[0][0] + dx/d * 0.15;
+    const hz = cornersM[0][1] + dz/d * 0.15;
     const label = formatFtIn(ceilingHeightM * 3.28084);
-    const mid = new THREE.Vector3(cx, (floorY + ceilingY) / 2, cz);
-    addLabel(label, mid, 'measure-label height');
+    const midPt = new THREE.Vector3(hx, (floorY + ceilingY) / 2, hz);
+    addLabel(label, midPt, 'measure-label height');
 
-    const lineMat = new THREE.LineBasicMaterial({ color: 0xFF9800 });
-    const lineGeom = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(cx, floorY, cz),
-      new THREE.Vector3(cx, ceilingY, cz),
-    ]);
-    measurementGroup.add(new THREE.Line(lineGeom, lineMat));
+    const heightLine = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(hx, floorY, hz),
+        new THREE.Vector3(hx, ceilingY, hz),
+      ]),
+      edgeMat(0xFF9800),
+    );
+    heightLine.renderOrder = 999;
+    measurementGroup.add(heightLine);
   }
 
   // Floor area label

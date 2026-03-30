@@ -44,6 +44,13 @@ final class ScanViewModel {
 
     var cornerAnnotation: CornerAnnotation?
 
+    // MARK: - Panorama State
+
+    /// Camera transform at the start of the panoramic sweep (facing corner 0).
+    var panoramaStartTransform: simd_float4x4?
+    /// Number of panoramic frames captured during the sweep.
+    var panoramaFrameCount: Int = 0
+
     // MARK: - RFQ Context
 
     var selectedRFQ: RFQ?
@@ -80,6 +87,8 @@ final class ScanViewModel {
         roomLabel = ""
         rfqContext = nil
         cornerAnnotation = nil
+        panoramaStartTransform = nil
+        panoramaFrameCount = 0
         scanStartTime = nil
         state = .scanReady
     }
@@ -106,6 +115,8 @@ final class ScanViewModel {
         lastExportURL = nil
         showQualityWarning = false
         cornerAnnotation = nil
+        panoramaStartTransform = nil
+        panoramaFrameCount = 0
         scanStartTime = nil
         state = .scanReady
     }

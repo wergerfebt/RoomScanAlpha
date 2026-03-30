@@ -18,6 +18,8 @@ struct ScanPackager {
         scanDuration: TimeInterval,
         rfqContext: RFQContext?,
         cornerAnnotation: CornerAnnotation?,
+        panoramicFrames: [CapturedFrame] = [],
+        panoramaStartTransform: simd_float4x4? = nil,
         onProgress: @escaping (String) -> Void
     ) throws -> PackageResult {
         let timestamp = Int(Date().timeIntervalSince1970)
@@ -55,6 +57,32 @@ struct ScanPackager {
             }
         }
 
+        // 2b. Export panoramic frames (if available)
+        if !panoramicFrames.isEmpty {
+            onProgress("Exporting panoramic frames...")
+            let panoDir = scanDir.appendingPathComponent("panoramic")
+            let panoDepthDir = scanDir.appendingPathComponent("panoramic_depth")
+            try FileManager.default.createDirectory(at: panoDir, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: panoDepthDir, withIntermediateDirectories: true)
+
+            for frame in panoramicFrames {
+                let frameName = String(format: "pano_%03d", frame.index)
+
+                let jpegURL = panoDir.appendingPathComponent("\(frameName).jpg")
+                try frame.jpegData.write(to: jpegURL)
+
+                let frameJSON = FrameMetadata.from(frame)
+                let frameJSONURL = panoDir.appendingPathComponent("\(frameName).json")
+                let jsonData = try JSONEncoder.compact.encode(frameJSON)
+                try jsonData.write(to: frameJSONURL)
+
+                if let depthData = frame.depthData {
+                    let depthURL = panoDepthDir.appendingPathComponent("\(frameName).depth")
+                    try depthData.write(to: depthURL)
+                }
+            }
+        }
+
         // 3. Build metadata.json
         onProgress("Writing metadata...")
         let metadata = ScanMetadata.build(
@@ -63,7 +91,9 @@ struct ScanPackager {
             meshFaceCount: totalFaces,
             scanDuration: scanDuration,
             rfqContext: rfqContext,
-            cornerAnnotation: cornerAnnotation
+            cornerAnnotation: cornerAnnotation,
+            panoramicFrames: panoramicFrames,
+            panoramaStartTransform: panoramaStartTransform
         )
         let metadataData = try JSONEncoder.prettyPrinted.encode(metadata)
         let metadataURL = scanDir.appendingPathComponent("metadata.json")
@@ -113,6 +143,11 @@ struct ScanMetadata: Codable {
     let cornerAnnotation: CornerAnnotation?
     let keyframes: [KeyframeEntry]
 
+    // Panoramic sweep data
+    let panoramicKeyframeCount: Int?
+    let panoramaStartTransform: [Float]?
+    let panoramicKeyframes: [KeyframeEntry]?
+
     enum CodingKeys: String, CodingKey {
         case rfqId = "rfq_id"
         case floorId = "floor_id"
@@ -132,6 +167,9 @@ struct ScanMetadata: Codable {
         case meshFaceCount = "mesh_face_count"
         case cornerAnnotation = "corner_annotation"
         case keyframes
+        case panoramicKeyframeCount = "panoramic_keyframe_count"
+        case panoramaStartTransform = "panorama_start_transform"
+        case panoramicKeyframes = "panoramic_keyframes"
     }
 
     func encode(to encoder: Encoder) throws {
@@ -154,6 +192,9 @@ struct ScanMetadata: Codable {
         try container.encode(meshFaceCount, forKey: .meshFaceCount)
         try container.encodeIfPresent(cornerAnnotation, forKey: .cornerAnnotation)
         try container.encode(keyframes, forKey: .keyframes)
+        try container.encodeIfPresent(panoramicKeyframeCount, forKey: .panoramicKeyframeCount)
+        try container.encodeIfPresent(panoramaStartTransform, forKey: .panoramaStartTransform)
+        try container.encodeIfPresent(panoramicKeyframes, forKey: .panoramicKeyframes)
     }
 
     static func build(
@@ -162,10 +203,23 @@ struct ScanMetadata: Codable {
         meshFaceCount: Int,
         scanDuration: TimeInterval,
         rfqContext: RFQContext?,
-        cornerAnnotation: CornerAnnotation?
+        cornerAnnotation: CornerAnnotation?,
+        panoramicFrames: [CapturedFrame] = [],
+        panoramaStartTransform: simd_float4x4? = nil
     ) -> ScanMetadata {
         let device = UIDevice.current
         let firstFrame = keyframes.first
+
+        // Flatten panorama start transform to 16-float array (column-major)
+        var startTransformArray: [Float]?
+        if let t = panoramaStartTransform {
+            startTransformArray = [
+                t.columns.0.x, t.columns.0.y, t.columns.0.z, t.columns.0.w,
+                t.columns.1.x, t.columns.1.y, t.columns.1.z, t.columns.1.w,
+                t.columns.2.x, t.columns.2.y, t.columns.2.z, t.columns.2.w,
+                t.columns.3.x, t.columns.3.y, t.columns.3.z, t.columns.3.w,
+            ]
+        }
 
         return ScanMetadata(
             rfqId: rfqContext?.rfqId,
@@ -188,7 +242,18 @@ struct ScanMetadata: Codable {
             meshVertexCount: meshVertexCount,
             meshFaceCount: meshFaceCount,
             cornerAnnotation: cornerAnnotation,
-            keyframes: keyframes.map { KeyframeEntry.from($0) }
+            keyframes: keyframes.map { KeyframeEntry.from($0) },
+            panoramicKeyframeCount: panoramicFrames.isEmpty ? nil : panoramicFrames.count,
+            panoramaStartTransform: startTransformArray,
+            panoramicKeyframes: panoramicFrames.isEmpty ? nil : panoramicFrames.map {
+                let name = String(format: "pano_%03d", $0.index)
+                return KeyframeEntry(
+                    index: $0.index,
+                    filename: "\(name).jpg",
+                    depthFilename: "\(name).depth",
+                    timestamp: $0.timestamp
+                )
+            }
         )
     }
 }

@@ -294,7 +294,7 @@ async def process_scan(request: Request) -> dict:
             try:
                 from pipeline.texture_projection import (
                     build_surfaces_from_annotation, load_keyframes,
-                    project_textures, save_textures,
+                    load_panoramic_keyframes, project_textures, save_textures,
                 )
 
                 ceiling_ft = room_metrics.get("ceiling_height_ft", 0)
@@ -304,7 +304,14 @@ async def process_scan(request: Request) -> dict:
                     corners_y=annotation["corners_y"],
                     ceiling_height_m=ceiling_m,
                 )
-                keyframes = load_keyframes(scan_root, metadata)
+
+                # Prefer panoramic sweep frames (co-located, aligned to corner 0)
+                keyframes = load_panoramic_keyframes(scan_root, metadata)
+                if not keyframes:
+                    keyframes = load_keyframes(scan_root, metadata)
+                    print("[Processor] Using walk-around keyframes (no panoramic frames)")
+                else:
+                    print(f"[Processor] Using {len(keyframes)} panoramic sweep frames")
 
                 if surfaces and keyframes:
                     tex_results = project_textures(keyframes, surfaces)

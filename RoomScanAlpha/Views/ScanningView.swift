@@ -85,7 +85,7 @@ struct ScanningView: View {
             sessionManager.isCapturing = false
             // Only pause if we're NOT transitioning to annotation (which needs a live session).
             // handleAnnotationDone/Skip will pause the session after annotation completes.
-            if viewModel.state != .annotatingCorners {
+            if viewModel.state != .annotatingCorners && viewModel.state != .capturingPanorama {
                 sessionManager.pauseSession()
             }
         }
