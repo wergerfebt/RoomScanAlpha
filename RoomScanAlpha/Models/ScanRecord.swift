@@ -61,6 +61,14 @@ final class ScanHistoryStore {
         return records
     }
 
+    func delete(scanId: String) {
+        var records = loadAll()
+        records.removeAll { $0.id == scanId }
+        if let data = try? JSONEncoder().encode(records) {
+            UserDefaults.standard.set(data, forKey: key)
+        }
+    }
+
     /// Group records by RFQ ID.
     func groupedByRFQ() -> [(rfqId: String, rfqDescription: String?, scans: [ScanRecord])] {
         let records = loadAll()

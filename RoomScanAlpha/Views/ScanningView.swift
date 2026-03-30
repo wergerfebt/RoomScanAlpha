@@ -83,7 +83,11 @@ struct ScanningView: View {
         }
         .onDisappear {
             sessionManager.isCapturing = false
-            sessionManager.pauseSession()
+            // Only pause if we're NOT transitioning to annotation (which needs a live session).
+            // handleAnnotationDone/Skip will pause the session after annotation completes.
+            if viewModel.state != .annotatingCorners {
+                sessionManager.pauseSession()
+            }
         }
     }
 

@@ -140,7 +140,12 @@ def update_scan_status(
                        ceiling_height_ft = %s,
                        perimeter_linear_ft = %s,
                        detected_components = %s,
-                       scan_dimensions = %s
+                       scan_dimensions = %s,
+                       room_polygon_ft = %s,
+                       wall_heights_ft = %s,
+                       polygon_source = %s,
+                       scan_mesh_url = %s,
+                       texture_manifest = %s
                    WHERE id = %s""",
                 (
                     status,
@@ -150,6 +155,11 @@ def update_scan_status(
                     room_data["perimeter_linear_ft"],
                     json.dumps(room_data["detected_components"]),
                     json.dumps(room_data["scan_dimensions"]),
+                    json.dumps(room_data.get("room_polygon_ft")),
+                    json.dumps(room_data.get("wall_heights_ft")),
+                    room_data.get("polygon_source"),
+                    room_data.get("scan_mesh_url"),
+                    json.dumps(room_data.get("texture_manifest")),
                     scan_id,
                 ),
             )
@@ -270,14 +280,73 @@ async def process_scan(request: Request) -> dict:
             send_fcm_notification(scan_id, "failed")
             return {"status": "failed", "error": str(e)}
 
+        # Step 4b: If annotated polygon is present, use it for room dimensions
+        metadata_path = os.path.join(scan_root, "metadata.json")
+        with open(metadata_path, "r") as f:
+            metadata = json.load(f)
+
+        annotation = metadata.get("corner_annotation")
+        polygon_result = _compute_from_annotation(annotation, room_metrics)
+
+        # Step 7A: Texture projection — project keyframe images onto wall/floor/ceiling surfaces
+        texture_manifest = None
+        if annotation and len(annotation.get("corners_xz", [])) >= 3:
+            try:
+                from pipeline.texture_projection import (
+                    build_surfaces_from_annotation, load_keyframes,
+                    project_textures, save_textures,
+                )
+
+                ceiling_ft = room_metrics.get("ceiling_height_ft", 0)
+                ceiling_m = ceiling_ft / M_TO_FT if ceiling_ft else None
+                surfaces = build_surfaces_from_annotation(
+                    corners_xz=annotation["corners_xz"],
+                    corners_y=annotation["corners_y"],
+                    ceiling_height_m=ceiling_m,
+                )
+                keyframes = load_keyframes(scan_root, metadata)
+
+                if surfaces and keyframes:
+                    tex_results = project_textures(keyframes, surfaces)
+                    tex_dir = os.path.join(scan_root, "textures")
+                    texture_manifest = save_textures(tex_results, tex_dir)
+
+                    # Upload textures to GCS
+                    gcs_base = blob_path.rsplit("/", 1)[0]
+                    for surface_id, filename in texture_manifest.items():
+                        local_path = os.path.join(tex_dir, filename)
+                        gcs_path = f"{gcs_base}/textures/{filename}"
+                        _upload_to_gcs(local_path, gcs_path)
+                    texture_manifest = {
+                        sid: f"textures/{fname}" for sid, fname in texture_manifest.items()
+                    }
+                    print(f"[Processor] Texture projection complete: {len(texture_manifest)} surfaces")
+            except Exception as e:
+                print(f"[Processor] Warning: texture projection failed: {e}")
+                import traceback
+                traceback.print_exc()
+
+        # Step 4c: Upload mesh.ply to a known GCS path for direct access (signed URLs)
+        mesh_gcs_path = blob_path.rsplit("/", 1)[0] + "/mesh.ply"
+        try:
+            _upload_to_gcs(os.path.join(scan_root, "mesh.ply"), mesh_gcs_path)
+        except Exception as e:
+            print(f"[Processor] Warning: mesh upload failed: {e}")
+            mesh_gcs_path = None
+
         # Step 5: Write results to DB and notify
         room_data = {
-            "floor_area_sqft": room_metrics["floor_area_sqft"],
-            "wall_area_sqft": room_metrics["wall_area_sqft"],
-            "ceiling_height_ft": room_metrics["ceiling_height_ft"],
-            "perimeter_linear_ft": room_metrics["perimeter_linear_ft"],
+            "floor_area_sqft": polygon_result["floor_area_sqft"],
+            "wall_area_sqft": polygon_result["wall_area_sqft"],
+            "ceiling_height_ft": polygon_result["ceiling_height_ft"],
+            "perimeter_linear_ft": polygon_result["perimeter_linear_ft"],
             "detected_components": room_metrics["detected_components"],
-            "scan_dimensions": room_metrics["scan_dimensions"],
+            "scan_dimensions": polygon_result["scan_dimensions"],
+            "room_polygon_ft": polygon_result.get("room_polygon_ft"),
+            "wall_heights_ft": polygon_result.get("wall_heights_ft"),
+            "polygon_source": polygon_result["polygon_source"],
+            "scan_mesh_url": mesh_gcs_path,
+            "texture_manifest": texture_manifest,
         }
         rfq_ready = update_scan_status(scan_id, rfq_id, "complete", room_data=room_data)
         send_fcm_notification(scan_id, "complete", rfq_ready=rfq_ready)
@@ -292,6 +361,14 @@ def _download_from_gcs(blob_path: str, dest_path: str) -> None:
     blob = bucket.blob(blob_path)
     blob.download_to_filename(dest_path)
     print(f"[Processor] Downloaded {blob_path} ({os.path.getsize(dest_path)} bytes)")
+
+
+def _upload_to_gcs(local_path: str, blob_path: str) -> None:
+    """Upload a local file to GCS."""
+    bucket = storage_client.bucket(BUCKET_NAME)
+    blob = bucket.blob(blob_path)
+    blob.upload_from_filename(local_path)
+    print(f"[Processor] Uploaded {blob_path} ({os.path.getsize(local_path)} bytes)")
 
 
 def _extract_zip(zip_path: str, extract_dir: str) -> None:
@@ -578,6 +655,108 @@ def _empty_metrics() -> dict:
             "door_count": 0, "door_opening_lf": None, "transition_count": None,
             "bbox": {"x_m": 0, "y_m": 0, "z_m": 0},
         },
+    }
+
+
+def _estimate_floor_y(room_metrics: dict) -> float:
+    """Estimate floor Y coordinate from ceiling height and PLY metrics."""
+    ceiling_ft = room_metrics.get("ceiling_height_ft", 0)
+    if ceiling_ft and ceiling_ft > 0:
+        ceiling_m = ceiling_ft / M_TO_FT
+        # Assume ceiling Y is roughly the average corners_y,
+        # floor Y is ceiling_y - ceiling_height
+        # For simplicity, assume floor is at Y=0 (ARKit origin is typically near floor)
+        return 0.0
+    return 0.0
+
+
+def _compute_from_annotation(annotation: Optional[dict], ply_metrics: dict) -> dict:
+    """Compute room dimensions from the user-annotated polygon when present.
+
+    If annotation is present and valid, uses the polygon for floor area, perimeter,
+    and wall area (polygon perimeter × ceiling height). Ceiling height still comes
+    from the PLY mesh RANSAC (more accurate than corner Y values alone).
+
+    If annotation is absent, returns the PLY-derived metrics unchanged with
+    polygon_source='geometric'.
+
+    Args:
+        annotation: The corner_annotation dict from metadata.json, or None.
+        ply_metrics: Room metrics already computed from the PLY mesh.
+
+    Returns:
+        Dict with the same keys as ply_metrics plus room_polygon_ft,
+        wall_heights_ft, and polygon_source.
+    """
+    if not annotation:
+        result = dict(ply_metrics)
+        result["polygon_source"] = "geometric"
+        result["room_polygon_ft"] = None
+        result["wall_heights_ft"] = None
+        return result
+
+    corners_xz = annotation.get("corners_xz", [])
+    corners_y = annotation.get("corners_y", [])
+
+    if len(corners_xz) < 3:
+        result = dict(ply_metrics)
+        result["polygon_source"] = "geometric"
+        result["room_polygon_ft"] = None
+        result["wall_heights_ft"] = None
+        return result
+
+    # Convert polygon from meters to feet
+    polygon_ft = [[round(c[0] * M_TO_FT, 2), round(c[1] * M_TO_FT, 2)] for c in corners_xz]
+    wall_heights_ft = [round(y * M_TO_FT, 2) for y in corners_y] if corners_y else None
+
+    # Floor area via shoelace formula (meters, then convert)
+    n = len(corners_xz)
+    signed_area = 0.0
+    for i in range(n):
+        j = (i + 1) % n
+        signed_area += corners_xz[i][0] * corners_xz[j][1] - corners_xz[j][0] * corners_xz[i][1]
+    floor_area_m2 = abs(signed_area) / 2.0
+
+    # Perimeter (meters, then convert)
+    perimeter_m = 0.0
+    for i in range(n):
+        j = (i + 1) % n
+        dx = corners_xz[j][0] - corners_xz[i][0]
+        dz = corners_xz[j][1] - corners_xz[i][1]
+        perimeter_m += (dx * dx + dz * dz) ** 0.5
+
+    # Use PLY-derived ceiling height (RANSAC is more accurate than corner Y values)
+    ceiling_height_ft = ply_metrics["ceiling_height_ft"]
+    ceiling_height_m = ceiling_height_ft / M_TO_FT if ceiling_height_ft else 0.0
+
+    # Wall area = perimeter × ceiling height
+    wall_area_m2 = perimeter_m * ceiling_height_m
+
+    floor_area_sf = round(floor_area_m2 * SQM_TO_SQFT, 1)
+    wall_area_sf = round(wall_area_m2 * SQM_TO_SQFT, 1)
+    perimeter_lf = round(perimeter_m * M_TO_FT, 1)
+
+    # Rebuild scan_dimensions with polygon-derived values
+    scan_dims = dict(ply_metrics.get("scan_dimensions", {}))
+    scan_dims["floor_area_sf"] = floor_area_sf
+    scan_dims["wall_area_sf"] = wall_area_sf
+    scan_dims["ceiling_sf"] = floor_area_sf
+    scan_dims["perimeter_lf"] = perimeter_lf
+
+    print(f"[Processor] Annotated polygon: {n} corners, "
+          f"floor={floor_area_m2:.2f}m² ({floor_area_sf}sqft), "
+          f"perimeter={perimeter_m:.2f}m ({perimeter_lf}ft)")
+
+    return {
+        "floor_area_sqft": floor_area_sf,
+        "wall_area_sqft": wall_area_sf,
+        "ceiling_height_ft": ceiling_height_ft,
+        "perimeter_linear_ft": perimeter_lf,
+        "detected_components": ply_metrics["detected_components"],
+        "scan_dimensions": scan_dims,
+        "room_polygon_ft": polygon_ft,
+        "wall_heights_ft": wall_heights_ft,
+        "polygon_source": "annotated",
     }
 
 

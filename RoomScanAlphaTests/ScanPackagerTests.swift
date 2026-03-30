@@ -47,6 +47,7 @@ final class ScanPackagerTests: XCTestCase {
             meshAnchors: [], // Empty mesh — PLY will have 0 verts/faces
             scanDuration: 45.2,
             rfqContext: nil,
+            cornerAnnotation: nil,
             onProgress: { _ in }
         )
     }
@@ -249,5 +250,50 @@ final class ScanPackagerTests: XCTestCase {
         let metadata = try JSONDecoder().decode(ScanMetadata.self, from: data)
 
         XCTAssertEqual(metadata.scanDurationSeconds, 45.2, accuracy: 0.1)
+    }
+
+    // MARK: - Step 4: Corner annotation in metadata (4.1, 4.2)
+
+    func testAnnotatedPolygonInMetadata() throws {
+        let annotation = CornerAnnotation(
+            corners_xz: [[0, 0], [4, 0], [4, 3], [0, 3]],
+            corners_y: [2.5, 2.5, 2.5, 2.5],
+            annotation_method: "ar_crosshair_snap",
+            timestamp: "2026-03-30T10:00:00Z"
+        )
+        let keyframes = makeMockKeyframes(count: 1)
+        let result = try ScanPackager.package(
+            keyframes: keyframes,
+            meshAnchors: [],
+            scanDuration: 10.0,
+            rfqContext: nil,
+            cornerAnnotation: annotation,
+            onProgress: { _ in }
+        )
+
+        let data = try Data(contentsOf: result.directoryURL.appendingPathComponent("metadata.json"))
+        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+
+        // 4.1: corner_annotation block present with CCW corners
+        let block = json["corner_annotation"] as? [String: Any]
+        XCTAssertNotNil(block, "corner_annotation should be present in metadata.json")
+
+        let cornersXZ = block?["corners_xz"] as? [[NSNumber]]
+        XCTAssertEqual(cornersXZ?.count, 4, "Should have 4 corners")
+
+        let method = block?["annotation_method"] as? String
+        XCTAssertEqual(method, "ar_crosshair_snap")
+    }
+
+    func testSkippedAnnotationOmitsKey() throws {
+        // 4.2: When annotation is nil, key should be absent (not null)
+        let result = try packageTestScan(keyframeCount: 1)
+
+        let data = try Data(contentsOf: result.directoryURL.appendingPathComponent("metadata.json"))
+        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+
+        // Key should not exist at all (not even as null)
+        XCTAssertFalse(json.keys.contains("corner_annotation"),
+                       "corner_annotation key should be absent when annotation is nil, not present as null")
     }
 }

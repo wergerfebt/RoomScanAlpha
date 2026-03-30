@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Room Scan Alpha - Room Scan Viewer</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #1a1a1a; color: #f5f5f7; overflow: hidden; height: 100vh; }
+
+  /* Layout */
+  .app { display: flex; height: 100vh; }
+  .sidebar { width: 320px; background: #2a2a2a; border-right: 1px solid #3a3a3a; display: flex; flex-direction: column; overflow-y: auto; flex-shrink: 0; }
+  .main-panel { flex: 1; display: flex; flex-direction: column; position: relative; }
+  .viewer-container { flex: 1; position: relative; }
+  .viewer-container canvas { display: block; }
+
+  /* Sidebar sections */
+  .sidebar-header { padding: 16px; border-bottom: 1px solid #3a3a3a; }
+  .sidebar-header h1 { font-size: 18px; font-weight: 700; }
+  .sidebar-header .subtitle { color: #86868b; font-size: 12px; margin-top: 2px; }
+  .job-info { padding: 12px 16px; border-bottom: 1px solid #3a3a3a; }
+  .job-info h2 { font-size: 14px; font-weight: 600; }
+  .job-info .address { color: #86868b; font-size: 12px; margin-top: 2px; }
+
+  /* Floor plan */
+  .floor-plan-section { padding: 12px; border-bottom: 1px solid #3a3a3a; }
+  .floor-plan-section h3 { font-size: 12px; font-weight: 600; color: #86868b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+  .floor-plan-canvas-wrap { background: #1a1a1a; border-radius: 8px; aspect-ratio: 4/3; position: relative; cursor: pointer; }
+  .floor-plan-canvas-wrap canvas { width: 100%; height: 100%; border-radius: 8px; }
+
+  /* Room list */
+  .room-list { padding: 8px; }
+  .room-list h3 { font-size: 12px; font-weight: 600; color: #86868b; text-transform: uppercase; letter-spacing: 0.5px; padding: 4px 8px; }
+  .room-item { padding: 10px 12px; border-radius: 8px; cursor: pointer; margin: 2px 0; transition: background 0.15s; }
+  .room-item:hover { background: #3a3a3a; }
+  .room-item.active { background: #0066cc33; border: 1px solid #0066cc; }
+  .room-item .name { font-size: 14px; font-weight: 500; }
+  .room-item .detail { font-size: 11px; color: #86868b; margin-top: 2px; }
+
+  /* Metrics panel */
+  .metrics-section { padding: 12px 16px; border-top: 1px solid #3a3a3a; }
+  .metrics-section h3 { font-size: 12px; font-weight: 600; color: #86868b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+  .metric-row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 13px; }
+  .metric-row .label { color: #aaa; }
+  .metric-row .value { font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  /* Top bar */
+  .top-bar { display: flex; align-items: center; gap: 12px; padding: 8px 16px; background: #2a2a2a; border-bottom: 1px solid #3a3a3a; }
+  .top-bar .room-name { font-size: 16px; font-weight: 600; flex: 1; }
+  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; border: none; transition: background 0.15s; }
+  .btn-toggle { background: #3a3a3a; color: #f5f5f7; }
+  .btn-toggle:hover { background: #4a4a4a; }
+  .btn-toggle.active { background: #0066cc; color: #fff; }
+  .btn-primary { background: #0066cc; color: #fff; text-decoration: none; }
+  .btn-primary:hover { background: #0055aa; }
+
+  /* Loading / error */
+  .loading { display: flex; align-items: center; justify-content: center; height: 100%; color: #86868b; font-size: 16px; }
+  .error { text-align: center; padding: 60px; }
+  .error h2 { font-size: 20px; margin-bottom: 8px; color: #f5f5f7; }
+  .error p { color: #86868b; }
+
+  /* Measurement labels (CSS2D) */
+  .measure-label { background: rgba(33,150,243,0.85); color: #fff; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600; font-family: -apple-system, monospace; white-space: nowrap; pointer-events: none; }
+  .measure-label.area { background: rgba(76,175,80,0.85); font-size: 13px; }
+  .measure-label.height { background: rgba(255,152,0,0.85); }
+
+  /* Mobile */
+  @media (max-width: 768px) {
+    .sidebar { width: 100%; height: auto; max-height: 40vh; border-right: none; border-bottom: 1px solid #3a3a3a; }
+    .app { flex-direction: column; }
+  }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <div class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <h1>Room Scan Alpha</h1>
+      <div class="subtitle">Interactive Room Viewer</div>
+    </div>
+    <div id="sidebar-content"><div class="loading">Loading...</div></div>
+  </div>
+  <div class="main-panel">
+    <div class="top-bar" id="top-bar">
+      <span class="room-name" id="room-name">Select a room</span>
+      <button class="btn btn-toggle" id="btn-measures" onclick="toggleMeasurements()">Show Measurements</button>
+      <a class="btn btn-primary" id="btn-quote" href="#" target="_blank">Submit Quote</a>
+    </div>
+    <div class="viewer-container" id="viewer-container">
+      <div class="loading" id="viewer-loading">Select a room from the sidebar</div>
+    </div>
+  </div>
+</div>
+
+<!-- Three.js from CDN -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+
+const API_BASE = window.location.origin;
+let scene, camera, renderer, cssRenderer, controls;
+let measurementGroup = null;
+let measurementsVisible = false;
+let currentData = null;
+let activeRoomIndex = -1;
+
+// --- Init ---
+
+function getRfqId() {
+  const parts = window.location.pathname.split('/');
+  const idx = parts.indexOf('quote');
+  return idx >= 0 && parts[idx + 1] ? parts[idx + 1] : null;
+}
+
+async function init() {
+  const rfqId = getRfqId();
+  if (!rfqId) { showError('Invalid link', 'No project ID found.'); return; }
+
+  try {
+    const resp = await fetch(`${API_BASE}/api/rfqs/${rfqId}/contractor-view`);
+    if (resp.status === 404) { showError('Not found', 'This project does not exist.'); return; }
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    currentData = await resp.json();
+    renderSidebar(currentData);
+    setupQuoteButton(rfqId);
+    if (currentData.rooms?.length > 0) loadRoom(0);
+  } catch (e) { showError('Failed to load', e.message); }
+}
+
+function showError(title, msg) {
+  document.getElementById('sidebar-content').innerHTML = `<div class="error"><h2>${title}</h2><p>${msg}</p></div>`;
+}
+
+// --- Sidebar ---
+
+function renderSidebar(data) {
+  let html = '';
+  if (data.job_description || data.address) {
+    html += `<div class="job-info"><h2>${esc(data.job_description || 'Project')}</h2>`;
+    if (data.address) html += `<div class="address">${esc(data.address)}</div>`;
+    html += '</div>';
+  }
+
+  // Floor plan
+  if (data.rooms?.some(r => r.room_polygon_ft)) {
+    html += `<div class="floor-plan-section"><h3>Floor Plan</h3><div class="floor-plan-canvas-wrap"><canvas id="fp-canvas"></canvas></div></div>`;
+  }
+
+  // Room list
+  html += '<div class="room-list"><h3>Rooms</h3>';
+  (data.rooms || []).forEach((room, i) => {
+    const area = room.floor_area_sqft ? `${Math.round(room.floor_area_sqft)} sq ft` : '';
+    html += `<div class="room-item" id="room-${i}" onclick="window._selectRoom(${i})">
+      <div class="name">${esc(room.room_label || `Room ${i + 1}`)}</div>
+      <div class="detail">${area}${area && room.ceiling_height_ft ? ' · ' : ''}${room.ceiling_height_ft ? room.ceiling_height_ft + ' ft ceiling' : ''}</div>
+    </div>`;
+  });
+  html += '</div>';
+
+  // Metrics (filled when room selected)
+  html += '<div class="metrics-section" id="metrics-panel"></div>';
+
+  document.getElementById('sidebar-content').innerHTML = html;
+
+  // Draw floor plan after DOM update
+  requestAnimationFrame(() => drawFloorPlan(data));
+}
+
+function drawFloorPlan(data) {
+  const canvas = document.getElementById('fp-canvas');
+  if (!canvas) return;
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.parentElement.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  const w = rect.width, h = rect.height;
+
+  // Collect all polygon points for bounding box
+  let allPts = [];
+  (data.rooms || []).forEach(r => {
+    if (r.room_polygon_ft) r.room_polygon_ft.forEach(p => allPts.push(p));
+  });
+  if (allPts.length === 0) return;
+
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  allPts.forEach(([x, y]) => { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y); });
+  const polyW = maxX - minX || 1, polyH = maxY - minY || 1;
+  const pad = 0.12;
+  const scale = Math.min(w * (1 - 2*pad) / polyW, h * (1 - 2*pad) / polyH);
+  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+  const tx = x => w/2 + (x - cx) * scale;
+  const ty = y => h/2 + (y - cy) * scale;
+
+  data.rooms.forEach((room, i) => {
+    if (!room.room_polygon_ft || room.room_polygon_ft.length < 3) return;
+    const poly = room.room_polygon_ft;
+    const isActive = i === activeRoomIndex;
+
+    ctx.beginPath();
+    ctx.moveTo(tx(poly[0][0]), ty(poly[0][1]));
+    poly.slice(1).forEach(([x, y]) => ctx.lineTo(tx(x), ty(y)));
+    ctx.closePath();
+    ctx.fillStyle = isActive ? 'rgba(0,102,204,0.2)' : 'rgba(255,255,255,0.05)';
+    ctx.fill();
+    ctx.strokeStyle = isActive ? '#0066cc' : '#555';
+    ctx.lineWidth = isActive ? 2 : 1;
+    ctx.stroke();
+
+    // Label
+    const lx = poly.reduce((s, p) => s + p[0], 0) / poly.length;
+    const ly = poly.reduce((s, p) => s + p[1], 0) / poly.length;
+    ctx.font = `${isActive ? 'bold ' : ''}11px -apple-system, sans-serif`;
+    ctx.fillStyle = isActive ? '#0066cc' : '#888';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(room.room_label || `Room ${i+1}`, tx(lx), ty(ly));
+  });
+
+  // Click handler
+  canvas.onclick = (e) => {
+    const br = canvas.getBoundingClientRect();
+    const mx = (e.clientX - br.left), my = (e.clientY - br.top);
+    const fpx = (mx - w/2) / scale + cx, fpy = (my - h/2) / scale + cy;
+    for (let i = 0; i < data.rooms.length; i++) {
+      const poly = data.rooms[i].room_polygon_ft;
+      if (poly && pointInPoly(fpx, fpy, poly)) { window._selectRoom(i); return; }
+    }
+  };
+}
+
+function pointInPoly(x, y, poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    if ((poly[i][1] > y) !== (poly[j][1] > y) &&
+        x < (poly[j][0] - poly[i][0]) * (y - poly[i][1]) / (poly[j][1] - poly[i][1]) + poly[i][0])
+      inside = !inside;
+  }
+  return inside;
+}
+
+// --- Room Selection ---
+
+window._selectRoom = function(index) {
+  if (!currentData || !currentData.rooms[index]) return;
+  activeRoomIndex = index;
+
+  // Update active state in room list
+  document.querySelectorAll('.room-item').forEach((el, i) => el.classList.toggle('active', i === index));
+
+  const room = currentData.rooms[index];
+  document.getElementById('room-name').textContent = room.room_label || `Room ${index + 1}`;
+  renderMetrics(room);
+  loadRoom(index);
+
+  // Redraw floor plan with highlight
+  drawFloorPlan(currentData);
+};
+
+function renderMetrics(room) {
+  const panel = document.getElementById('metrics-panel');
+  if (!panel) return;
+  let html = '<h3>Dimensions</h3>';
+  if (room.floor_area_sqft) html += metricRow('Floor Area', `${room.floor_area_sqft} sq ft`);
+  if (room.wall_area_sqft) html += metricRow('Wall Area', `${room.wall_area_sqft} sq ft`);
+  if (room.ceiling_height_ft) html += metricRow('Ceiling Height', `${room.ceiling_height_ft} ft`);
+  if (room.perimeter_linear_ft) html += metricRow('Perimeter', `${room.perimeter_linear_ft} ft`);
+
+  if (room.detected_components) {
+    const items = Array.isArray(room.detected_components) ? room.detected_components : room.detected_components.detected || [];
+    if (items.length > 0) {
+      html += '<h3 style="margin-top:12px">Detected</h3>';
+      items.forEach(c => { html += `<div class="metric-row"><span class="label">${esc(c)}</span></div>`; });
+    }
+  }
+  panel.innerHTML = html;
+}
+
+function metricRow(label, value) {
+  return `<div class="metric-row"><span class="label">${label}</span><span class="value">${value}</span></div>`;
+}
+
+function setupQuoteButton(rfqId) {
+  const btn = document.getElementById('btn-quote');
+  btn.href = `mailto:quotes@quoterra.co?subject=Quote for ${encodeURIComponent(rfqId)}&body=RFQ ID: ${encodeURIComponent(rfqId)}%0A%0AMy quote:%0A`;
+}
+
+// --- Three.js Scene ---
+
+function initThree() {
+  const container = document.getElementById('viewer-container');
+  const loading = document.getElementById('viewer-loading');
+  if (loading) loading.style.display = 'none';
+
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x1a1a1a);
+
+  camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.05, 100);
+  camera.position.set(0, 1.5, 0);
+
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(container.clientWidth, container.clientHeight);
+  renderer.setPixelRatio(window.devicePixelRatio);
+  container.appendChild(renderer.domElement);
+
+  // CSS2D renderer for measurement labels
+  cssRenderer = new CSS2DRenderer();
+  cssRenderer.setSize(container.clientWidth, container.clientHeight);
+  cssRenderer.domElement.style.position = 'absolute';
+  cssRenderer.domElement.style.top = '0';
+  cssRenderer.domElement.style.pointerEvents = 'none';
+  container.appendChild(cssRenderer.domElement);
+
+  // Interior look-around: OrbitControls locked to camera position (rotate only, no pan/zoom)
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.1;
+  controls.enableZoom = false;
+  controls.enablePan = false;
+  controls.rotateSpeed = -0.3; // Invert for natural drag-to-look
+  controls.target.set(0, 1.5, -0.01); // Look slightly forward from camera
+
+  // Bright ambient light so textures/colors are clearly visible
+  scene.add(new THREE.AmbientLight(0xffffff, 1.0));
+  const dir = new THREE.DirectionalLight(0xffffff, 0.3);
+  dir.position.set(0, 2, 0);
+  scene.add(dir);
+
+  window.addEventListener('resize', onResize);
+  animate();
+}
+
+function onResize() {
+  const container = document.getElementById('viewer-container');
+  if (!container || !camera) return;
+  camera.aspect = container.clientWidth / container.clientHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(container.clientWidth, container.clientHeight);
+  cssRenderer.setSize(container.clientWidth, container.clientHeight);
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+  cssRenderer.render(scene, camera);
+}
+
+// --- Load Room ---
+
+async function loadRoom(index) {
+  const room = currentData.rooms[index];
+  if (!scene) initThree();
+
+  // Clear existing room geometry and measurements
+  clearScene();
+
+  const polygon = room.room_polygon_ft;
+  if (!polygon || polygon.length < 3) return;
+
+  const FT_TO_M = 1 / 3.28084;
+
+  // Convert polygon from feet to meters for 3D scene
+  const cornersM = polygon.map(([x, z]) => [x * FT_TO_M, z * FT_TO_M]);
+  const ceilingHeightM = (room.ceiling_height_ft || 8) * FT_TO_M;
+
+  // wall_heights_ft are absolute Y coords in AR space, not wall heights.
+  // Compute floor Y: avg(corners_y) - ceiling_height
+  const cornersYM = (room.wall_heights_ft || []).map(h => h * FT_TO_M);
+  const avgCeilingY = cornersYM.length > 0 ? cornersYM.reduce((s, v) => s + v, 0) / cornersYM.length : ceilingHeightM;
+  const floorY = avgCeilingY - ceilingHeightM;
+
+  const textureUrls = room.texture_urls || {};
+
+  // Room center
+  const cx = cornersM.reduce((s, p) => s + p[0], 0) / cornersM.length;
+  const cz = cornersM.reduce((s, p) => s + p[1], 0) / cornersM.length;
+
+  // Build walls as interior-facing surfaces using BufferGeometry
+  // Each wall is a quad from two polygon corners, floor to ceiling, with normal facing inward
+  for (let i = 0; i < cornersM.length; i++) {
+    const j = (i + 1) % cornersM.length;
+    const [x0, z0] = cornersM[i];
+    const [x1, z1] = cornersM[j];
+    const h0 = cornersYM[i] || (floorY + ceilingHeightM);
+    const h1 = cornersYM[j] || (floorY + ceilingHeightM);
+
+    // Quad vertices: bottom at floorY, top at ceiling Y per corner
+    // Winding order for interior face (facing into room): BL, TL, TR, BL, TR, BR
+    const vertices = new Float32Array([
+      x0, floorY, z0,   x0, h0, z0,   x1, h1, z1,  // tri 1
+      x0, floorY, z0,   x1, h1, z1,   x1, floorY, z1,  // tri 2
+    ]);
+
+    // UVs: U goes 0→1 along wall width, V goes 0→1 from floor to ceiling
+    const uvs = new Float32Array([
+      0, 0,   0, 1,   1, 1,
+      0, 0,   1, 1,   1, 0,
+    ]);
+
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+    geom.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+
+    let mat;
+    const texUrl = textureUrls[`wall_${i}`];
+    if (texUrl) {
+      const loader = new THREE.TextureLoader();
+      loader.crossOrigin = 'anonymous';
+      const tex = loader.load(texUrl,
+        () => { console.log(`wall_${i} texture loaded`); },
+        undefined,
+        (err) => { console.error(`wall_${i} texture FAILED`, err); }
+      );
+      tex.colorSpace = THREE.SRGBColorSpace;
+      // MeshBasicMaterial: projected photos don't need lighting, display at full brightness
+      mat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide });
+    } else {
+      mat = new THREE.MeshBasicMaterial({ color: 0xd8d0c8, side: THREE.DoubleSide });
+    }
+
+    scene.add(new THREE.Mesh(geom, mat));
+  }
+
+  // Build floor and ceiling as fan-triangulated BufferGeometry directly in XZ plane
+  // (avoids ShapeGeometry 2D triangulation bugs with rotated polygons)
+  scene.add(buildPolygonSurface(cornersM, floorY, textureUrls.floor, 0x8b7355, true));       // floor
+  scene.add(buildPolygonSurface(cornersM, avgCeilingY, textureUrls.ceiling, 0xe8e4e0, false)); // ceiling
+
+  // Position camera at room center, eye height above floor
+  const eyeHeight = floorY + Math.min(1.6, ceilingHeightM * 0.65);
+  camera.position.set(cx, eyeHeight, cz);
+
+  // For interior look-around, OrbitControls target must be very close to camera
+  // (tiny offset forward so rotation pivots in-place, not around a distant wall)
+  const [wx0, wz0] = cornersM[0];
+  const [wx1, wz1] = cornersM[1];
+  const lookX = (wx0 + wx1) / 2;
+  const lookZ = (wz0 + wz1) / 2;
+  const dx = lookX - cx, dz = lookZ - cz;
+  const lookDist = Math.sqrt(dx * dx + dz * dz) || 1;
+  // Target is 0.01m from camera toward first wall — rotation pivots in place
+  controls.target.set(cx + dx / lookDist * 0.01, eyeHeight, cz + dz / lookDist * 0.01);
+  controls.update();
+
+  // Build measurements
+  buildMeasurements(room, cornersM, floorY, avgCeilingY, ceilingHeightM);
+}
+
+// Build a horizontal polygon surface at a given Y height using fan triangulation.
+// cornersM: [[x,z], ...] in meters. normalUp: true = floor (normal +Y), false = ceiling (normal -Y).
+function buildPolygonSurface(cornersM, y, textureUrl, fallbackColor, normalUp) {
+  const n = cornersM.length;
+  // Fan triangulation from centroid to avoid non-convex issues
+  const cx = cornersM.reduce((s, p) => s + p[0], 0) / n;
+  const cz = cornersM.reduce((s, p) => s + p[1], 0) / n;
+
+  // Compute bounding box for UV mapping
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  cornersM.forEach(([x, z]) => { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z); });
+  const rangeX = maxX - minX || 1;
+  const rangeZ = maxZ - minZ || 1;
+
+  const verts = [];
+  const uvs = [];
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    const [x0, z0] = cornersM[i];
+    const [x1, z1] = cornersM[j];
+
+    if (normalUp) {
+      // Floor: centroid, corner i, corner j (CCW when viewed from above = +Y)
+      verts.push(cx, y, cz, x0, y, z0, x1, y, z1);
+    } else {
+      // Ceiling: centroid, corner j, corner i (reversed winding so normal faces down)
+      verts.push(cx, y, cz, x1, y, z1, x0, y, z0);
+    }
+
+    // UVs based on XZ bounding box
+    uvs.push((cx - minX) / rangeX, (cz - minZ) / rangeZ);
+    if (normalUp) {
+      uvs.push((x0 - minX) / rangeX, (z0 - minZ) / rangeZ);
+      uvs.push((x1 - minX) / rangeX, (z1 - minZ) / rangeZ);
+    } else {
+      uvs.push((x1 - minX) / rangeX, (z1 - minZ) / rangeZ);
+      uvs.push((x0 - minX) / rangeX, (z0 - minZ) / rangeZ);
+    }
+  }
+
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+  geom.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+
+  let mat;
+  if (textureUrl) {
+    const loader = new THREE.TextureLoader();
+    loader.crossOrigin = 'anonymous';
+    const tex = loader.load(textureUrl,
+      () => { console.log(`${normalUp ? 'floor' : 'ceiling'} texture loaded`); },
+      undefined,
+      (err) => { console.error(`${normalUp ? 'floor' : 'ceiling'} texture FAILED`, err); }
+    );
+    tex.colorSpace = THREE.SRGBColorSpace;
+    mat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide });
+  } else {
+    mat = new THREE.MeshBasicMaterial({ color: fallbackColor, side: THREE.DoubleSide });
+  }
+  return new THREE.Mesh(geom, mat);
+}
+
+function clearScene() {
+  if (!scene) return;
+  const toRemove = [];
+  scene.traverse(obj => {
+    if (obj.isMesh || obj.isCSS2DObject || obj.isLine) toRemove.push(obj);
+  });
+  toRemove.forEach(obj => {
+    obj.parent?.remove(obj);
+    obj.geometry?.dispose();
+    if (obj.material) {
+      if (Array.isArray(obj.material)) obj.material.forEach(m => m.dispose());
+      else obj.material.dispose();
+    }
+  });
+  measurementGroup = null;
+}
+
+// --- Measurements ---
+
+function buildMeasurements(room, cornersM, floorY, ceilingY, ceilingHeightM) {
+  measurementGroup = new THREE.Group();
+  measurementGroup.visible = measurementsVisible;
+
+  // Wall lengths at ceiling
+  for (let i = 0; i < cornersM.length; i++) {
+    const j = (i + 1) % cornersM.length;
+    const [x0, z0] = cornersM[i];
+    const [x1, z1] = cornersM[j];
+    const wallLen = Math.sqrt((x1-x0)**2 + (z1-z0)**2) * 3.28084; // back to feet
+    const label = formatFtIn(wallLen);
+
+    const mid = new THREE.Vector3((x0+x1)/2, ceilingY + 0.1, (z0+z1)/2);
+    addLabel(label, mid, 'measure-label');
+
+    // Line at ceiling
+    const lineMat = new THREE.LineBasicMaterial({ color: 0x2196F3 });
+    const lineGeom = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(x0, ceilingY, z0),
+      new THREE.Vector3(x1, ceilingY, z1),
+    ]);
+    const line = new THREE.Line(lineGeom, lineMat);
+    measurementGroup.add(line);
+  }
+
+  // Ceiling height — vertical line at first corner, nudged inward
+  if (cornersM.length > 0) {
+    const roomCx = cornersM.reduce((s, p) => s + p[0], 0) / cornersM.length;
+    const roomCz = cornersM.reduce((s, p) => s + p[1], 0) / cornersM.length;
+    const dx = roomCx - cornersM[0][0], dz = roomCz - cornersM[0][1];
+    const d = Math.sqrt(dx*dx + dz*dz) || 1;
+    const cx = cornersM[0][0] + dx/d * 0.15;
+    const cz = cornersM[0][1] + dz/d * 0.15;
+    const label = formatFtIn(ceilingHeightM * 3.28084);
+    const mid = new THREE.Vector3(cx, (floorY + ceilingY) / 2, cz);
+    addLabel(label, mid, 'measure-label height');
+
+    const lineMat = new THREE.LineBasicMaterial({ color: 0xFF9800 });
+    const lineGeom = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(cx, floorY, cz),
+      new THREE.Vector3(cx, ceilingY, cz),
+    ]);
+    measurementGroup.add(new THREE.Line(lineGeom, lineMat));
+  }
+
+  // Floor area label
+  if (room.floor_area_sqft) {
+    const cx = cornersM.reduce((s, p) => s + p[0], 0) / cornersM.length;
+    const cz = cornersM.reduce((s, p) => s + p[1], 0) / cornersM.length;
+    addLabel(`${Math.round(room.floor_area_sqft)} SF`, new THREE.Vector3(cx, floorY + 0.15, cz), 'measure-label area');
+  }
+
+  scene.add(measurementGroup);
+}
+
+function addLabel(text, position, className) {
+  const div = document.createElement('div');
+  div.className = className;
+  div.textContent = text;
+  const label = new CSS2DObject(div);
+  label.position.copy(position);
+  measurementGroup.add(label);
+}
+
+function formatFtIn(totalFt) {
+  const ft = Math.floor(totalFt);
+  const inches = Math.round((totalFt - ft) * 12);
+  return inches === 0 ? `${ft}'` : `${ft}' ${inches}"`;
+}
+
+window.toggleMeasurements = function() {
+  measurementsVisible = !measurementsVisible;
+  if (measurementGroup) measurementGroup.visible = measurementsVisible;
+  const btn = document.getElementById('btn-measures');
+  btn.classList.toggle('active', measurementsVisible);
+  btn.textContent = measurementsVisible ? 'Hide Measurements' : 'Show Measurements';
+};
+
+// --- Util ---
+
+function esc(s) {
+  const el = document.createElement('span');
+  el.textContent = s || '';
+  return el.innerHTML;
+}
+
+// --- Start ---
+init();
+</script>
+</body>
+</html>

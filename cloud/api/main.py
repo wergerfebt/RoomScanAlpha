@@ -17,8 +17,10 @@ import json
 import datetime
 from typing import Optional
 
+from pathlib import Path
+
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 from google.cloud import storage, tasks_v2
 from google.cloud.sql.connector import Connector
 from google.auth import default as default_credentials, compute_engine
@@ -295,6 +297,7 @@ def get_scan_status(rfq_id: str, scan_id: str, authorization: str = Header(None)
     columns = [
         "scan_status", "floor_area_sqft", "wall_area_sqft", "ceiling_height_ft",
         "perimeter_linear_ft", "detected_components", "scan_dimensions",
+        "room_polygon_ft", "wall_heights_ft", "polygon_source", "scan_mesh_url",
     ]
 
     conn = get_db_connection()
@@ -302,7 +305,7 @@ def get_scan_status(rfq_id: str, scan_id: str, authorization: str = Header(None)
         cursor = conn.cursor()
         cursor.execute(
             f"""SELECT {', '.join(columns)}
-                FROM scanned_rooms WHERE id = %s AND rfq_id = %s""",
+                FROM scanned_rooms WHERE id = %s AND rfq_id = %s AND scan_status != 'deleted'""",
             (scan_id, rfq_id),
         )
         row = cursor.fetchone()
@@ -315,7 +318,183 @@ def get_scan_status(rfq_id: str, scan_id: str, authorization: str = Header(None)
     result = _row_to_dict(columns, row)
     result["scan_id"] = scan_id
     result["status"] = result.pop("scan_status")
+
+    # Generate a signed URL for the PLY mesh if a GCS path is stored
+    mesh_gcs_path = result.pop("scan_mesh_url", None)
+    if mesh_gcs_path:
+        try:
+            if not _credentials.token or not _credentials.valid:
+                _credentials.refresh(_auth_request)
+            bucket = storage_client.bucket(BUCKET_NAME)
+            blob = bucket.blob(mesh_gcs_path)
+            result["scan_mesh_url"] = blob.generate_signed_url(
+                version="v4",
+                expiration=datetime.timedelta(days=7),
+                method="GET",
+                service_account_email=SIGNING_SA_EMAIL,
+                access_token=_credentials.token,
+            )
+        except Exception:
+            result["scan_mesh_url"] = None
+    else:
+        result["scan_mesh_url"] = None
+
     return result
+
+
+@app.delete("/api/rfqs/{rfq_id}/scans/{scan_id}")
+def delete_scan(rfq_id: str, scan_id: str, authorization: str = Header(None)) -> dict:
+    """Soft-delete a scan by setting its status to 'deleted'.
+
+    The row and GCS blobs are preserved (storage is cheap; data may be useful
+    for future model training). The GET status endpoint returns 404 for deleted scans.
+    """
+    verify_firebase_token(authorization)
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """UPDATE scanned_rooms
+               SET scan_status = 'deleted'
+               WHERE id = %s AND rfq_id = %s AND scan_status != 'deleted'""",
+            (scan_id, rfq_id),
+        )
+        conn.commit()
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Scan not found")
+    finally:
+        conn.close()
+
+    return {"status": "deleted", "scan_id": scan_id}
+
+
+@app.get("/api/rfqs/{rfq_id}/contractor-view")
+def contractor_view(rfq_id: str) -> dict:
+    """Return all scan data for a contractor to review and quote.
+
+    No auth required — link-based access for alpha. The link URL is the auth token
+    (security by obscurity is acceptable for the 1-month pilot).
+    """
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+
+        # Fetch RFQ info
+        cursor.execute(
+            """SELECT description, status FROM rfqs WHERE id = %s""",
+            (rfq_id,),
+        )
+        rfq_row = cursor.fetchone()
+        if not rfq_row:
+            raise HTTPException(status_code=404, detail="RFQ not found")
+
+        description, rfq_status = rfq_row
+
+        # Try to fetch property address if the table exists
+        address = None
+        try:
+            cursor.execute(
+                """SELECT p.address_line1, p.city, p.state, p.zip
+                   FROM properties p
+                   JOIN rfqs r ON r.property_id = p.id
+                   WHERE r.id = %s""",
+                (rfq_id,),
+            )
+            addr_row = cursor.fetchone()
+            if addr_row:
+                address_parts = [p for p in addr_row if p]
+                address = ", ".join(address_parts) if address_parts else None
+        except Exception:
+            conn.rollback()  # reset transaction state after failed query
+
+        # Fetch all non-deleted scanned rooms for this RFQ
+        room_columns = [
+            "id", "room_label", "floor_area_sqft", "wall_area_sqft",
+            "ceiling_height_ft", "perimeter_linear_ft",
+            "room_polygon_ft", "wall_heights_ft", "polygon_source",
+            "detected_components", "scan_mesh_url", "scan_status",
+            "texture_manifest",
+        ]
+        cursor.execute(
+            f"""SELECT {', '.join(room_columns)}
+                FROM scanned_rooms
+                WHERE rfq_id = %s AND scan_status != 'deleted'
+                ORDER BY created_at""",
+            (rfq_id,),
+        )
+        room_rows = cursor.fetchall()
+    finally:
+        conn.close()
+
+    rooms = []
+    for row in room_rows:
+        room = _row_to_dict(room_columns, row)
+        room["scan_id"] = room.pop("id")
+
+        # Generate signed mesh URL if GCS path is stored
+        mesh_gcs_path = room.pop("scan_mesh_url", None)
+        if mesh_gcs_path:
+            try:
+                if not _credentials.token or not _credentials.valid:
+                    _credentials.refresh(_auth_request)
+                bucket = storage_client.bucket(BUCKET_NAME)
+                blob = bucket.blob(mesh_gcs_path)
+                room["mesh_url"] = blob.generate_signed_url(
+                    version="v4",
+                    expiration=datetime.timedelta(days=7),
+                    method="GET",
+                    service_account_email=SIGNING_SA_EMAIL,
+                    access_token=_credentials.token,
+                )
+            except Exception:
+                room["mesh_url"] = None
+        else:
+            room["mesh_url"] = None
+
+        # Generate signed URLs for texture files
+        tex_manifest = room.pop("texture_manifest", None)
+        if tex_manifest and isinstance(tex_manifest, dict) and mesh_gcs_path:
+            gcs_base = mesh_gcs_path.rsplit("/", 1)[0]  # scans/{rfq_id}/{scan_id}
+            texture_urls = {}
+            for surface_id, rel_path in tex_manifest.items():
+                try:
+                    tex_blob = bucket.blob(f"{gcs_base}/{rel_path}")
+                    texture_urls[surface_id] = tex_blob.generate_signed_url(
+                        version="v4",
+                        expiration=datetime.timedelta(days=7),
+                        method="GET",
+                        service_account_email=SIGNING_SA_EMAIL,
+                        access_token=_credentials.token,
+                    )
+                except Exception:
+                    texture_urls[surface_id] = None
+            room["texture_urls"] = texture_urls
+        else:
+            room["texture_urls"] = None
+
+        rooms.append(room)
+
+    return {
+        "rfq_id": rfq_id,
+        "address": address,
+        "job_description": description,
+        "status": rfq_status,
+        "rooms": rooms,
+    }
+
+
+@app.get("/quote/{rfq_id}", response_class=HTMLResponse)
+def serve_contractor_page(rfq_id: str) -> str:
+    """Serve the contractor view HTML page.
+
+    The page loads data from /api/rfqs/{rfq_id}/contractor-view via fetch().
+    No auth — the unique URL is the access token for alpha.
+    """
+    html_path = Path(__file__).parent / "web" / "contractor_view.html"
+    if not html_path.exists():
+        raise HTTPException(status_code=500, detail="Contractor view page not found")
+    return html_path.read_text()
 
 
 @app.get("/health")

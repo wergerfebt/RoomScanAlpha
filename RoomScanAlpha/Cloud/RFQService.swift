@@ -32,6 +32,24 @@ final class RFQService {
         }
     }
 
+    /// Soft-delete a scan. Waits for 200 before returning.
+    /// Throws on network failure so the caller can keep the local record.
+    func deleteScan(rfqId: String, scanId: String) async throws {
+        let token = try await AuthManager.shared.getToken()
+        let url = URL(string: "\(apiBaseURL)/api/rfqs/\(rfqId)/scans/\(scanId)")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            throw URLError(.badServerResponse, userInfo: [
+                NSLocalizedDescriptionKey: "Delete failed (HTTP \(code))"
+            ])
+        }
+    }
+
     func createRFQ(description: String) async throws -> RFQ {
         let token = try await AuthManager.shared.getToken()
         let url = URL(string: "\(apiBaseURL)/api/rfqs")!

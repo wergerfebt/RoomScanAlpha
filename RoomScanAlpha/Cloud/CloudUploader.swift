@@ -86,6 +86,14 @@ final class CloudUploader {
         let detectedComponents: [String]?
         /// Standardized scan dimension keys for auto-population, plus nested bbox.
         let scanDimensions: [String: Any]?
+        /// Room polygon corners in feet [[x, z], ...], CCW winding. Nil for old/unannotated scans.
+        let roomPolygonFt: [[Double]]?
+        /// Per-corner wall heights in feet. Nil for old/unannotated scans.
+        let wallHeightsFt: [Double]?
+        /// How the polygon was derived: "annotated", "geometric", or "dnn".
+        let polygonSource: String?
+        /// Signed GCS URL for the PLY mesh (7-day expiry). Nil if not available.
+        let scanMeshUrl: String?
     }
 
     /// Full upload flow: zip → sign → upload → complete.
@@ -323,6 +331,12 @@ final class CloudUploader {
                 // scan_dimensions: contains standard keys + nested "bbox" object
                 let dimensions = json["scan_dimensions"] as? [String: Any]
 
+                // room_polygon_ft: [[x, z], ...] in feet
+                let polygon = json["room_polygon_ft"] as? [[Double]]
+                let wallHeights = json["wall_heights_ft"] as? [Double]
+                let polySource = json["polygon_source"] as? String
+                let meshUrl = json["scan_mesh_url"] as? String
+
                 return ScanResult(
                     scanId: scanId,
                     status: status,
@@ -331,7 +345,11 @@ final class CloudUploader {
                     ceilingHeightFt: json["ceiling_height_ft"] as? Double,
                     perimeterLinearFt: json["perimeter_linear_ft"] as? Double,
                     detectedComponents: components,
-                    scanDimensions: dimensions
+                    scanDimensions: dimensions,
+                    roomPolygonFt: polygon,
+                    wallHeightsFt: wallHeights,
+                    polygonSource: polySource,
+                    scanMeshUrl: meshUrl
                 )
             }
 

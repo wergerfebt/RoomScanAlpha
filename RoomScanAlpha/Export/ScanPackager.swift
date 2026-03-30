@@ -17,6 +17,7 @@ struct ScanPackager {
         meshAnchors: [ARMeshAnchor],
         scanDuration: TimeInterval,
         rfqContext: RFQContext?,
+        cornerAnnotation: CornerAnnotation?,
         onProgress: @escaping (String) -> Void
     ) throws -> PackageResult {
         let timestamp = Int(Date().timeIntervalSince1970)
@@ -61,7 +62,8 @@ struct ScanPackager {
             meshVertexCount: totalVertices,
             meshFaceCount: totalFaces,
             scanDuration: scanDuration,
-            rfqContext: rfqContext
+            rfqContext: rfqContext,
+            cornerAnnotation: cornerAnnotation
         )
         let metadataData = try JSONEncoder.prettyPrinted.encode(metadata)
         let metadataURL = scanDir.appendingPathComponent("metadata.json")
@@ -108,6 +110,7 @@ struct ScanMetadata: Codable {
     let keyframeCount: Int
     let meshVertexCount: Int
     let meshFaceCount: Int
+    let cornerAnnotation: CornerAnnotation?
     let keyframes: [KeyframeEntry]
 
     enum CodingKeys: String, CodingKey {
@@ -127,7 +130,30 @@ struct ScanMetadata: Codable {
         case keyframeCount = "keyframe_count"
         case meshVertexCount = "mesh_vertex_count"
         case meshFaceCount = "mesh_face_count"
+        case cornerAnnotation = "corner_annotation"
         case keyframes
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(rfqId, forKey: .rfqId)
+        try container.encodeIfPresent(floorId, forKey: .floorId)
+        try container.encodeIfPresent(roomLabel, forKey: .roomLabel)
+        try container.encodeIfPresent(originX, forKey: .originX)
+        try container.encodeIfPresent(originY, forKey: .originY)
+        try container.encodeIfPresent(rotationDeg, forKey: .rotationDeg)
+        try container.encode(device, forKey: .device)
+        try container.encode(deviceName, forKey: .deviceName)
+        try container.encode(iosVersion, forKey: .iosVersion)
+        try container.encode(scanDurationSeconds, forKey: .scanDurationSeconds)
+        try container.encode(cameraIntrinsics, forKey: .cameraIntrinsics)
+        try container.encode(imageResolution, forKey: .imageResolution)
+        try container.encode(depthFormat, forKey: .depthFormat)
+        try container.encode(keyframeCount, forKey: .keyframeCount)
+        try container.encode(meshVertexCount, forKey: .meshVertexCount)
+        try container.encode(meshFaceCount, forKey: .meshFaceCount)
+        try container.encodeIfPresent(cornerAnnotation, forKey: .cornerAnnotation)
+        try container.encode(keyframes, forKey: .keyframes)
     }
 
     static func build(
@@ -135,7 +161,8 @@ struct ScanMetadata: Codable {
         meshVertexCount: Int,
         meshFaceCount: Int,
         scanDuration: TimeInterval,
-        rfqContext: RFQContext?
+        rfqContext: RFQContext?,
+        cornerAnnotation: CornerAnnotation?
     ) -> ScanMetadata {
         let device = UIDevice.current
         let firstFrame = keyframes.first
@@ -160,6 +187,7 @@ struct ScanMetadata: Codable {
             keyframeCount: keyframes.count,
             meshVertexCount: meshVertexCount,
             meshFaceCount: meshFaceCount,
+            cornerAnnotation: cornerAnnotation,
             keyframes: keyframes.map { KeyframeEntry.from($0) }
         )
     }

@@ -40,6 +40,10 @@ final class ScanViewModel {
 
     var scanResult: CloudUploader.ScanResult?
 
+    // MARK: - Annotation State
+
+    var cornerAnnotation: CornerAnnotation?
+
     // MARK: - RFQ Context
 
     var selectedRFQ: RFQ?
@@ -75,6 +79,7 @@ final class ScanViewModel {
         scanResult = nil
         roomLabel = ""
         rfqContext = nil
+        cornerAnnotation = nil
         scanStartTime = nil
         state = .scanReady
     }
@@ -100,6 +105,7 @@ final class ScanViewModel {
         exportError = nil
         lastExportURL = nil
         showQualityWarning = false
+        cornerAnnotation = nil
         scanStartTime = nil
         state = .scanReady
     }

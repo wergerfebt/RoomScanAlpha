@@ -190,6 +190,43 @@ final class ScanHistoryTests: XCTestCase {
         XCTAssertTrue(roomLabels.contains("Master Bedroom"))
     }
 
+    // MARK: - Step 5: Delete scan (5.3 local)
+
+    func testDeleteRemovesRecordFromStore() {
+        store.save(makeRecord(id: "del-1", rfqId: "rfq-A"))
+        store.save(makeRecord(id: "del-2", rfqId: "rfq-A"))
+        store.save(makeRecord(id: "del-3", rfqId: "rfq-B"))
+        XCTAssertEqual(store.loadAll().count, 3)
+
+        store.delete(scanId: "del-2")
+
+        let remaining = store.loadAll()
+        XCTAssertEqual(remaining.count, 2)
+        XCTAssertFalse(remaining.contains(where: { $0.id == "del-2" }),
+                       "Deleted record should be removed")
+        XCTAssertTrue(remaining.contains(where: { $0.id == "del-1" }))
+        XCTAssertTrue(remaining.contains(where: { $0.id == "del-3" }))
+    }
+
+    func testDeleteNonexistentIdIsNoOp() {
+        store.save(makeRecord(id: "keep-1"))
+        store.delete(scanId: "nonexistent")
+        XCTAssertEqual(store.loadAll().count, 1, "Should not affect existing records")
+    }
+
+    func testDeleteUpdatesGroupedByRFQ() {
+        store.save(makeRecord(id: "g1", rfqId: "rfq-A"))
+        store.save(makeRecord(id: "g2", rfqId: "rfq-A"))
+        store.save(makeRecord(id: "g3", rfqId: "rfq-B"))
+
+        store.delete(scanId: "g1")
+
+        let groups = store.groupedByRFQ()
+        let rfqA = groups.first(where: { $0.rfqId == "rfq-A" })
+        XCTAssertEqual(rfqA?.scans.count, 1)
+        XCTAssertEqual(rfqA?.scans.first?.id, "g2")
+    }
+
     // MARK: - ScanRecord Codable
 
     func testScanRecordRoundTrip() throws {

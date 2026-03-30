@@ -28,9 +28,19 @@ struct ContentView: View {
                     onRedo: { handleRedoScan() }
                 )
             case .annotatingCorners:
-                // Placeholder — annotation UI is implemented in Step 3.
-                // For now, skip straight to labeling.
-                annotatingPlaceholderView
+                CornerAnnotationView(
+                    sessionManager: sessionManager,
+                    viewModel: viewModel,
+                    onDone: { annotation in
+                        handleAnnotationDone(annotation: annotation)
+                    },
+                    onSkip: {
+                        handleAnnotationSkip()
+                    },
+                    onRedo: {
+                        handleRedoScan()
+                    }
+                )
             case .labelingRoom:
                 RoomLabelView(roomLabel: $viewModel.roomLabel) {
                     if let frame = sessionManager.session.currentFrame {
@@ -114,35 +124,35 @@ struct ContentView: View {
         viewModel.redoScan()
     }
 
-    // MARK: - Annotating Placeholder
+    // MARK: - Annotation Handlers
 
-    /// Temporary view until Step 3 (corner annotation) is implemented.
-    /// Waits for frame selection to complete, then auto-advances to labeling.
-    private var annotatingPlaceholderView: some View {
-        VStack(spacing: 24) {
-            Spacer()
-            ProgressView()
-            Text("Preparing...")
-                .font(.headline)
-            Spacer()
-        }
-        .onAppear {
-            // Pause the AR session now that we're past annotation placeholder
-            sessionManager.pauseSession()
-            advanceAfterFrameSelection()
+    private func handleAnnotationDone(annotation: CornerAnnotation?) {
+        viewModel.cornerAnnotation = annotation
+        // Snapshot final mesh and pause session
+        sessionManager.snapshotMeshAnchors()
+        sessionManager.pauseSession()
+        waitForFrameSelectionThen {
+            advanceToLabelingOrWarning()
         }
     }
 
-    /// Wait for post-scan frame selection to finish before advancing.
-    /// If selection already completed (or no pruning needed), advances immediately.
-    private func advanceAfterFrameSelection() {
+    private func handleAnnotationSkip() {
+        viewModel.cornerAnnotation = nil
+        sessionManager.snapshotMeshAnchors()
+        sessionManager.pauseSession()
+        waitForFrameSelectionThen {
+            advanceToLabelingOrWarning()
+        }
+    }
+
+    /// Wait for post-scan frame selection to finish before calling the continuation.
+    private func waitForFrameSelectionThen(then: @escaping () -> Void) {
         let fcm = sessionManager.frameCaptureManager
         if fcm.selectionComplete || !fcm.isSelecting {
-            advanceToLabelingOrWarning()
+            then()
         } else {
-            // Poll briefly — selection typically takes < 2s for 80 frames
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                advanceAfterFrameSelection()
+                waitForFrameSelectionThen(then: then)
             }
         }
     }
@@ -167,6 +177,7 @@ struct ContentView: View {
         let meshAnchors = sessionManager.lastMeshAnchors
         let duration = viewModel.scanDuration
         let rfqContext = viewModel.rfqContext
+        let cornerAnnotation = viewModel.cornerAnnotation
 
         Task.detached {
             do {
@@ -175,6 +186,7 @@ struct ContentView: View {
                     meshAnchors: meshAnchors,
                     scanDuration: duration,
                     rfqContext: rfqContext,
+                    cornerAnnotation: cornerAnnotation,
                     onProgress: { message in
                         Task { @MainActor in
                             viewModel.exportProgress = message
@@ -268,7 +280,11 @@ struct ContentView: View {
                     ceilingHeightFt: nil,
                     perimeterLinearFt: nil,
                     detectedComponents: nil,
-                    scanDimensions: nil
+                    scanDimensions: nil,
+                    roomPolygonFt: nil,
+                    wallHeightsFt: nil,
+                    polygonSource: nil,
+                    scanMeshUrl: nil
                 )
                 print("[RoomScanAlpha] Polling error: \(error)")
             }

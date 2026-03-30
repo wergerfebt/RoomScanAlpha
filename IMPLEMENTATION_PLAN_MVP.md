@@ -31,6 +31,8 @@ Everything in this plan serves the funnel: **Ad → Email signup → TestFlight 
 | No quote delivery to homeowners | The funnel breaks at step 5 — no way to get bids back to homeowners |
 | No scan notification to contractors | Contractors don't know when a new scan arrives to quote on |
 | No contractor-facing view of scans | Contractors need to see dimensions + floor plan + 3D to write quotes |
+| No textured room visualization | Polygon outlines and numbers aren't enough — contractors need to see the actual room surfaces |
+| No interactive 3D viewer | Static page can't compete; contractors need orbit/zoom/measure to write accurate quotes |
 | No job-won tracking | Can't measure the test's core metric (won jobs, 2% GMV) |
 
 ### What's Cut (Deferred Post-Alpha)
@@ -41,6 +43,12 @@ Everything in this plan serves the funnel: **Ad → Email signup → TestFlight 
 - ~~Edge types (door/open_cased/open_pass)~~ — every edge is a wall for now
 - ~~Zoom loupe + per-corner confidence badges~~ — nice polish, not needed to get corners
 - ~~Training pipeline routing (GCS training paths, training_status, batch IDs)~~ — no model retraining during the 1-month test
+- ~~Seam blending between adjacent surfaces~~ — visible seams are acceptable for alpha
+- ~~Depth-based occlusion masking~~ — furniture blocking surfaces is rare in empty renovation rooms
+- ~~Multi-floor semi-transparency stacking~~ — most alpha scans are single-floor
+- ~~React/Next.js web app~~ — vanilla JS + Three.js CDN is faster to ship and sufficient for alpha
+- ~~SVG floor plan generation (Stage 7)~~ — Canvas 2D rendering in the browser is good enough
+- ~~Component panel with icons~~ — detected components list is sufficient without custom icons
 
 ---
 
@@ -548,6 +556,157 @@ Accessed via unique link (e.g., `https://app.quoterra.co/quote/{rfq_id}`). No lo
 |--------|------|
 | **New** | `cloud/web/contractor_view.html` — static page with polygon + 3D rendering |
 | **Modify** | `cloud/api/main.py` — contractor-view endpoint |
+
+---
+
+## Step 7A: Wall/Floor/Ceiling Texture Projection
+
+Without textures, the contractor sees polygon outlines and numbers but can't see the actual room. Texture projection gives each surface a camera-captured image — turning abstract geometry into a recognizable photo of each wall, the floor, and the ceiling. This is the difference between "dimensions of a room" and "I can see the room."
+
+Scoped from `VISUALIZATION_PLAN.md` Stage 5, cut down for alpha: multi-keyframe blending (required — no single keyframe covers a full surface), no seam blending between adjacent surfaces, no depth-based occlusion.
+
+### Cloud Processor Changes
+
+**New file:** `cloud/processor/pipeline/texture_projection.py`
+
+Core function: `project_textures(keyframes, simplified_surfaces, camera_intrinsics) → dict[surface_id, texture_jpg_bytes]`
+
+For each simplified surface (wall quad, floor polygon, ceiling polygon):
+
+1. **Build surface UV space**: For a wall — U = horizontal position along wall edge, V = vertical from floor to ceiling. For floor/ceiling — U = X position, V = Z position within the polygon bounding box.
+
+2. **Score and rank keyframes per surface**: For each surface, score every keyframe by:
+   - Viewing angle (prefer perpendicular to surface normal)
+   - Distance (prefer closer)
+   - Coverage (prefer keyframes where surface occupies more pixels in the image)
+   - Select the top 3-5 keyframes per surface (a single keyframe can't cover a full wall/floor).
+
+3. **Project texels with multi-keyframe blending**: For each pixel in the output texture image:
+   - UV → 3D world position on the surface
+   - For each selected keyframe, project 3D → 2D pixel using `P = K × [R|t]`
+   - Check if the projected pixel falls within the keyframe image bounds
+   - Sample the keyframe JPEG at those pixel coordinates (bilinear interpolation)
+   - Blend contributions from multiple keyframes using weighted average (weight = viewing angle score × distance score). This fills the full surface even when no single keyframe sees it all.
+   - Texels with zero keyframe coverage are marked as missing (black).
+
+4. **Output**: One JPEG per surface (`wall_0.jpg`, `wall_1.jpg`, `floor.jpg`, `ceiling.jpg`). Resolution: ~100 px/meter for walls, ~50 px/meter for floor/ceiling. Max 2048×2048 per texture. Target ≥ 90% texel coverage per surface.
+
+**File to modify:** `cloud/processor/main.py`
+
+After `compute_room_metrics()`, if annotation polygon is present:
+- Build simplified surfaces from the polygon edges (walls) + polygon face (floor/ceiling)
+- Call `project_textures()` with the scan's keyframes
+- Upload texture JPEGs to GCS: `scans/{rfq_id}/{scan_id}/textures/wall_0.jpg`, etc.
+- Store texture manifest in DB (or alongside scan results)
+
+**File to modify:** `cloud/processor/requirements.txt`
+
+Add `Pillow>=10.0` for JPEG encoding and image sampling.
+
+### Database Changes
+
+**New file:** `cloud/migrations/003_add_texture_urls.sql`
+
+```sql
+ALTER TABLE scanned_rooms ADD COLUMN IF NOT EXISTS texture_manifest JSONB DEFAULT NULL;
+-- texture_manifest: {"wall_0": "textures/wall_0.jpg", "floor": "textures/floor.jpg", ...}
+```
+
+### API Changes
+
+**File to modify:** `cloud/api/main.py`
+
+- Include `texture_manifest` in contractor-view response per room
+- Generate signed URLs for each texture file
+
+### Test Cases — Step 7A
+
+| ID | Test | Pass Criteria |
+|----|------|---------------|
+| 7A.1 | Wall texture is recognizable | wall_0.jpg shows actual wall from scan (paint, outlets visible) |
+| 7A.2 | Floor texture covers polygon | floor.jpg has ≥ 90% non-black texels |
+| 7A.3 | Texture resolution scales with surface | Larger walls get more pixels; ~100 px/m |
+| 7A.4 | Multi-keyframe blending fills surface | No large gaps where single keyframe lacks coverage |
+| 7A.5 | Textures uploaded to GCS | Files exist at scans/{rfq_id}/{scan_id}/textures/*.jpg |
+| 7A.6 | Texture manifest stored in DB | texture_manifest JSONB is populated for processed scan |
+
+### Files Summary — Step 7A
+
+| Action | File |
+|--------|------|
+| **New** | `cloud/processor/pipeline/texture_projection.py` — per-surface texture extraction |
+| **New** | `cloud/migrations/003_add_texture_urls.sql` — texture manifest column |
+| **Modify** | `cloud/processor/main.py` — call texture projection after metrics, upload to GCS |
+| **Modify** | `cloud/processor/requirements.txt` — add Pillow |
+| **Modify** | `cloud/api/main.py` — return texture URLs in contractor-view |
+
+---
+
+## Step 7B: Interactive Contractor Web Viewer
+
+Replace the static contractor page with an interactive 3D room experience. The contractor sees textured walls/floor/ceiling, can orbit and zoom, toggle measurement annotations, and navigate between rooms via the floor plan. This is what makes the scan worth paying for.
+
+Scoped from `WEB_VIEWER_PLAN.md` Stage 9, cut to MVP: single-page vanilla JS (no React/Next.js), Three.js for 3D, annotation overlay, floor plan sidebar. No multi-floor stacking, no auth, no component panel.
+
+### Web Viewer Page
+
+**File to modify:** `cloud/web/contractor_view.html` (replace current static page)
+
+The page becomes an interactive viewer with two panels:
+
+**Left panel — Floor Plan (25% width):**
+- Canvas 2D floor plan (existing polygon renderer)
+- Clickable rooms — click a room to load its 3D model in the main panel
+- Active room highlighted, inactive rooms dimmed
+- Room labels + area inside each polygon
+
+**Main panel — 3D Room Viewer (75% width):**
+- Three.js scene with OrbitControls (orbit, pan, zoom)
+- Textured surfaces: each wall/floor/ceiling as a quad with its projected texture JPEG
+- If no textures available, fall back to classification-colored flat surfaces
+- Measurement overlay (toggle on/off):
+  - Wall lengths as 3D labels at ceiling line
+  - Ceiling height as vertical label in corner
+  - Floor area label centered on floor
+- Room metrics sidebar: floor area, wall area, ceiling height, perimeter
+
+**Bottom bar:**
+- "Submit Quote" email button (existing)
+- Room label + status
+
+### API Changes
+
+**File to modify:** `cloud/api/main.py`
+
+Extend contractor-view response per room:
+- `texture_urls`: dict of signed URLs for each surface texture (`{"wall_0": "https://...", ...}`)
+- `wall_segments_ft`: array of `{start: [x,z], end: [x,z], length_ft: float, height_ft: float}` for 3D wall construction
+
+### Three.js Dependencies
+
+Load via CDN (no build step for alpha):
+- `three.min.js` — core renderer
+- `OrbitControls.js` — camera controls
+- `CSS2DRenderer.js` — measurement label overlay
+
+### Test Cases — Step 7B
+
+| ID | Test | Pass Criteria |
+|----|------|---------------|
+| 7B.1 | 3D model loads in browser | Textured room renders within 3 seconds |
+| 7B.2 | Orbit/pan/zoom controls work | Camera moves smoothly; no clipping through walls |
+| 7B.3 | Measurement labels visible | Wall lengths at ceiling, floor area centered, ceiling height in corner |
+| 7B.4 | Measurement toggle works | "Show/Hide Measurements" button toggles all labels |
+| 7B.5 | Floor plan room click → 3D | Clicking room in floor plan loads that room's model |
+| 7B.6 | Untextured fallback | Room without textures shows colored flat surfaces |
+| 7B.7 | Mobile browser works | Touch orbit/zoom on iOS Safari; responsive layout |
+
+### Files Summary — Step 7B
+
+| Action | File |
+|--------|------|
+| **Modify** | `cloud/web/contractor_view.html` — replace static page with Three.js interactive viewer |
+| **Modify** | `cloud/api/main.py` — add texture URLs + wall segments to contractor-view response |
 
 ---
 

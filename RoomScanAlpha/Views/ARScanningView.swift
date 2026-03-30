@@ -94,8 +94,11 @@ struct ARScanningView: UIViewRepresentable {
             }
         }
 
+        /// Render every 4th face — wireframe overlay doesn't need full density.
+        private static let wireframeStride = 4
+
         private func buildMeshNode(for meshAnchor: ARMeshAnchor) -> SCNNode {
-            let geometry = MeshExtractor.buildLocalSCNGeometry(from: meshAnchor)
+            let geometry = MeshExtractor.buildLocalSCNGeometry(from: meshAnchor, faceStride: Self.wireframeStride)
             let color = MeshExtractor.classificationColor(
                 for: MeshExtractor.dominantClassification(for: meshAnchor)
             )

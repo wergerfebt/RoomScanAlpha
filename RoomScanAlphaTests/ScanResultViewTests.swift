@@ -55,7 +55,11 @@ final class ScanResultViewTests: XCTestCase {
             ceilingHeightFt: nil,
             perimeterLinearFt: nil,
             detectedComponents: nil,
-            scanDimensions: nil
+            scanDimensions: nil,
+            roomPolygonFt: nil,
+            wallHeightsFt: nil,
+            polygonSource: nil,
+            scanMeshUrl: nil
         )
 
         viewModel.scanResult = failedResult
@@ -76,7 +80,11 @@ final class ScanResultViewTests: XCTestCase {
             ceilingHeightFt: nil,
             perimeterLinearFt: nil,
             detectedComponents: nil,
-            scanDimensions: nil
+            scanDimensions: nil,
+            roomPolygonFt: nil,
+            wallHeightsFt: nil,
+            polygonSource: nil,
+            scanMeshUrl: nil
         )
 
         viewModel.scanResult = failedResult
@@ -105,7 +113,11 @@ final class ScanResultViewTests: XCTestCase {
                 ceilingHeightFt: nil,
                 perimeterLinearFt: nil,
                 detectedComponents: nil,
-                scanDimensions: nil
+                scanDimensions: nil,
+                roomPolygonFt: nil,
+                wallHeightsFt: nil,
+                polygonSource: nil,
+                scanMeshUrl: nil
             )
             XCTAssertEqual(result.status, status,
                            "ScanResult should store status '\(status)' matching SCANNED_ROOMS enum")
@@ -121,7 +133,11 @@ final class ScanResultViewTests: XCTestCase {
             ceilingHeightFt: 8.5,
             perimeterLinearFt: 62.0,
             detectedComponents: ["hardwood", "baseboards", "cabinets"],
-            scanDimensions: ["x_m": 4.5, "y_m": 2.6, "z_m": 5.2]
+            scanDimensions: ["x_m": 4.5, "y_m": 2.6, "z_m": 5.2],
+            roomPolygonFt: nil,
+            wallHeightsFt: nil,
+            polygonSource: nil,
+            scanMeshUrl: nil
         )
 
         viewModel.scanResult = readyResult
@@ -146,7 +162,11 @@ final class ScanResultViewTests: XCTestCase {
             ceilingHeightFt: nil,
             perimeterLinearFt: nil,
             detectedComponents: nil,
-            scanDimensions: ["x_m": 3.8, "y_m": 2.4, "z_m": 4.1]
+            scanDimensions: ["x_m": 3.8, "y_m": 2.4, "z_m": 4.1],
+            roomPolygonFt: nil,
+            wallHeightsFt: nil,
+            polygonSource: nil,
+            scanMeshUrl: nil
         )
 
         viewModel.scanResult = readyResult
@@ -168,7 +188,11 @@ final class ScanResultViewTests: XCTestCase {
             ceilingHeightFt: nil,
             perimeterLinearFt: nil,
             detectedComponents: nil,
-            scanDimensions: nil
+            scanDimensions: nil,
+            roomPolygonFt: nil,
+            wallHeightsFt: nil,
+            polygonSource: nil,
+            scanMeshUrl: nil
         )
 
         viewModel.scanResult = readyResult
@@ -187,7 +211,11 @@ final class ScanResultViewTests: XCTestCase {
             ceilingHeightFt: nil,
             perimeterLinearFt: nil,
             detectedComponents: nil,
-            scanDimensions: nil
+            scanDimensions: nil,
+            roomPolygonFt: nil,
+            wallHeightsFt: nil,
+            polygonSource: nil,
+            scanMeshUrl: nil
         )
 
         viewModel.prepareScan()

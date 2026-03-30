@@ -52,6 +52,11 @@
 		B1111111000000000000000C /* AccessibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000C /* AccessibilityTests.swift */; };
 		A11111110000000000000025 /* FrameQualityScorer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000033 /* FrameQualityScorer.swift */; };
 		B1111111000000000000000D /* FrameQualityScorerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000D /* FrameQualityScorerTests.swift */; };
+		A11111110000000000000026 /* CornerAnnotation.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000034 /* CornerAnnotation.swift */; };
+		A11111110000000000000027 /* CornerAnnotationViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000035 /* CornerAnnotationViewModel.swift */; };
+		A11111110000000000000028 /* CornerAnnotationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000036 /* CornerAnnotationView.swift */; };
+		B1111111000000000000000E /* CornerAnnotationViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000E /* CornerAnnotationViewModelTests.swift */; };
+		A11111110000000000000029 /* FloorPlanView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000037 /* FloorPlanView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -109,7 +114,12 @@
 		B1000000000000000000000C /* AccessibilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessibilityTests.swift; sourceTree = "<group>"; };
 		A10000000000000000000033 /* FrameQualityScorer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameQualityScorer.swift; sourceTree = "<group>"; };
 		B1000000000000000000000D /* FrameQualityScorerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameQualityScorerTests.swift; sourceTree = "<group>"; };
+		A10000000000000000000034 /* CornerAnnotation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CornerAnnotation.swift; sourceTree = "<group>"; };
+		A10000000000000000000035 /* CornerAnnotationViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CornerAnnotationViewModel.swift; sourceTree = "<group>"; };
+		A10000000000000000000036 /* CornerAnnotationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CornerAnnotationView.swift; sourceTree = "<group>"; };
+		B1000000000000000000000E /* CornerAnnotationViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CornerAnnotationViewModelTests.swift; sourceTree = "<group>"; };
 		B10000000000000000000010 /* RoomScanAlphaTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RoomScanAlphaTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A10000000000000000000037 /* FloorPlanView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloorPlanView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -167,6 +177,7 @@
 				A10000000000000000000022 /* CapturedFrame.swift */,
 				A1000000000000000000002C /* RFQContext.swift */,
 				A10000000000000000000031 /* ScanRecord.swift */,
+				A10000000000000000000034 /* CornerAnnotation.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -175,6 +186,7 @@
 			isa = PBXGroup;
 			children = (
 				A10000000000000000000006 /* ScanViewModel.swift */,
+				A10000000000000000000035 /* CornerAnnotationViewModel.swift */,
 			);
 			path = ViewModels;
 			sourceTree = "<group>";
@@ -191,6 +203,8 @@
 				A1000000000000000000002E /* RoomLabelView.swift */,
 				A10000000000000000000030 /* MeshViewerView.swift */,
 				A10000000000000000000032 /* ScanHistoryView.swift */,
+				A10000000000000000000036 /* CornerAnnotationView.swift */,
+				A10000000000000000000037 /* FloorPlanView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -251,6 +265,7 @@
 				B1000000000000000000000B /* ErrorRecoveryTests.swift */,
 				B1000000000000000000000C /* AccessibilityTests.swift */,
 				B1000000000000000000000D /* FrameQualityScorerTests.swift */,
+				B1000000000000000000000E /* CornerAnnotationViewModelTests.swift */,
 			);
 			path = RoomScanAlphaTests;
 			sourceTree = "<group>";
@@ -390,6 +405,10 @@
 				A11111110000000000000023 /* ScanRecord.swift in Sources */,
 				A11111110000000000000024 /* ScanHistoryView.swift in Sources */,
 				A11111110000000000000025 /* FrameQualityScorer.swift in Sources */,
+				A11111110000000000000026 /* CornerAnnotation.swift in Sources */,
+				A11111110000000000000027 /* CornerAnnotationViewModel.swift in Sources */,
+				A11111110000000000000028 /* CornerAnnotationView.swift in Sources */,
+				A11111110000000000000029 /* FloorPlanView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -410,6 +429,7 @@
 				B1111111000000000000000B /* ErrorRecoveryTests.swift in Sources */,
 				B1111111000000000000000C /* AccessibilityTests.swift in Sources */,
 				B1111111000000000000000D /* FrameQualityScorerTests.swift in Sources */,
+				B1111111000000000000000E /* CornerAnnotationViewModelTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

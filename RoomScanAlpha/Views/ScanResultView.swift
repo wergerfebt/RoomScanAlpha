@@ -8,6 +8,9 @@ struct ScanResultView: View {
     let onScanAnother: (() -> Void)?
 
     @State private var showMeshViewer = false
+    @State private var showFloorPlan = false
+    @State private var showRemoteMesh = false
+    @State private var selectedMeshUrl: URL?
 
     var body: some View {
         ScrollView {
@@ -39,6 +42,21 @@ struct ScanResultView: View {
                     .padding(.horizontal, 40)
                 }
 
+                if floorPlanPolygon != nil {
+                    Button {
+                        showFloorPlan = true
+                    } label: {
+                        Label("View Floor Plan", systemImage: "square.split.bottomrightquarter")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(.indigo.opacity(0.1))
+                            .foregroundStyle(.indigo)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+                    .padding(.horizontal, 40)
+                }
+
                 if let onScanAnother {
                     Button(action: onScanAnother) {
                         Label("Scan Another Room", systemImage: "plus.viewfinder")
@@ -62,6 +80,32 @@ struct ScanResultView: View {
         }
         .sheet(isPresented: $showMeshViewer) {
             MeshViewerSheet(meshAnchors: meshAnchors)
+        }
+        .sheet(isPresented: $showFloorPlan) {
+            if let polygon = floorPlanPolygon {
+                let scanId = viewModel.scanResult?.scanId ?? viewModel.lastScanId ?? "scan"
+                let room = FloorPlanRoom(
+                    id: scanId,
+                    label: viewModel.roomLabel.isEmpty ? "Room" : viewModel.roomLabel,
+                    polygonFt: polygon,
+                    areaSqft: viewModel.scanResult?.floorAreaSqft ?? floorPlanAreaSqft,
+                    scanMeshUrl: viewModel.scanResult?.scanMeshUrl
+                )
+                FloorPlanSheet(rooms: [room], meshAnchors: meshAnchors) { tapped in
+                    showFloorPlan = false
+                    if let urlStr = tapped.scanMeshUrl, let url = URL(string: urlStr) {
+                        selectedMeshUrl = url
+                        showRemoteMesh = true
+                    } else if !meshAnchors.isEmpty {
+                        showMeshViewer = true
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showRemoteMesh) {
+            if let url = selectedMeshUrl {
+                MeshViewerSheet(meshAnchors: [], meshUrl: url)
+            }
         }
     }
 
@@ -203,6 +247,36 @@ struct ScanResultView: View {
                     .foregroundStyle(.tertiary)
             }
         }
+    }
+
+    // MARK: - Floor Plan Data
+
+    private static let mToFt: Double = 3.28084
+
+    /// Polygon in feet: prefer cloud-returned data, fall back to local annotation converted to feet.
+    private var floorPlanPolygon: [[Double]]? {
+        if let polygon = viewModel.scanResult?.roomPolygonFt, !polygon.isEmpty {
+            return polygon
+        }
+        guard let annotation = viewModel.cornerAnnotation else { return nil }
+        guard annotation.corners_xz.count >= 3 else { return nil }
+        return annotation.corners_xz.map { corner in
+            [Double(corner[0]) * Self.mToFt, Double(corner[1]) * Self.mToFt]
+        }
+    }
+
+    /// Area in sq ft from local annotation (shoelace on meters, then convert).
+    private var floorPlanAreaSqft: Double? {
+        guard let annotation = viewModel.cornerAnnotation else { return nil }
+        let corners = annotation.corners_xz
+        guard corners.count >= 3 else { return nil }
+        var sum: Double = 0
+        for i in 0..<corners.count {
+            let j = (i + 1) % corners.count
+            sum += Double(corners[i][0]) * Double(corners[j][1]) - Double(corners[j][0]) * Double(corners[i][1])
+        }
+        let areaM2 = abs(sum) / 2.0
+        return (areaM2 * 10.7639 * 10).rounded() / 10 // sqm → sqft, round to 1 decimal
     }
 
     // MARK: - Helpers

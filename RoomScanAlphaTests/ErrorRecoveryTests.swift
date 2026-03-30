@@ -87,7 +87,8 @@ final class ErrorRecoveryTests: XCTestCase {
         vm.scanResult = CloudUploader.ScanResult(
             scanId: "old", status: "scan_ready",
             floorAreaSqft: 100, wallAreaSqft: nil, ceilingHeightFt: nil,
-            perimeterLinearFt: nil, detectedComponents: nil, scanDimensions: nil
+            perimeterLinearFt: nil, detectedComponents: nil, scanDimensions: nil,
+            roomPolygonFt: nil, wallHeightsFt: nil, polygonSource: nil, scanMeshUrl: nil
         )
         vm.showQualityWarning = true
 
