@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Decimation Sweep: 5K / 10K / 20K / 50K faces</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #111; overflow: hidden; font-family: -apple-system, sans-serif; }
+  .tabs { display: flex; background: #222; border-bottom: 2px solid #333; }
+  .tab { padding: 8px 16px; cursor: pointer; color: #888; font-size: 13px; font-weight: 600; border-bottom: 3px solid transparent; }
+  .tab:hover { color: #ccc; }
+  .tab.active { color: #fff; border-bottom-color: #2980b9; }
+  .container { display: flex; height: calc(100vh - 40px); }
+  .panel { flex: 1; position: relative; border-right: 2px solid #333; }
+  .panel:last-child { border-right: none; }
+  .label { position: absolute; top: 8px; left: 8px; z-index: 10; padding: 4px 10px;
+           border-radius: 4px; font-size: 11px; font-weight: 700; background: rgba(0,0,0,0.8); }
+  .hint { position: fixed; bottom: 8px; left: 50%; transform: translateX(-50%);
+          background: rgba(0,0,0,0.8); color: #888; font-size: 11px; padding: 4px 12px;
+          border-radius: 4px; z-index: 10; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<div class="tabs">
+  <div class="tab active" onclick="showPair('5k','10k')">5K vs 10K</div>
+  <div class="tab" onclick="showPair('10k','20k')">10K vs 20K</div>
+  <div class="tab" onclick="showPair('20k','50k')">20K vs 50K</div>
+  <div class="tab" onclick="showPair('50k','full')">50K vs 312K</div>
+</div>
+<div class="container" id="viewer"></div>
+<div class="hint">Drag to look. Less duplication = better. Black holes = need more faces.</div>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.162.0/examples/jsm/"
+}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
+
+const CX = -0.349, CY = 0.264, CZ = 0.584;
+
+const configs = {
+  '5k':   { dir: 'test_B',   label: '5K faces',   color: '#e74c3c' },
+  '10k':  { dir: 'test_10k', label: '10K faces',  color: '#e67e22' },
+  '20k':  { dir: 'test_20k', label: '20K faces',  color: '#2ecc71' },
+  '50k':  { dir: 'test_50k', label: '50K faces',  color: '#3498db' },
+  'full': { dir: '.',        label: '312K faces',  color: '#9b59b6',
+            mtl: 'textured_smooth.mtl', obj: 'textured_smooth.obj' },
+};
+
+let views = [];
+
+function createView(container, cfg) {
+  const w = container.clientWidth, h = container.clientHeight;
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(w, h);
+  renderer.setPixelRatio(window.devicePixelRatio);
+  container.appendChild(renderer.domElement);
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x111111);
+  const camera = new THREE.PerspectiveCamera(80, w/h, 0.01, 100);
+  camera.position.set(CX, CY, CZ);
+
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.target.set(CX+0.01, CY, CZ);
+  controls.enableZoom = false;
+  controls.enablePan = false;
+  controls.rotateSpeed = -0.5;
+  controls.update();
+
+  const mtlFile = cfg.mtl || 'textured.mtl';
+  const objFile = cfg.obj || 'textured.obj';
+
+  const mtlLoader = new MTLLoader();
+  mtlLoader.setPath(cfg.dir + '/');
+  mtlLoader.load(mtlFile, (materials) => {
+    materials.preload();
+    const objLoader = new OBJLoader();
+    objLoader.setMaterials(materials);
+    objLoader.setPath(cfg.dir + '/');
+    objLoader.load(objFile, (obj) => {
+      obj.traverse(child => {
+        if (child.isMesh && child.material.map) {
+          child.material = new THREE.MeshBasicMaterial({ map: child.material.map, side: THREE.DoubleSide });
+        }
+      });
+      scene.add(obj);
+    });
+  });
+
+  const label = document.createElement('div');
+  label.className = 'label';
+  label.style.color = cfg.color;
+  label.style.border = `2px solid ${cfg.color}`;
+  label.textContent = cfg.label;
+  container.appendChild(label);
+
+  return { renderer, scene, camera, controls, container };
+}
+
+function syncFrom(src) {
+  views.forEach(v => {
+    if (v === src) return;
+    v.camera.position.copy(src.camera.position);
+    v.camera.quaternion.copy(src.camera.quaternion);
+    v.controls.target.copy(src.controls.target);
+    v.controls.update();
+  });
+}
+
+window.showPair = function(left, right) {
+  views.forEach(v => { v.renderer.dispose(); v.container.innerHTML = ''; });
+  views = [];
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  event.target.classList.add('active');
+
+  const viewer = document.getElementById('viewer');
+  viewer.innerHTML = '';
+  const lp = document.createElement('div'); lp.className = 'panel';
+  const rp = document.createElement('div'); rp.className = 'panel';
+  viewer.appendChild(lp); viewer.appendChild(rp);
+
+  setTimeout(() => {
+    const vL = createView(lp, configs[left]);
+    const vR = createView(rp, configs[right]);
+    views = [vL, vR];
+    vL.controls.addEventListener('change', () => syncFrom(vL));
+    vR.controls.addEventListener('change', () => syncFrom(vR));
+  }, 50);
+};
+
+function animate() {
+  requestAnimationFrame(animate);
+  views.forEach(v => v.renderer.render(v.scene, v.camera));
+}
+animate();
+
+window.addEventListener('resize', () => {
+  views.forEach(v => {
+    v.renderer.setSize(v.container.clientWidth, v.container.clientHeight);
+    v.camera.aspect = v.container.clientWidth / v.container.clientHeight;
+    v.camera.updateProjectionMatrix();
+  });
+});
+
+showPair('5k', '10k');
+</script>
+</body>
+</html>

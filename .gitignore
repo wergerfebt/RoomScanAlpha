@@ -20,3 +20,15 @@ __pycache__/
 
 # Test fixture artifacts
 cloud/processor/tests/fixtures/*.ply
+
+# Local scan test data (large binary files)
+cloud/processor/tests/local_scan/scan_*/
+cloud/processor/tests/local_scan/openmvs_work/images/
+cloud/processor/tests/local_scan/openmvs_work/test_*/
+cloud/processor/tests/local_scan/openmvs_work/*.mvs
+cloud/processor/tests/local_scan/openmvs_work/*.ply
+cloud/processor/tests/local_scan/openmvs_work/*.obj
+cloud/processor/tests/local_scan/openmvs_work/*.jpg
+cloud/processor/tests/local_scan/openmvs_work/*.log
+cloud/processor/tests/local_scan/openmvs_work/*.db
+cloud/processor/tests/local_scan/openmvs_work/sparse*/

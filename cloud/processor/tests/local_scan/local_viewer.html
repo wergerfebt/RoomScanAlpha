@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Room 3 - Local Texture Comparison</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, sans-serif; background: #1a1a1a; color: #f5f5f7; overflow: hidden; }
+  .container { display: flex; height: 100vh; }
+  .panel { flex: 1; position: relative; border-right: 2px solid #444; }
+  .panel:last-child { border-right: none; }
+  .label { position: absolute; top: 12px; left: 12px; z-index: 10; background: rgba(0,0,0,0.7);
+           padding: 6px 14px; border-radius: 6px; font-size: 14px; font-weight: 600; }
+  .label.baseline { border: 2px solid #ff6b6b; color: #ff6b6b; }
+  .label.refined { border: 2px solid #51cf66; color: #51cf66; }
+  canvas { display: block; width: 100%; height: 100%; }
+  .controls-hint { position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);
+                   background: rgba(0,0,0,0.7); padding: 6px 16px; border-radius: 6px;
+                   font-size: 12px; color: #888; z-index: 10; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="panel" id="panel-baseline">
+    <div class="label baseline">BASELINE</div>
+  </div>
+  <div class="panel" id="panel-refined">
+    <div class="label refined">REFINED</div>
+  </div>
+</div>
+<div class="controls-hint">Click + drag to look around. Both views are synced.</div>
+
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.module.js",
+               "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.162.0/examples/jsm/" } }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// Room geometry (meters, from metadata)
+const cornersXZ = [[1.8689312,-1.1887679],[1.9350071,-0.66520935],[2.0435762,-0.6729997],[2.5699942,2.9428613],[-1.0744928,3.4585428],[-1.7414287,-0.6152553]];
+const cornersY = [1.6567544,1.7107171,1.6543949,1.68211,1.6818801,1.6501821];
+const avgCeilingY = cornersY.reduce((s,v) => s+v, 0) / cornersY.length;
+const ceilingHeightM = avgCeilingY; // floor is at Y=0 in build_surfaces_from_annotation
+const floorY = avgCeilingY - ceilingHeightM; // = 0
+
+const cx = cornersXZ.reduce((s,p) => s+p[0], 0) / cornersXZ.length;
+const cz = cornersXZ.reduce((s,p) => s+p[1], 0) / cornersXZ.length;
+
+function createScene(container, textureDir) {
+  const w = container.clientWidth, h = container.clientHeight;
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(w, h);
+  renderer.setPixelRatio(window.devicePixelRatio);
+  container.appendChild(renderer.domElement);
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x111111);
+
+  const camera = new THREE.PerspectiveCamera(75, w/h, 0.01, 100);
+  const eyeHeight = floorY + Math.min(1.6, ceilingHeightM * 0.65);
+  camera.position.set(cx, eyeHeight, cz);
+
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.target.set(cx + 0.01, eyeHeight, cz);
+  controls.enableZoom = false;
+  controls.enablePan = false;
+  controls.rotateSpeed = -0.5;
+  controls.update();
+
+  const loader = new THREE.TextureLoader();
+
+  // Walls
+  for (let i = 0; i < cornersXZ.length; i++) {
+    const j = (i + 1) % cornersXZ.length;
+    const [x0,z0] = cornersXZ[i], [x1,z1] = cornersXZ[j];
+    const h0 = cornersY[i], h1 = cornersY[j];
+
+    const verts = new Float32Array([
+      x0,floorY,z0, x0,h0,z0, x1,h1,z1,
+      x0,floorY,z0, x1,h1,z1, x1,floorY,z1,
+    ]);
+    const uvs = new Float32Array([0,0, 0,1, 1,1, 0,0, 1,1, 1,0]);
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(verts, 3));
+    geom.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+
+    const texUrl = `${textureDir}/wall_${i}.jpg`;
+    const tex = loader.load(texUrl);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.flipY = false;
+    const mat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide });
+    scene.add(new THREE.Mesh(geom, mat));
+  }
+
+  // Floor
+  {
+    const n = cornersXZ.length;
+    const triVerts = [], triUvs = [];
+    const minX = Math.min(...cornersXZ.map(p=>p[0])), maxX = Math.max(...cornersXZ.map(p=>p[0]));
+    const minZ = Math.min(...cornersXZ.map(p=>p[1])), maxZ = Math.max(...cornersXZ.map(p=>p[1]));
+    const rangeX = maxX-minX || 1, rangeZ = maxZ-minZ || 1;
+    for (let i = 0; i < n; i++) {
+      const j = (i+1)%n;
+      triVerts.push(cx,floorY,cz, cornersXZ[i][0],floorY,cornersXZ[i][1], cornersXZ[j][0],floorY,cornersXZ[j][1]);
+      triUvs.push((cx-minX)/rangeX,(cz-minZ)/rangeZ, (cornersXZ[i][0]-minX)/rangeX,(cornersXZ[i][1]-minZ)/rangeZ,
+                   (cornersXZ[j][0]-minX)/rangeX,(cornersXZ[j][1]-minZ)/rangeZ);
+    }
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(triVerts), 3));
+    geom.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(triUvs), 2));
+    const tex = loader.load(`${textureDir}/floor.jpg`);
+    tex.colorSpace = THREE.SRGBColorSpace; tex.flipY = false;
+    scene.add(new THREE.Mesh(geom, new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide })));
+  }
+
+  // Ceiling
+  {
+    const n = cornersXZ.length;
+    const triVerts = [], triUvs = [];
+    const minX = Math.min(...cornersXZ.map(p=>p[0])), maxX = Math.max(...cornersXZ.map(p=>p[0]));
+    const minZ = Math.min(...cornersXZ.map(p=>p[1])), maxZ = Math.max(...cornersXZ.map(p=>p[1]));
+    const rangeX = maxX-minX || 1, rangeZ = maxZ-minZ || 1;
+    for (let i = 0; i < n; i++) {
+      const j = (i+1)%n;
+      triVerts.push(cx,avgCeilingY,cz, cornersXZ[j][0],avgCeilingY,cornersXZ[j][1], cornersXZ[i][0],avgCeilingY,cornersXZ[i][1]);
+      triUvs.push((cx-minX)/rangeX,(cz-minZ)/rangeZ, (cornersXZ[j][0]-minX)/rangeX,(cornersXZ[j][1]-minZ)/rangeZ,
+                   (cornersXZ[i][0]-minX)/rangeX,(cornersXZ[i][1]-minZ)/rangeZ);
+    }
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(triVerts), 3));
+    geom.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(triUvs), 2));
+    const tex = loader.load(`${textureDir}/ceiling.jpg`);
+    tex.colorSpace = THREE.SRGBColorSpace; tex.flipY = false;
+    scene.add(new THREE.Mesh(geom, new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide })));
+  }
+
+  return { renderer, scene, camera, controls };
+}
+
+const left = createScene(document.getElementById('panel-baseline'), 'textures_baseline');
+const right = createScene(document.getElementById('panel-refined'), 'textures_refined');
+
+// Sync cameras: when one moves, copy to the other
+function syncCameras(src, dst) {
+  dst.camera.position.copy(src.camera.position);
+  dst.camera.quaternion.copy(src.camera.quaternion);
+  dst.controls.target.copy(src.controls.target);
+  dst.controls.update();
+}
+
+left.controls.addEventListener('change', () => syncCameras(left, right));
+right.controls.addEventListener('change', () => syncCameras(right, left));
+
+function animate() {
+  requestAnimationFrame(animate);
+  left.renderer.render(left.scene, left.camera);
+  right.renderer.render(right.scene, right.camera);
+}
+animate();
+
+window.addEventListener('resize', () => {
+  [left, right].forEach(v => {
+    const p = v.renderer.domElement.parentElement;
+    v.renderer.setSize(p.clientWidth, p.clientHeight);
+    v.camera.aspect = p.clientWidth / p.clientHeight;
+    v.camera.updateProjectionMatrix();
+  });
+});
+</script>
+</body>
+</html>

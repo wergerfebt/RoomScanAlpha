@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>OpenMVS Interior Viewer</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #111; overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .info { position: fixed; top: 10px; left: 10px; color: #fff; font: 14px monospace;
+          background: rgba(0,0,0,0.7); padding: 8px 12px; border-radius: 6px; z-index: 10; }
+</style>
+</head>
+<body>
+<div class="info">Click + drag to look around from inside the room</div>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.162.0/examples/jsm/"
+}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(window.devicePixelRatio);
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x111111);
+
+// Camera positioned at mesh centroid, roughly eye height
+const camera = new THREE.PerspectiveCamera(80, window.innerWidth / window.innerHeight, 0.01, 100);
+camera.position.set(-0.349, 0.264, 0.584);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(-0.349 + 0.01, 0.264, 0.584);
+controls.enableZoom = false;
+controls.enablePan = false;
+controls.rotateSpeed = -0.5;
+controls.update();
+
+// Load MTL + OBJ
+const mtlLoader = new MTLLoader();
+mtlLoader.load('textured.mtl', (materials) => {
+  materials.preload();
+
+  // Force opacity to 1 and double-sided rendering
+  Object.values(materials.materials).forEach(mat => {
+    mat.opacity = 1.0;
+    mat.transparent = false;
+    mat.side = THREE.DoubleSide;
+  });
+
+  const objLoader = new OBJLoader();
+  objLoader.setMaterials(materials);
+  objLoader.load('textured.obj', (obj) => {
+    obj.traverse(child => {
+      if (child.isMesh && child.material.map) {
+        // Replace with MeshBasicMaterial (no lighting needed for photogrammetry)
+        child.material = new THREE.MeshBasicMaterial({
+          map: child.material.map,
+          side: THREE.DoubleSide,
+        });
+      } else if (child.isMesh) {
+        child.material.side = THREE.DoubleSide;
+      }
+    });
+    scene.add(obj);
+    console.log('Mesh loaded');
+  });
+});
+
+function animate() {
+  requestAnimationFrame(animate);
+  renderer.render(scene, camera);
+}
+animate();
+
+window.addEventListener('resize', () => {
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+});
+</script>
+</body>
+</html>
