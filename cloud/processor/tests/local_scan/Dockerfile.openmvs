@@ -1,0 +1,39 @@
+# Patch OpenMVS seam leveling crash (unordered_map::at on unassigned faces)
+# Builds on top of furbrain/openmvs:latest which already compiles on ARM64.
+#
+# Usage: docker build -f Dockerfile.openmvs -t openmvs:patched .
+
+FROM furbrain/openmvs:latest AS builder
+
+USER root
+
+WORKDIR /tmp
+RUN git clone https://github.com/cdcseacave/openMVS.git --branch develop 2>/dev/null \
+    && cd openMVS && git checkout 7ba682d316e8fbe08c499c8bd719d327f9f7044b
+RUN git clone https://github.com/cdcseacave/VCG.git vcglib 2>/dev/null
+
+# Patch SceneTexture.cpp: guard .at() calls with .count() checks
+# The crash: vertpatch2row.at(idxPatch) throws when face has no assigned patch
+COPY patch_seam.py /tmp/patch_seam.py
+RUN cd /tmp/openMVS && python3 /tmp/patch_seam.py libs/MVS/SceneTexture.cpp
+
+# Rebuild
+RUN mkdir -p /tmp/build && cd /tmp/build && \
+    cmake /tmp/openMVS \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DVCG_ROOT=/tmp/vcglib \
+      -DOpenMVS_USE_CUDA=OFF \
+      -DOpenMVS_USE_OPENMP=ON \
+      -DCGAL_DIR=/usr/local/lib/cmake/CGAL \
+      -DBUILD_SHARED_LIBS=OFF \
+    && make -j$(nproc) TextureMesh InterfaceCOLMAP
+
+# Copy patched binaries into final image
+FROM furbrain/openmvs:latest
+
+USER root
+COPY --from=builder /tmp/build/bin/TextureMesh /usr/local/bin/OpenMVS/TextureMesh
+COPY --from=builder /tmp/build/bin/InterfaceCOLMAP /usr/local/bin/OpenMVS/InterfaceCOLMAP
+USER ubuntu
+
+WORKDIR /work

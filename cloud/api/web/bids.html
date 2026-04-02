@@ -1,0 +1,664 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Your Bids — Quoterra</title>
+<link rel="icon" type="image/x-icon" href="/favicon.ico">
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<meta property="og:title" content="Quoterra — Bid Comparison">
+<meta property="og:description" content="Compare contractor bids for your project">
+<meta property="og:image" content="/og-image.png">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+         background: #f2f4f8; color: #1d1d1f; min-height: 100vh; }
+
+  /* Top nav bar */
+  .topbar { background: #fff; border-bottom: 1px solid #e0e4ea; padding: 10px 24px; }
+  .topbar-inner { max-width: 1060px; margin: 0 auto; display: flex; align-items: center; gap: 16px; }
+  .topbar-logo { width: 36px; height: 36px; border-radius: 8px; flex-shrink: 0; }
+  .topbar-search { flex: 1; display: flex; border: 1px solid #e0e4ea; border-radius: 10px; background: #f7f8fa;
+                   overflow: hidden; transition: border-color 0.15s; }
+  .topbar-search:focus-within { border-color: #0055cc; background: #fff; }
+  .search-segment { flex: 1; position: relative; display: flex; align-items: center; }
+  .search-segment + .search-segment { border-left: 1px solid #e0e4ea; }
+  .search-segment svg { position: absolute; left: 10px; width: 16px; height: 16px; fill: #8e8e93; flex-shrink: 0; pointer-events: none; }
+  .search-segment input { width: 100%; padding: 10px 14px 10px 34px; font-size: 14px; font-family: inherit;
+                          border: none; background: transparent; outline: none; }
+  .search-segment input::placeholder { color: #b0b8c4; transition: opacity 0.3s; }
+  .service-placeholder { position: absolute; left: 34px; right: 14px; top: 50%; transform: translateY(-50%);
+                         font-size: 14px; color: #b0b8c4; pointer-events: none; overflow: hidden; white-space: nowrap; }
+  .service-placeholder .rotating-text { display: inline-block; }
+
+  /* Project info strip */
+  .project-strip { background: #fff; border-bottom: 1px solid #f0f2f5; padding: 16px 24px; }
+  .project-strip-inner { max-width: 1060px; margin: 0 auto; }
+  .project-title-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .project-title { font-size: 20px; font-weight: 700; }
+  .view-project-link { font-size: 13px; font-weight: 600; color: #0055cc; text-decoration: none; }
+  .view-project-link:hover { text-decoration: underline; }
+  .project-address { font-size: 14px; margin-top: 2px; }
+  .project-address a { color: #6e6e73; text-decoration: none; }
+  .project-address a:hover { color: #0055cc; text-decoration: underline; }
+  .bid-count { font-size: 13px; color: #8e8e93; margin-top: 4px; }
+
+  /* User menu */
+  .user-menu { position: relative; }
+  .user-icon { width: 36px; height: 36px; border-radius: 50%; background: #e8f0fe; border: none; cursor: pointer;
+               display: flex; align-items: center; justify-content: center; font-size: 18px; color: #0055cc; }
+  .user-icon:hover { background: #d0e2fc; }
+  .user-dropdown { display: none; position: absolute; top: 44px; right: 0; background: #fff; border: 1px solid #e0e4ea;
+                   border-radius: 10px; box-shadow: 0 4px 16px rgba(0,0,0,0.1); min-width: 180px; z-index: 50;
+                   overflow: hidden; }
+  .user-dropdown.open { display: block; }
+  .user-dropdown-name { padding: 12px 16px 10px; font-size: 14px; font-weight: 600; color: #1d1d1f;
+                        white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .user-dropdown a { display: flex; align-items: center; gap: 10px; padding: 12px 16px; font-size: 14px;
+                     color: #1d1d1f; text-decoration: none; cursor: pointer; }
+  .user-dropdown a:hover { background: #f7f8fa; }
+  .user-dropdown a svg { width: 18px; height: 18px; fill: #6e6e73; flex-shrink: 0; }
+  .user-dropdown .divider { height: 1px; background: #f0f2f5; margin: 0; }
+
+  /* Layout: sidebar + main */
+  .page-layout { max-width: 1060px; margin: 0 auto; display: flex; gap: 20px; padding: 20px 24px 40px; align-items: flex-start; }
+
+  /* Filter sidebar */
+  .sidebar { width: 240px; flex-shrink: 0; background: #fff; border-radius: 12px; border: 1px solid #e0e4ea; padding: 0; position: sticky; top: 20px; }
+  .sidebar-header { display: flex; justify-content: space-between; align-items: center; padding: 16px 16px 12px; }
+  .sidebar-header h3 { font-size: 16px; font-weight: 700; }
+  .clear-all { font-size: 13px; font-weight: 600; color: #0055cc; background: none; border: none; cursor: pointer; }
+  .clear-all:hover { text-decoration: underline; }
+  .apply-btn { display: block; width: calc(100% - 32px); margin: 12px 16px 16px; padding: 10px; background: #0055cc; color: #fff;
+               font-size: 14px; font-weight: 600; border: none; border-radius: 8px; cursor: pointer; text-align: center; }
+  .apply-btn:hover { background: #0044aa; }
+
+  .filter-section { border-top: 1px solid #f0f2f5; }
+  .filter-toggle { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px;
+                   cursor: pointer; -webkit-user-select: none; user-select: none; }
+  .filter-toggle h4 { font-size: 14px; font-weight: 600; }
+  .filter-toggle .chevron { font-size: 12px; color: #8e8e93; transition: transform 0.2s; }
+  .filter-section.collapsed .chevron { transform: rotate(180deg); }
+  .filter-body { padding: 0 16px 16px; }
+  .filter-section.collapsed .filter-body { display: none; }
+
+  /* Price histogram */
+  .histogram { display: flex; align-items: flex-end; gap: 1px; height: 50px; margin-bottom: 8px; }
+  .hist-bar { flex: 1; background: #c0c8d4; min-width: 3px; border-radius: 1px 1px 0 0; transition: background 0.15s; }
+  .hist-bar.active { background: #333; }
+
+  /* Range slider */
+  .range-track { position: relative; height: 4px; background: #e0e4ea; border-radius: 2px; margin: 10px 0 14px; }
+  .range-fill { position: absolute; height: 100%; background: #333; border-radius: 2px; }
+  .range-thumb { position: absolute; top: 50%; width: 20px; height: 20px; background: #fff; border: 2px solid #333;
+                 border-radius: 50%; transform: translate(-50%, -50%); cursor: grab; z-index: 2; }
+  .range-thumb:active { cursor: grabbing; box-shadow: 0 0 0 4px rgba(0,0,0,0.08); }
+
+  .price-inputs { display: flex; align-items: center; gap: 8px; }
+  .price-inputs label { font-size: 11px; color: #6e6e73; font-weight: 600; }
+  .price-input { width: 100%; padding: 6px 8px; font-size: 13px; font-family: inherit; border: 1px solid #e0e4ea;
+                 border-radius: 6px; text-align: center; }
+  .price-dash { color: #c0c4cc; }
+
+  /* Rating radio buttons */
+  .rating-options { display: flex; flex-direction: column; gap: 6px; }
+  .rating-option { display: flex; align-items: center; gap: 8px; padding: 6px 0; cursor: pointer; font-size: 14px; }
+  .rating-option input[type="radio"] { accent-color: #333; width: 16px; height: 16px; cursor: pointer; }
+  .rating-option .star { color: #f5a623; }
+
+  /* Sort bar */
+  .sort-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+  .sort-bar label { font-size: 13px; color: #6e6e73; }
+  .sort-bar select { font-size: 13px; font-family: inherit; padding: 4px 8px; border: 1px solid #e0e4ea;
+                     border-radius: 6px; background: #fff; cursor: pointer; }
+
+  /* Bids list */
+  .bids-main { flex: 1; min-width: 0; }
+
+  .bid-card { background: #fff; border-radius: 12px; border: 2px solid #e0e4ea; margin-bottom: 14px;
+              overflow: hidden; transition: border-color 0.2s, box-shadow 0.15s; display: flex; }
+  .bid-card:hover { box-shadow: 0 2px 12px rgba(0,0,0,0.06); }
+  .bid-card.selected { border-color: #34c759; }
+
+  .bid-photo { width: 200px; min-height: 170px; flex-shrink: 0; position: relative; background: #e8ecf0; overflow: hidden;
+               transition: width 0.2s; }
+  .bid-card.expanded .bid-photo { width: 320px; min-height: 240px; }
+  .bid-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .bid-photo .no-photo { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%;
+                         color: #b0b8c4; font-size: 13px; }
+  .photo-arrow { position: absolute; top: 50%; transform: translateY(-50%); width: 28px; height: 28px;
+                 background: rgba(0,0,0,0.4); border: none; border-radius: 50%; cursor: pointer;
+                 color: #fff; font-size: 16px; display: flex; align-items: center; justify-content: center;
+                 z-index: 2; opacity: 0; transition: opacity 0.15s; }
+  .bid-photo:hover .photo-arrow { opacity: 1; }
+  .photo-arrow.left { left: 6px; }
+  .photo-arrow.right { right: 6px; }
+  .photo-counter { position: absolute; bottom: 6px; right: 8px; background: rgba(0,0,0,0.5); color: #fff;
+                   font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 8px; }
+  .ba-badge { position: absolute; top: 6px; left: 8px; background: rgba(0,0,0,0.5); color: #fff;
+              font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 6px; text-transform: uppercase; }
+
+  .ba-slider { width: 100%; height: 100%; position: relative; cursor: ew-resize; touch-action: none; user-select: none; }
+  .ba-slider img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+  .ba-handle { position: absolute; top: 0; bottom: 0; width: 3px; background: #fff; left: 50%;
+               transform: translateX(-50%); z-index: 3; box-shadow: 0 0 4px rgba(0,0,0,0.3); }
+  .ba-handle::after { content: ''; position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+                      width: 22px; height: 22px; background: #fff; border-radius: 50%; box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
+  .ba-arrows { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); z-index: 4;
+               display: flex; gap: 2px; pointer-events: none; font-size: 8px; color: #555; font-weight: 700; }
+  .ba-label { position: absolute; bottom: 6px; background: rgba(0,0,0,0.5); color: #fff;
+              font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 6px; z-index: 2; }
+  .ba-label.before { left: 8px; }
+  .ba-label.after { right: 8px; }
+
+  .bid-info { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .bid-header { display: flex; align-items: center; padding: 14px 16px; cursor: pointer; gap: 10px; }
+  .bid-header:active { background: #f8f9fb; }
+
+  .contractor-icon { width: 34px; height: 34px; border-radius: 8px; background: #e8f0fe; flex-shrink: 0;
+                     display: flex; align-items: center; justify-content: center; overflow: hidden; }
+  .contractor-icon img { width: 100%; height: 100%; object-fit: cover; }
+  .contractor-icon .initials { font-size: 13px; font-weight: 700; color: #0055cc; }
+
+  .bid-summary { flex: 1; min-width: 0; }
+  .contractor-name { font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bid-meta { font-size: 11px; color: #8e8e93; margin-top: 2px; display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+  .star-rating { color: #f5a623; font-weight: 700; }
+
+  .bid-price { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .see-details-btn { margin-top: 6px; padding: 5px 14px; font-size: 12px; font-weight: 600; color: #0055cc;
+                     background: #e8f0fe; border: none; border-radius: 6px; cursor: pointer; }
+  .see-details-btn:hover { background: #d0e2fc; }
+  .bid-card.expanded .see-details-btn { display: none; }
+
+  .bid-detail { display: none; padding: 0 16px 16px; border-top: 1px solid #f0f2f5; }
+  .bid-card.expanded .bid-detail { display: block; }
+  .bid-detail .reviews { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; padding-top: 12px; flex-wrap: wrap; }
+  .review-count { font-size: 13px; color: #6e6e73; }
+  .review-link { font-size: 13px; font-weight: 600; color: #0055cc; text-decoration: none; }
+  .bid-description { font-size: 14px; line-height: 1.6; color: #3a3a3c; margin-bottom: 14px; white-space: pre-wrap; }
+  .bid-pdf { display: inline-flex; align-items: center; gap: 8px; padding: 10px 16px; background: #f7f8fa;
+             border: 1px solid #e0e4ea; border-radius: 8px; color: #0055cc; font-size: 14px; font-weight: 600; text-decoration: none; }
+  .bid-pdf:hover { background: #e8f0fe; }
+  .bid-pdf svg { width: 18px; height: 18px; fill: #0055cc; }
+  .bid-date { font-size: 12px; color: #8e8e93; margin-top: 10px; }
+  .hire-btn { display: block; width: 100%; padding: 14px; margin-top: 14px; background: #34c759; color: #fff;
+              font-size: 16px; font-weight: 700; border: none; border-radius: 10px; cursor: pointer; }
+  .hire-btn:hover { background: #2db84d; }
+  .collapse-btn { display: block; width: 100%; padding: 10px; margin-top: 8px; background: none; color: #8e8e93;
+                  font-size: 13px; font-weight: 600; border: 1px solid #e0e4ea; border-radius: 8px; cursor: pointer; }
+  .collapse-btn:hover { background: #f7f8fa; }
+
+  .badge { display: inline-block; font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 4px; text-transform: uppercase; }
+  .badge-low { background: #e8f5e9; color: #2e7d32; }
+
+  .state-msg { max-width: 800px; margin: 80px auto; text-align: center; padding: 0 24px; }
+  .state-msg h2 { font-size: 20px; margin-bottom: 8px; }
+  .state-msg p { color: #8e8e93; }
+  .spinner { display: inline-block; width: 24px; height: 24px; border: 3px solid #e0e4ea;
+             border-top-color: #0055cc; border-radius: 50%; animation: spin 0.8s linear infinite; margin-bottom: 12px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .footer { max-width: 1060px; margin: 0 auto 40px; padding: 0 24px; text-align: center; }
+  .footer a { color: #0055cc; font-size: 13px; font-weight: 600; text-decoration: none; }
+
+  .no-results { text-align: center; padding: 40px 20px; color: #8e8e93; }
+  .no-results h3 { margin-bottom: 4px; color: #1d1d1f; }
+
+  @media (max-width: 720px) {
+    .page-layout { flex-direction: column; padding: 12px; }
+    .sidebar { width: 100%; position: static; }
+    .bid-card { flex-direction: column; }
+    .bid-photo { width: 100%; min-height: 200px; max-height: 220px; }
+    .bid-photo .photo-arrow { opacity: 1; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Top nav: logo + search + user -->
+<div class="topbar">
+  <div class="topbar-inner">
+    <img src="/apple-touch-icon.png" alt="" class="topbar-logo" onerror="this.outerHTML='<div class=\'topbar-logo\' style=\'background:#0f75ee;display:flex;align-items:center;justify-content:center\'><svg width=\'20\' height=\'20\' viewBox=\'0 0 24 24\' fill=\'white\'><path d=\'M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5\'/></svg></div>'">
+    <div class="topbar-search">
+      <div class="search-segment">
+        <svg viewBox="0 0 24 24"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5a2.5 2.5 0 010-5 2.5 2.5 0 010 5z"/></svg>
+        <input type="text" placeholder="Enter your address">
+      </div>
+      <div class="search-segment">
+        <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0016 9.5 6.5 6.5 0 109.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+        <input type="text" id="service-input" onfocus="hideServicePlaceholder()" onblur="showServicePlaceholder()">
+        <div class="service-placeholder" id="service-placeholder"><span class="rotating-text" id="rotating-service"></span></div>
+      </div>
+    </div>
+    <div class="user-menu">
+      <button class="user-icon" onclick="toggleUserMenu()">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
+      </button>
+      <div class="user-dropdown" id="user-dropdown">
+        <div class="user-dropdown-name" id="user-display-name">Account</div>
+        <div class="divider"></div>
+        <a href="javascript:void(0)" onclick="goToProjects()">
+          <svg viewBox="0 0 24 24"><path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
+          My Projects
+        </a>
+        <a href="javascript:void(0)" onclick="goToSettings()">
+          <svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.31.06-.63.06-.94 0-.31-.02-.63-.06-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.49.49 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.48.48 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.49.49 0 00-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1112 8.4a3.6 3.6 0 010 7.2z"/></svg>
+          Account Settings
+        </a>
+        <div class="divider"></div>
+        <a href="javascript:void(0)" onclick="handleLogout()">
+          <svg viewBox="0 0 24 24"><path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5-5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/></svg>
+          Log Out
+        </a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Project info strip -->
+<div class="project-strip">
+  <div class="project-strip-inner">
+    <div class="project-title-row">
+      <div class="project-title" id="project-title">Loading...</div>
+      <a href="#" class="view-project-link" id="view-project-link" style="display:none">View Project →</a>
+    </div>
+    <div class="project-address" id="project-address"></div>
+    <div class="bid-count" id="bid-count"></div>
+  </div>
+</div>
+
+<div id="content">
+  <div class="state-msg"><div class="spinner"></div><p>Loading bids...</p></div>
+</div>
+
+<script>
+const API_BASE = window.location.origin;
+let selectedBidId = null, bidsData = null, currentSort = 'price_asc';
+const photoIdx = {};
+
+// Filters
+let filterMinPrice = 0, filterMaxPrice = Infinity, filterRating = 'all';
+let absMinPrice = 0, absMaxPrice = 0;
+
+function getRfqId() { const p=location.pathname.split('/'),i=p.indexOf('bids'); return i>=0&&p[i+1]?p[i+1]:null; }
+function getToken() { return new URLSearchParams(location.search).get('token'); }
+function esc(s) { if(!s)return''; const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+function fmtPrice(c) { return '$'+(c/100).toLocaleString('en-US',{minimumFractionDigits:0}); }
+function fmtDate(iso) { if(!iso)return''; return new Date(iso).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}); }
+function ini(n) { if(!n)return'?'; return n.split(/\s+/).map(w=>w[0]).slice(0,2).join('').toUpperCase(); }
+
+const DEMO = {
+  rfq_id:'demo', project_description:'Kitchen Renovation', address:'742 Evergreen Terrace',
+  bids:[
+    {id:'b1',price_cents:1250000,received_at:'2026-03-28T10:30:00Z',description:'Full demo. New shaker-style cabinets, quartz countertops, subway tile backsplash, LVP flooring.',pdf_url:'#',
+     photos:[{before:'https://placehold.co/600x400/d4d4d4/666?text=Before',after:'https://placehold.co/600x400/c8e6c9/2e7d32?text=After'},{url:'https://placehold.co/600x400/e3f2fd/1565c0?text=Finished'}],
+     contractor:{id:'c1',name:"Mike's Renovations",icon_url:null,yelp_url:'https://yelp.com',google_reviews_url:'https://google.com',review_rating:4.8,review_count:142}},
+    {id:'b2',price_cents:1420000,received_at:'2026-03-29T14:15:00Z',description:'Complete remodel — custom cabinets, granite, tile backsplash.',pdf_url:'#',
+     photos:[{url:'https://placehold.co/600x400/e3f2fd/1565c0?text=Project'}],
+     contractor:{id:'c2',name:'ABC Contracting',icon_url:null,yelp_url:'https://yelp.com',google_reviews_url:'https://google.com',review_rating:4.7,review_count:128}},
+    {id:'b3',price_cents:1580000,received_at:'2026-03-30T09:00:00Z',description:'Premium renovation with soft-close cabinetry, waterfall quartz island.',pdf_url:null,photos:[],
+     contractor:{id:'c3',name:'Lakefront Builders',icon_url:null,yelp_url:null,google_reviews_url:'https://google.com',review_rating:4.9,review_count:87}},
+    {id:'b4',price_cents:980000,received_at:'2026-03-31T08:00:00Z',description:'Budget-friendly kitchen refresh: paint cabinets, new hardware, laminate counters.',pdf_url:null,photos:[],
+     contractor:{id:'c4',name:'Quick Fix Pro',icon_url:null,yelp_url:null,google_reviews_url:null,review_rating:4.2,review_count:34}},
+  ]
+};
+
+async function init() {
+  if(location.search.includes('demo')){bidsData=DEMO;setupFilters();render();return;}
+  const rfqId=getRfqId(),token=getToken();
+  if(!rfqId||!token){showErr('Invalid link','Missing parameters.');return;}
+  try{
+    const r=await fetch(`${API_BASE}/api/rfqs/${rfqId}/bids?token=${encodeURIComponent(token)}`);
+    if(r.status===403){showErr('Access denied','Invalid or expired.');return;}
+    if(r.status===404){showErr('Not found','Project not found.');return;}
+    if(!r.ok)throw new Error(`HTTP ${r.status}`);
+    bidsData=await r.json();setupFilters();render();
+  }catch(e){showErr('Failed',e.message);}
+}
+
+function setupFilters() {
+  const prices = (bidsData.bids||[]).map(b=>b.price_cents);
+  if(prices.length) { absMinPrice = Math.min(...prices); absMaxPrice = Math.max(...prices); }
+  filterMinPrice = absMinPrice;
+  filterMaxPrice = absMaxPrice;
+  filterRating = 'all';
+}
+
+function showErr(t,m){
+  document.getElementById('content').innerHTML=`<div class="state-msg"><h2>${esc(t)}</h2><p>${esc(m)}</p></div>`;
+  document.getElementById('project-title').textContent='Bids';
+}
+
+function getFilteredBids() {
+  return (bidsData.bids||[]).filter(b => {
+    if (b.price_cents < filterMinPrice || b.price_cents > filterMaxPrice) return false;
+    if (filterRating !== 'all') {
+      const r = b.contractor?.review_rating || 0;
+      if (filterRating === '4.5' && r < 4.5) return false;
+      if (filterRating === '4.0' && r < 4.0) return false;
+      if (filterRating === '3.5' && r < 3.5) return false;
+    }
+    return true;
+  });
+}
+
+function buildHistogram() {
+  const allPrices = (bidsData.bids||[]).map(b=>b.price_cents);
+  if (allPrices.length < 2) return '';
+  const buckets = 15;
+  const range = absMaxPrice - absMinPrice || 1;
+  const counts = new Array(buckets).fill(0);
+  allPrices.forEach(p => {
+    let idx = Math.floor((p - absMinPrice) / range * (buckets - 1));
+    idx = Math.max(0, Math.min(buckets - 1, idx));
+    counts[idx]++;
+  });
+  const maxCount = Math.max(...counts, 1);
+  let bars = '';
+  for (let i = 0; i < buckets; i++) {
+    const bucketMin = absMinPrice + (range * i / buckets);
+    const bucketMax = absMinPrice + (range * (i + 1) / buckets);
+    const active = bucketMax >= filterMinPrice && bucketMin <= filterMaxPrice;
+    const h = Math.max(3, (counts[i] / maxCount) * 50);
+    bars += `<div class="hist-bar${active ? ' active' : ''}" style="height:${h}px"></div>`;
+  }
+  return `<div class="histogram">${bars}</div>`;
+}
+
+function buildSidebar() {
+  const minPct = absMaxPrice > absMinPrice ? ((filterMinPrice - absMinPrice) / (absMaxPrice - absMinPrice)) * 100 : 0;
+  const maxPct = absMaxPrice > absMinPrice ? ((filterMaxPrice - absMinPrice) / (absMaxPrice - absMinPrice)) * 100 : 100;
+
+  return `<div class="sidebar">
+    <div class="sidebar-header">
+      <h3>Filters</h3>
+      <button class="clear-all" onclick="clearFilters()">Clear all</button>
+    </div>
+
+    <div class="filter-section" id="filter-price">
+      <div class="filter-toggle" onclick="toggleFilter('filter-price')">
+        <h4>Price</h4><span class="chevron">▲</span>
+      </div>
+      <div class="filter-body">
+        ${buildHistogram()}
+        <div class="range-track" id="range-track">
+          <div class="range-fill" style="left:${minPct}%;right:${100-maxPct}%"></div>
+          <div class="range-thumb" id="thumb-min" style="left:${minPct}%" data-which="min"></div>
+          <div class="range-thumb" id="thumb-max" style="left:${maxPct}%" data-which="max"></div>
+        </div>
+        <div class="price-inputs">
+          <div><label>Min price</label><input class="price-input" id="input-min" value="${fmtPrice(filterMinPrice)}" onchange="inputPrice('min')"></div>
+          <span class="price-dash">—</span>
+          <div><label>Max price</label><input class="price-input" id="input-max" value="${fmtPrice(filterMaxPrice)}" onchange="inputPrice('max')"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="filter-section" id="filter-rating">
+      <div class="filter-toggle" onclick="toggleFilter('filter-rating')">
+        <h4>Rating</h4><span class="chevron">▲</span>
+      </div>
+      <div class="filter-body">
+        <div class="rating-options">
+          <label class="rating-option"><input type="radio" name="rating" value="all" ${filterRating==='all'?'checked':''} onchange="setRating('all')"> All</label>
+          <label class="rating-option"><input type="radio" name="rating" value="4.5" ${filterRating==='4.5'?'checked':''} onchange="setRating('4.5')"> <span class="star">★</span> 4.5+</label>
+          <label class="rating-option"><input type="radio" name="rating" value="4.0" ${filterRating==='4.0'?'checked':''} onchange="setRating('4.0')"> <span class="star">★</span> 4.0+</label>
+          <label class="rating-option"><input type="radio" name="rating" value="3.5" ${filterRating==='3.5'?'checked':''} onchange="setRating('3.5')"> <span class="star">★</span> 3.5+</label>
+        </div>
+      </div>
+    </div>
+
+    <button class="apply-btn" onclick="render()">Apply Filters</button>
+  </div>`;
+}
+
+function render() {
+  document.getElementById('project-title').textContent=bidsData.project_description||'Your Project';
+  const vpLink = document.getElementById('view-project-link');
+  if (vpLink) { vpLink.style.display = ''; vpLink.href = `/quote/${getRfqId() || ''}`; }
+  const addrEl = document.getElementById('project-address');
+  const addr = bidsData.address || '';
+  if (addr) {
+    const mapsUrl = `https://maps.google.com/?q=${encodeURIComponent(addr)}`;
+    addrEl.innerHTML = `<a href="${mapsUrl}" target="_blank" rel="noopener">📍 ${esc(addr)}</a>`;
+  } else { addrEl.textContent = ''; }
+  const allBids = bidsData.bids||[];
+  const filtered = sortBids(getFilteredBids());
+  const n = allBids.length;
+  document.getElementById('bid-count').textContent = n ? `${n} bid${n>1?'s':''} received` : '';
+
+  if(!n){document.getElementById('content').innerHTML=`<div class="state-msg"><h2>No bids yet</h2><p>Quotes will appear here.</p></div>`;return;}
+
+  const low = filtered.length ? Math.min(...filtered.map(b=>b.price_cents)) : 0;
+
+  let cardsHtml = `<div class="sort-bar"><label>Sort:</label><select onchange="handleSort(this.value)">
+    <option value="price_asc"${currentSort==='price_asc'?' selected':''}>Price ↑</option>
+    <option value="price_desc"${currentSort==='price_desc'?' selected':''}>Price ↓</option>
+    <option value="rating"${currentSort==='rating'?' selected':''}>Rating</option>
+    <option value="date"${currentSort==='date'?' selected':''}>Date</option></select></div>`;
+
+  if (!filtered.length) {
+    cardsHtml += `<div class="no-results"><h3>No bids match filters</h3><p>Try adjusting your price range or rating.</p></div>`;
+  }
+
+  filtered.forEach((bid,i)=>{
+    const c=bid.contractor||{},hasIcon=!!c.icon_url,inits=ini(c.name);
+    const isLow=bid.price_cents===low&&filtered.length>1, isSel=bid.id===selectedBidId;
+    const photos=bid.photos||[];
+    if(!(bid.id in photoIdx))photoIdx[bid.id]=0;
+
+    cardsHtml+=`<div class="bid-card${isSel?' selected':''}" id="bid-${i}">
+      <div class="bid-photo" id="photo-${bid.id}">`;
+    if(photos.length>0){
+      cardsHtml+=renderPhoto(bid.id,photos);
+      if(photos.length>1) cardsHtml+=`<button class="photo-arrow left" onclick="nav(event,'${bid.id}',-1)">‹</button><button class="photo-arrow right" onclick="nav(event,'${bid.id}',1)">›</button>`;
+      cardsHtml+=`<span class="photo-counter">${photoIdx[bid.id]+1}/${photos.length}</span>`;
+    } else { cardsHtml+=`<div class="no-photo">No photos</div>`; }
+    cardsHtml+=`</div>
+      <div class="bid-info">
+        <div class="bid-header" onclick="toggle(${i},'${esc(bid.id)}')">
+          <div class="contractor-icon">${hasIcon?`<img src="${esc(c.icon_url)}">`:`<span class="initials">${esc(inits)}</span>`}</div>
+          <div class="bid-summary">
+            <div class="contractor-name">${esc(c.name||'Contractor')}</div>
+            <div class="bid-meta">${c.review_rating?`<span class="star-rating">${c.review_rating.toFixed(1)} ★</span>`:''}${c.review_count?`<span>(${c.review_count})</span>`:''}${isLow?'<span class="badge badge-low">Lowest</span>':''}</div>
+          </div>
+          <div style="text-align:right;flex-shrink:0">
+            <div class="bid-price">${fmtPrice(bid.price_cents)}</div>
+            <button class="see-details-btn" onclick="expand(event,${i},'${esc(bid.id)}')">See details</button>
+          </div>
+        </div>
+        <div class="bid-detail">
+          <div class="reviews">${c.review_rating?`<span class="star-rating">${c.review_rating.toFixed(1)} ★</span>`:''}${c.review_count?`<span class="review-count">${c.review_count} reviews</span>`:''}${c.yelp_url?`<a class="review-link" href="${esc(c.yelp_url)}" target="_blank">Yelp</a>`:''}${c.google_reviews_url?`<a class="review-link" href="${esc(c.google_reviews_url)}" target="_blank">Google</a>`:''}</div>
+          ${bid.description?`<div class="bid-description">${esc(bid.description)}</div>`:''}
+          ${bid.pdf_url?`<a class="bid-pdf" href="${esc(bid.pdf_url)}" target="_blank"><svg viewBox="0 0 24 24"><path d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm-1 2l5 5h-5V4zm-3 9v2H8v-2h2zm6 0v2h-4v-2h4zm-6 4v2H8v-2h2zm6 0v2h-4v-2h4z"/></svg>View Quote (PDF)</a>`:''}
+          <div class="bid-date">Received ${fmtDate(bid.received_at)}</div>
+          <button class="hire-btn" onclick="hire(event,'${esc(bid.id)}','${esc(c.name)}')">Hire ${esc(c.name||'Contractor')}</button>
+          <button class="collapse-btn" onclick="collapse(event,${i})">Close</button>
+        </div>
+      </div></div>`;
+  });
+
+  const rfqId=getRfqId();
+  document.getElementById('content').innerHTML = `<div class="page-layout">
+    ${buildSidebar()}
+    <div class="bids-main">${cardsHtml}</div>
+  </div>
+  <div class="footer"><a href="/quote/${esc(rfqId)}" target="_blank">View Room Scans →</a></div>`;
+
+  document.querySelectorAll('.ba-slider').forEach(initBA);
+  initRangeSlider();
+}
+
+// Photo rendering
+function renderPhoto(bidId,photos){
+  const idx=photoIdx[bidId]||0, p=photos[idx];
+  if(!p)return'';
+  if(p.before&&p.after){
+    return`<div class="ba-slider" data-bid="${bidId}"><img class="ba-after" src="${esc(p.after)}"><img class="ba-before" src="${esc(p.before)}" style="clip-path:inset(0 50% 0 0)"><div class="ba-handle" style="left:50%"><div class="ba-arrows"><span>◄</span><span>►</span></div></div><span class="ba-label before">Before</span><span class="ba-label after">After</span></div><span class="ba-badge">B/A</span>`;
+  }
+  return`<img src="${esc(p.url||p)}" style="width:100%;height:100%;object-fit:cover">`;
+}
+function nav(e,bidId,dir){
+  e.stopPropagation();const bid=(bidsData.bids||[]).find(b=>b.id===bidId);if(!bid||!bid.photos)return;
+  let idx=(photoIdx[bidId]||0)+dir;if(idx<0)idx=bid.photos.length-1;if(idx>=bid.photos.length)idx=0;photoIdx[bidId]=idx;
+  const el=document.getElementById(`photo-${bidId}`);if(!el)return;
+  const arrows=bid.photos.length>1?`<button class="photo-arrow left" onclick="nav(event,'${bidId}',-1)">‹</button><button class="photo-arrow right" onclick="nav(event,'${bidId}',1)">›</button>`:'';
+  el.innerHTML=renderPhoto(bidId,bid.photos)+arrows+`<span class="photo-counter">${idx+1}/${bid.photos.length}</span>`;
+  el.querySelectorAll('.ba-slider').forEach(initBA);
+}
+function initBA(sl){
+  let drag=false;
+  const set=(x)=>{const r=sl.getBoundingClientRect();let p=((x-r.left)/r.width)*100;p=Math.max(2,Math.min(98,p));
+    const bf=sl.querySelector('.ba-before'),hd=sl.querySelector('.ba-handle');
+    if(bf)bf.style.clipPath=`inset(0 ${100-p}% 0 0)`;if(hd)hd.style.left=p+'%';};
+  sl.addEventListener('pointerdown',e=>{drag=true;sl.setPointerCapture(e.pointerId);set(e.clientX);});
+  sl.addEventListener('pointermove',e=>{if(drag)set(e.clientX);});
+  sl.addEventListener('pointerup',()=>{drag=false;});
+  sl.addEventListener('pointercancel',()=>{drag=false;});
+}
+
+// Range slider
+function initRangeSlider() {
+  const track = document.getElementById('range-track');
+  if (!track) return;
+
+  const update = (which, clientX) => {
+    const rect = track.getBoundingClientRect();
+    let pct = Math.max(0, Math.min(100, ((clientX - rect.left) / rect.width) * 100));
+    const price = Math.round(absMinPrice + (absMaxPrice - absMinPrice) * pct / 100);
+    if (which === 'min') filterMinPrice = Math.min(price, filterMaxPrice);
+    else filterMaxPrice = Math.max(price, filterMinPrice);
+    renderSliderUI();
+    renderBidsOnly();
+  };
+
+  document.querySelectorAll('.range-thumb').forEach(thumb => {
+    const which = thumb.dataset.which;
+    thumb.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      thumb.setPointerCapture(e.pointerId);
+      const onMove = (ev) => update(which, ev.clientX);
+      const onUp = () => { thumb.removeEventListener('pointermove', onMove); thumb.removeEventListener('pointerup', onUp); };
+      thumb.addEventListener('pointermove', onMove);
+      thumb.addEventListener('pointerup', onUp);
+    });
+  });
+
+  // Click on track to jump nearest thumb
+  track.addEventListener('pointerdown', (e) => {
+    if (e.target.classList.contains('range-thumb')) return;
+    const rect = track.getBoundingClientRect();
+    const pct = ((e.clientX - rect.left) / rect.width) * 100;
+    const range = absMaxPrice - absMinPrice || 1;
+    const minPct = ((filterMinPrice - absMinPrice) / range) * 100;
+    const maxPct = ((filterMaxPrice - absMinPrice) / range) * 100;
+    const which = Math.abs(pct - minPct) < Math.abs(pct - maxPct) ? 'min' : 'max';
+    update(which, e.clientX);
+  });
+}
+
+function renderSliderUI() {
+  const range = absMaxPrice - absMinPrice || 1;
+  const minPct = ((filterMinPrice - absMinPrice) / range) * 100;
+  const maxPct = ((filterMaxPrice - absMinPrice) / range) * 100;
+  const fill = document.querySelector('.range-fill');
+  const tMin = document.getElementById('thumb-min');
+  const tMax = document.getElementById('thumb-max');
+  const iMin = document.getElementById('input-min');
+  const iMax = document.getElementById('input-max');
+  if (fill) { fill.style.left = minPct+'%'; fill.style.right = (100-maxPct)+'%'; }
+  if (tMin) tMin.style.left = minPct+'%';
+  if (tMax) tMax.style.left = maxPct+'%';
+  if (iMin) iMin.value = fmtPrice(filterMinPrice);
+  if (iMax) iMax.value = fmtPrice(filterMaxPrice);
+  // Update histogram active bars
+  document.querySelectorAll('.hist-bar').forEach((bar, i) => {
+    const buckets = 15;
+    const bucketMin = absMinPrice + ((absMaxPrice-absMinPrice) * i / buckets);
+    const bucketMax = absMinPrice + ((absMaxPrice-absMinPrice) * (i+1) / buckets);
+    bar.classList.toggle('active', bucketMax >= filterMinPrice && bucketMin <= filterMaxPrice);
+  });
+}
+
+function renderBidsOnly() {
+  // Just update slider UI — cards update on "Apply" click
+  renderSliderUI();
+}
+
+function inputPrice(which) {
+  const el = document.getElementById(which === 'min' ? 'input-min' : 'input-max');
+  const val = parseInt(el.value.replace(/[^0-9]/g, '')) * 100;
+  if (isNaN(val)) return;
+  if (which === 'min') filterMinPrice = Math.max(absMinPrice, Math.min(val, filterMaxPrice));
+  else filterMaxPrice = Math.min(absMaxPrice, Math.max(val, filterMinPrice));
+  render();
+}
+
+// Filter actions
+function clearFilters() { filterMinPrice=absMinPrice; filterMaxPrice=absMaxPrice; filterRating='all'; render(); }
+function setRating(v) { filterRating=v; }
+function toggleFilter(id) { document.getElementById(id)?.classList.toggle('collapsed'); }
+
+// Sort
+function sortBids(b){const s=[...b];switch(currentSort){
+  case'price_asc':s.sort((a,b)=>a.price_cents-b.price_cents);break;case'price_desc':s.sort((a,b)=>b.price_cents-a.price_cents);break;
+  case'rating':s.sort((a,b)=>(b.contractor?.review_rating||0)-(a.contractor?.review_rating||0));break;
+  case'date':s.sort((a,b)=>new Date(b.received_at||0)-new Date(a.received_at||0));break;}return s;}
+function handleSort(v){currentSort=v;render();}
+
+// Card actions
+function toggle(i,bidId){ selectedBidId=bidId; document.querySelectorAll('.bid-card').forEach(c=>c.classList.remove('selected'));
+  const card=document.getElementById(`bid-${i}`); if(card) card.classList.add('selected'); }
+function expand(e,i,bidId){ e.stopPropagation(); toggle(i,bidId);
+  const card=document.getElementById(`bid-${i}`); if(card) card.classList.add('expanded'); }
+function collapse(e,i){ e.stopPropagation();
+  const card=document.getElementById(`bid-${i}`); if(card) card.classList.remove('expanded'); }
+function hire(e,bidId,name){ e.stopPropagation();
+  if(confirm(`Hire ${name} for this project?`))alert(`We'll notify ${name} that they've been selected.`); }
+
+// Service carousel
+const services = ['Kitchen Remodel', 'Flooring & Tile', 'Paint & Finish', 'Deck & Patio', 'Siding & Roof', 'Insulation & Drywall', 'Basement Finish'];
+let serviceIdx = 0;
+function rotateService() {
+  const el = document.getElementById('rotating-service');
+  if (!el) return;
+  el.style.transition = 'opacity 0.3s, transform 0.3s';
+  el.style.opacity = '0';
+  el.style.transform = 'translateY(-8px)';
+  setTimeout(() => {
+    serviceIdx = (serviceIdx + 1) % services.length;
+    el.textContent = services[serviceIdx];
+    el.style.transform = 'translateY(8px)';
+    setTimeout(() => {
+      el.style.opacity = '1';
+      el.style.transform = 'translateY(0)';
+    }, 50);
+  }, 300);
+}
+function initServiceCarousel() {
+  const el = document.getElementById('rotating-service');
+  if (el) { el.textContent = services[0]; el.style.opacity = '1'; }
+  setInterval(rotateService, 2500);
+}
+function hideServicePlaceholder() { const p = document.getElementById('service-placeholder'); if(p) p.style.display='none'; }
+function showServicePlaceholder() { const p = document.getElementById('service-placeholder'), i = document.getElementById('service-input'); if(p && i && !i.value) p.style.display='block'; }
+initServiceCarousel();
+
+// User menu
+function toggleUserMenu() {
+  document.getElementById('user-dropdown').classList.toggle('open');
+}
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.user-menu')) {
+    document.getElementById('user-dropdown')?.classList.remove('open');
+  }
+});
+function goToProjects() { window.location.href = '/'; }
+function goToSettings() { alert('Account settings coming soon.'); }
+function handleLogout() { alert('Log out functionality coming soon.'); }
+
+init();
+</script>
+</body>
+</html>
