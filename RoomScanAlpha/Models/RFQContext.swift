@@ -5,9 +5,14 @@ struct RFQ: Identifiable, Codable, Equatable {
     let description: String?
     let status: String
     let createdAt: String?
+    let address: String?
+
+    var title: String {
+        description ?? "Untitled Project"
+    }
 
     enum CodingKeys: String, CodingKey {
-        case id, description, status
+        case id, description, status, address
         case createdAt = "created_at"
     }
 }

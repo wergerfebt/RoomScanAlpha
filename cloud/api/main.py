@@ -129,14 +129,14 @@ def list_rfqs(authorization: str = Header(None)) -> dict:
     try:
         cursor = conn.cursor()
         cursor.execute(
-            f"""SELECT id, description, status, created_at
+            f"""SELECT id, description, status, created_at, address
                 FROM rfqs ORDER BY created_at DESC LIMIT {MAX_RFQS_PER_PAGE}"""
         )
         rows = cursor.fetchall()
     finally:
         conn.close()
 
-    columns = ["id", "description", "status", "created_at"]
+    columns = ["id", "description", "status", "created_at", "address"]
     return {
         "rfqs": [
             {
@@ -156,20 +156,21 @@ async def create_rfq(request: Request, authorization: str = Header(None)) -> dic
 
     body = await request.json()
     description = body.get("description", "")
+    address = body.get("address", None)
     rfq_id = str(uuid.uuid4())
 
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
         cursor.execute(
-            """INSERT INTO rfqs (id, description, status, created_at) VALUES (%s, %s, 'scan_pending', NOW())""",
-            (rfq_id, description),
+            """INSERT INTO rfqs (id, description, address, status, created_at) VALUES (%s, %s, %s, 'scan_pending', NOW())""",
+            (rfq_id, description, address),
         )
         conn.commit()
     finally:
         conn.close()
 
-    return {"id": rfq_id, "description": description, "status": "scan_pending"}
+    return {"id": rfq_id, "description": description, "address": address, "status": "scan_pending"}
 
 
 @app.get("/api/rfqs/{rfq_id}/scans/upload-url")
@@ -298,6 +299,7 @@ def get_scan_status(rfq_id: str, scan_id: str, authorization: str = Header(None)
         "scan_status", "floor_area_sqft", "wall_area_sqft", "ceiling_height_ft",
         "perimeter_linear_ft", "detected_components", "scan_dimensions",
         "room_polygon_ft", "wall_heights_ft", "polygon_source", "scan_mesh_url",
+        "scope",
     ]
 
     conn = get_db_connection()
@@ -369,6 +371,31 @@ def delete_scan(rfq_id: str, scan_id: str, authorization: str = Header(None)) ->
     return {"status": "deleted", "scan_id": scan_id}
 
 
+@app.put("/api/rfqs/{rfq_id}/scans/{scan_id}/scope")
+async def update_scan_scope(rfq_id: str, scan_id: str, request: Request, authorization: str = Header(None)) -> dict:
+    """Update the scope of work items for a scanned room."""
+    verify_firebase_token(authorization)
+
+    body = await request.json()
+    scope_data = json.dumps({"items": body.get("items", []), "notes": body.get("notes", "")})
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """UPDATE scanned_rooms SET scope = %s
+               WHERE id = %s AND rfq_id = %s AND scan_status != 'deleted'""",
+            (scope_data, scan_id, rfq_id),
+        )
+        conn.commit()
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Scan not found")
+    finally:
+        conn.close()
+
+    return {"status": "ok", "scan_id": scan_id}
+
+
 @app.get("/api/rfqs/{rfq_id}/contractor-view")
 def contractor_view(rfq_id: str) -> dict:
     """Return all scan data for a contractor to review and quote.
@@ -414,7 +441,7 @@ def contractor_view(rfq_id: str) -> dict:
             "ceiling_height_ft", "perimeter_linear_ft",
             "room_polygon_ft", "wall_heights_ft", "polygon_source",
             "detected_components", "scan_mesh_url", "scan_status",
-            "texture_manifest",
+            "texture_manifest", "scope",
         ]
         cursor.execute(
             f"""SELECT {', '.join(room_columns)}

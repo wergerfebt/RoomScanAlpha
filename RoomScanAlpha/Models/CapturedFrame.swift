@@ -22,7 +22,7 @@ struct CapturedFrame {
     static func from(
         frame: ARFrame,
         index: Int,
-        jpegQuality: CGFloat = 0.8 // 0.8 balances file size (~150-300KB) vs. detail for ORB feature extraction
+        jpegQuality: CGFloat = 0.7 // 0.7 saves ~30% memory vs 0.8 with negligible texture quality loss
     ) -> CapturedFrame? {
         // Convert camera image (YCbCr CVPixelBuffer) → JPEG Data
         guard let jpegData = jpegFromPixelBuffer(frame.capturedImage, quality: jpegQuality) else {

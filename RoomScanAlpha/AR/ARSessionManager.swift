@@ -65,6 +65,17 @@ final class ARSessionManager: NSObject, ARSessionDelegate {
         print("[RoomScanAlpha] AR session paused — \(frameCaptureManager.keyframeCount) keyframes, \(lastMeshAnchors.count) mesh anchors")
     }
 
+    /// Resume the AR session without resetting captured frames. Used after coverage review.
+    func resumeSession() {
+        let config = ARWorldTrackingConfiguration()
+        config.sceneReconstruction = .meshWithClassification
+        config.frameSemantics.insert(.sceneDepth)
+        config.environmentTexturing = .automatic
+        isPaused = false
+        session.run(config)
+        print("[RoomScanAlpha] AR session resumed — \(frameCaptureManager.keyframeCount) keyframes preserved")
+    }
+
     /// Reset the AR session and clear all captured data. Used for redo.
     func resetSession() {
         frameCaptureManager.reset()

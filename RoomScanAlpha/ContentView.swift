@@ -1,13 +1,25 @@
 import SwiftUI
+import FirebaseAuth
 
 struct ContentView: View {
     @State private var viewModel = ScanViewModel()
     @State private var sessionManager = ARSessionManager()
+    @State private var isAuthenticated = false
 
     private let hasLiDAR = DeviceCapability.supportsLiDAR
     private let hasARKit = DeviceCapability.supportsARKit
 
     var body: some View {
+        if !isAuthenticated {
+            SignInView {
+                isAuthenticated = true
+            }
+        } else {
+            scanFlowView
+        }
+    }
+
+    private var scanFlowView: some View {
         Group {
             switch viewModel.state {
             case .idle:
@@ -16,9 +28,17 @@ struct ContentView: View {
                 RFQSelectionView(selectedRFQ: $viewModel.selectedRFQ)
                     .onChange(of: viewModel.selectedRFQ) { _, newValue in
                         if newValue != nil {
-                            viewModel.prepareScan()
+                            viewModel.state = .projectOverview
                         }
                     }
+            case .projectOverview:
+                if let rfq = viewModel.selectedRFQ {
+                    ProjectOverviewView(
+                        rfq: rfq,
+                        onScanRoom: { viewModel.prepareScan() },
+                        onBack: { viewModel.returnToIdle() }
+                    )
+                }
             case .scanReady, .scanning:
                 ScanningView(
                     sessionManager: sessionManager,
@@ -27,6 +47,25 @@ struct ContentView: View {
                     onStop: { handleStopScan() },
                     onRedo: { handleRedoScan() }
                 )
+            case .reviewingCoverage:
+                CoverageReviewView(
+                    sessionManager: sessionManager,
+                    viewModel: viewModel,
+                    onContinueScanning: {
+                        // Return to scan-ready so user presses "Start Scan" to resume
+                        viewModel.uncoveredFaces = [:]
+                        viewModel.coverageRatio = 0
+                        viewModel.isAnalyzingCoverage = false
+                        viewModel.state = .scanReady
+                    },
+                    onLooksGood: {
+                        // Frame selection already ran during handleStopScan — proceed directly
+                        viewModel.state = .annotatingCorners
+                    }
+                )
+            case .capturingPanorama:
+                // Deprecated: panorama replaced by denser walk-around capture
+                EmptyView()
             case .annotatingCorners:
                 CornerAnnotationView(
                     sessionManager: sessionManager,
@@ -40,14 +79,6 @@ struct ContentView: View {
                     onRedo: {
                         handleRedoScan()
                     }
-                )
-            case .capturingPanorama:
-                PanoramaSweepView(
-                    sessionManager: sessionManager,
-                    viewModel: viewModel,
-                    firstCorner: firstAnnotationCorner,
-                    onDone: { handlePanoramaDone() },
-                    onSkip: { handlePanoramaSkip() }
                 )
             case .labelingRoom:
                 RoomLabelView(roomLabel: $viewModel.roomLabel) {
@@ -70,7 +101,10 @@ struct ContentView: View {
                 ScanResultView(
                     viewModel: viewModel,
                     meshAnchors: sessionManager.lastMeshAnchors,
-                    onDone: { viewModel.returnToIdle() },
+                    onDone: {
+                        // Return to project overview to see all rooms
+                        viewModel.state = .projectOverview
+                    },
                     onScanAnother: {
                         // Keep same RFQ, go to scanReady for another room
                         viewModel.prepareScan()
@@ -107,6 +141,15 @@ struct ContentView: View {
         } message: {
             Text("Not enough storage to export scan. Free up at least 200 MB and try again.")
         }
+        .alert("Frame Limit Reached", isPresented: $viewModel.showCapReachedAlert) {
+            Button("Stop Scan") { handleStopScan() }
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Captured \(viewModel.keyframeCount) frames — the maximum for this scan. Tap Stop Scan to review coverage, or continue walking to build the mesh.")
+        }
+        .onAppear {
+            isAuthenticated = AuthManager.shared.isSignedIn
+        }
     }
 
     // MARK: - Scan Control Handlers
@@ -118,13 +161,29 @@ struct ContentView: View {
 
     private func handleStopScan() {
         sessionManager.isCapturing = false
-        // Snapshot mesh but do NOT pause — session stays running during annotation
+        // Snapshot mesh and pause session — coverage review is non-AR
         sessionManager.snapshotMeshAnchors()
-        viewModel.stopScan()
+        sessionManager.pauseSession()
 
-        // Kick off post-scan frame selection in the background.
-        // Runs while the user annotates corners — no blocking.
-        sessionManager.frameCaptureManager.selectBestFrames()
+        // Transition to coverage review
+        viewModel.isAnalyzingCoverage = true
+        viewModel.state = .reviewingCoverage
+
+        // Run frame selection first (reduces 250→180), then coverage analysis on the selected set.
+        // This frees ~70 frames of memory and makes coverage analysis faster.
+        sessionManager.frameCaptureManager.selectBestFrames { [self] in
+            print("[RoomScanAlpha] Frame selection complete — \(sessionManager.frameCaptureManager.keyframeCount) frames")
+
+            MeshCoverageAnalyzer.analyze(
+                meshAnchors: sessionManager.lastMeshAnchors,
+                frames: sessionManager.frameCaptureManager.capturedFrames
+            ) { result in
+                viewModel.uncoveredFaces = result.uncoveredFaces
+                viewModel.coverageRatio = result.coverageRatio
+                viewModel.isAnalyzingCoverage = false
+                print("[RoomScanAlpha] Coverage: \(Int(result.coverageRatio * 100))% (\(result.uncoveredCount) uncovered of \(result.totalFaces) faces)")
+            }
+        }
     }
 
     private func handleRedoScan() {
@@ -136,42 +195,17 @@ struct ContentView: View {
 
     private func handleAnnotationDone(annotation: CornerAnnotation?) {
         viewModel.cornerAnnotation = annotation
-        // Snapshot mesh but keep session running for panoramic capture
         sessionManager.snapshotMeshAnchors()
-        // Advance to panoramic sweep (session stays running)
-        viewModel.state = .capturingPanorama
+        // Denser walk-around capture replaces panorama — go straight to labeling
+        sessionManager.pauseSession()
+        waitForFrameSelectionThen {
+            advanceToLabelingOrWarning()
+        }
     }
 
     private func handleAnnotationSkip() {
         viewModel.cornerAnnotation = nil
         sessionManager.snapshotMeshAnchors()
-        // Skip annotation → skip panorama too, go to labeling
-        sessionManager.pauseSession()
-        waitForFrameSelectionThen {
-            advanceToLabelingOrWarning()
-        }
-    }
-
-    // MARK: - Panorama Handlers
-
-    /// First annotation corner in world space (for alignment guide).
-    private var firstAnnotationCorner: SIMD3<Float>? {
-        guard let annotation = viewModel.cornerAnnotation,
-              !annotation.corners_xz.isEmpty else { return nil }
-        let xz = annotation.corners_xz[0]
-        let y = annotation.corners_y[0]
-        return SIMD3<Float>(xz[0], y, xz[1])
-    }
-
-    private func handlePanoramaDone() {
-        sessionManager.pauseSession()
-        waitForFrameSelectionThen {
-            advanceToLabelingOrWarning()
-        }
-    }
-
-    private func handlePanoramaSkip() {
-        sessionManager.resetPanoramicCapture()
         sessionManager.pauseSession()
         waitForFrameSelectionThen {
             advanceToLabelingOrWarning()
@@ -211,6 +245,7 @@ struct ContentView: View {
         let duration = viewModel.scanDuration
         let rfqContext = viewModel.rfqContext
         let cornerAnnotation = viewModel.cornerAnnotation
+        let roomScope = viewModel.roomScope
         let panoramicFrames = sessionManager.panoramicFrames
         let panoramaStartTransform = viewModel.panoramaStartTransform
 
@@ -222,6 +257,7 @@ struct ContentView: View {
                     scanDuration: duration,
                     rfqContext: rfqContext,
                     cornerAnnotation: cornerAnnotation,
+                    roomScope: roomScope,
                     panoramicFrames: panoramicFrames,
                     panoramaStartTransform: panoramaStartTransform,
                     onProgress: { message in
@@ -402,6 +438,14 @@ struct ContentView: View {
                     Image(systemName: "clock.arrow.circlepath")
                         .font(.title2)
                 }
+                Button {
+                    try? AuthManager.shared.signOut()
+                    isAuthenticated = false
+                } label: {
+                    Image(systemName: "rectangle.portrait.and.arrow.right")
+                        .font(.title2)
+                        .foregroundStyle(.secondary)
+                }
             }
             .padding(.horizontal, 24)
 
@@ -423,14 +467,14 @@ struct ContentView: View {
 
                 Button {
                     if viewModel.hasRFQSelected {
-                        viewModel.prepareScan()
+                        viewModel.state = .projectOverview
                     } else {
                         viewModel.state = .selectingRFQ
                     }
                 } label: {
                     Label(
-                        viewModel.hasRFQSelected ? "Start Scan" : "Select Project to Scan",
-                        systemImage: viewModel.hasRFQSelected ? "viewfinder" : "doc.text.magnifyingglass"
+                        viewModel.hasRFQSelected ? "View Project" : "Select Project to Scan",
+                        systemImage: viewModel.hasRFQSelected ? "doc.text.magnifyingglass" : "doc.text.magnifyingglass"
                     )
                     .primaryButtonStyle()
                 }

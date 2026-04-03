@@ -18,6 +18,7 @@ struct ScanPackager {
         scanDuration: TimeInterval,
         rfqContext: RFQContext?,
         cornerAnnotation: CornerAnnotation?,
+        roomScope: RoomScope? = nil,
         panoramicFrames: [CapturedFrame] = [],
         panoramaStartTransform: simd_float4x4? = nil,
         onProgress: @escaping (String) -> Void
@@ -92,6 +93,7 @@ struct ScanPackager {
             scanDuration: scanDuration,
             rfqContext: rfqContext,
             cornerAnnotation: cornerAnnotation,
+            roomScope: roomScope,
             panoramicFrames: panoramicFrames,
             panoramaStartTransform: panoramaStartTransform
         )
@@ -143,6 +145,9 @@ struct ScanMetadata: Codable {
     let cornerAnnotation: CornerAnnotation?
     let keyframes: [KeyframeEntry]
 
+    // Scope of work
+    let roomScope: RoomScope?
+
     // Panoramic sweep data
     let panoramicKeyframeCount: Int?
     let panoramaStartTransform: [Float]?
@@ -167,6 +172,7 @@ struct ScanMetadata: Codable {
         case meshFaceCount = "mesh_face_count"
         case cornerAnnotation = "corner_annotation"
         case keyframes
+        case roomScope = "room_scope"
         case panoramicKeyframeCount = "panoramic_keyframe_count"
         case panoramaStartTransform = "panorama_start_transform"
         case panoramicKeyframes = "panoramic_keyframes"
@@ -192,6 +198,7 @@ struct ScanMetadata: Codable {
         try container.encode(meshFaceCount, forKey: .meshFaceCount)
         try container.encodeIfPresent(cornerAnnotation, forKey: .cornerAnnotation)
         try container.encode(keyframes, forKey: .keyframes)
+        try container.encodeIfPresent(roomScope, forKey: .roomScope)
         try container.encodeIfPresent(panoramicKeyframeCount, forKey: .panoramicKeyframeCount)
         try container.encodeIfPresent(panoramaStartTransform, forKey: .panoramaStartTransform)
         try container.encodeIfPresent(panoramicKeyframes, forKey: .panoramicKeyframes)
@@ -204,6 +211,7 @@ struct ScanMetadata: Codable {
         scanDuration: TimeInterval,
         rfqContext: RFQContext?,
         cornerAnnotation: CornerAnnotation?,
+        roomScope: RoomScope? = nil,
         panoramicFrames: [CapturedFrame] = [],
         panoramaStartTransform: simd_float4x4? = nil
     ) -> ScanMetadata {
@@ -243,15 +251,18 @@ struct ScanMetadata: Codable {
             meshFaceCount: meshFaceCount,
             cornerAnnotation: cornerAnnotation,
             keyframes: keyframes.map { KeyframeEntry.from($0) },
+            roomScope: roomScope,
             panoramicKeyframeCount: panoramicFrames.isEmpty ? nil : panoramicFrames.count,
             panoramaStartTransform: startTransformArray,
             panoramicKeyframes: panoramicFrames.isEmpty ? nil : panoramicFrames.map {
                 let name = String(format: "pano_%03d", $0.index)
+                let t = $0.cameraTransform
                 return KeyframeEntry(
                     index: $0.index,
                     filename: "\(name).jpg",
                     depthFilename: "\(name).depth",
-                    timestamp: $0.timestamp
+                    timestamp: $0.timestamp,
+                    position: [t.columns.3.x, t.columns.3.y, t.columns.3.z]
                 )
             }
         )
@@ -305,19 +316,23 @@ struct KeyframeEntry: Codable {
     let filename: String
     let depthFilename: String
     let timestamp: TimeInterval
+    let position: [Float]?
 
     enum CodingKeys: String, CodingKey {
-        case index, filename, timestamp
+        case index, filename, timestamp, position
         case depthFilename = "depth_filename"
     }
 
     static func from(_ frame: CapturedFrame) -> KeyframeEntry {
         let name = String(format: "frame_%03d", frame.index)
+        let t = frame.cameraTransform
+        let pos: [Float] = [t.columns.3.x, t.columns.3.y, t.columns.3.z]
         return KeyframeEntry(
             index: frame.index,
             filename: "\(name).jpg",
             depthFilename: "\(name).depth",
-            timestamp: frame.timestamp
+            timestamp: frame.timestamp,
+            position: pos
         )
     }
 }

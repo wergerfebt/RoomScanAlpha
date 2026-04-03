@@ -78,14 +78,27 @@ struct ScanningView: View {
                     viewModel.showInterruptionAlert = true
                 }
             }
-            // Start AR session for preview — capture is gated by isCapturing flag
-            sessionManager.startSession()
+            // Stop capture when frame cap is reached to avoid wasted CPU/memory
+            sessionManager.frameCaptureManager.onCapReached = {
+                sessionManager.isCapturing = false
+                viewModel.showCapReachedAlert = true
+            }
+            // Start or resume AR session — capture is gated by isCapturing flag.
+            // Use resumeSession() if frames already exist (returning from coverage review)
+            // to avoid wiping captured frames.
+            if sessionManager.frameCaptureManager.keyframeCount > 0 {
+                sessionManager.resumeSession()
+            } else {
+                sessionManager.startSession()
+            }
         }
         .onDisappear {
             sessionManager.isCapturing = false
             // Only pause if we're NOT transitioning to annotation (which needs a live session).
             // handleAnnotationDone/Skip will pause the session after annotation completes.
-            if viewModel.state != .annotatingCorners && viewModel.state != .capturingPanorama {
+            if viewModel.state != .annotatingCorners
+                && viewModel.state != .capturingPanorama
+                && viewModel.state != .reviewingCoverage {
                 sessionManager.pauseSession()
             }
         }

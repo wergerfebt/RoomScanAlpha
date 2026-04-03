@@ -10,19 +10,25 @@ final class FrameCaptureManager {
     private var lastCaptureTransform: simd_float4x4?
     private var lastCaptureTime: TimeInterval = 0
     private var nextIndex: Int = 0
+    private var capNotified: Bool = false
 
-    // Thresholds — tuned for 30-60 keyframes when walking the perimeter of a ~4x4m room.
+    // Thresholds — denser capture (8°/0.3s) replaces the separate panoramic sweep phase.
     // 0.15m translation: captures a new angle every ~6 inches — enough overlap for ORB matching
     // without excessive redundancy.
     private let translationThreshold: Float = 0.15
-    // 15 deg rotation: captures new viewpoints when turning corners or looking up/down.
-    private let rotationThreshold: Float = 15.0
-    // 0.5s minimum: prevents burst captures from hand tremor or rapid panning.
-    private let minimumInterval: TimeInterval = 0.5
-    // 80 cap: capture ~80 frames during scan, then post-scan selection keeps best 60.
-    private let maxKeyframes: Int = 80
+    // 8 deg rotation: dense angular coverage for texture projection and OpenMVS.
+    private let rotationThreshold: Float = 8.0
+    // 0.3s minimum: denser temporal capture while avoiding burst from hand tremor.
+    private let minimumInterval: TimeInterval = 0.3
+    // 300 cap: capture up to 300 frames, then post-scan selection keeps best 180.
+    // After selection (180 kept), there's room for 120 more on rescan.
+    private let maxKeyframes: Int = 300
+
+    /// Called when the frame cap is reached. The session manager should set isCapturing = false.
+    var onCapReached: (() -> Void)?
 
     var keyframeCount: Int { capturedFrames.count }
+    var isAtCapacity: Bool { capturedFrames.count >= maxKeyframes }
 
     func reset() {
         capturedFrames.removeAll()
@@ -31,13 +37,24 @@ final class FrameCaptureManager {
         nextIndex = 0
         isSelecting = false
         selectionComplete = false
+        capNotified = false
     }
 
     /// Evaluate an ARFrame and capture a keyframe if selection criteria are met.
     /// Returns true if a keyframe was captured.
     @discardableResult
     func processFrame(_ frame: ARFrame) -> Bool {
-        guard capturedFrames.count < maxKeyframes else { return false }
+        guard capturedFrames.count < maxKeyframes else {
+            // Cap reached — notify once to stop capture pipeline
+            if !capNotified {
+                capNotified = true
+                print("[RoomScanAlpha] Frame cap reached (\(maxKeyframes)) — stopping capture")
+                DispatchQueue.main.async { [self] in
+                    onCapReached?()
+                }
+            }
+            return false
+        }
 
         let currentTransform = frame.camera.transform
         let currentTime = frame.timestamp
@@ -128,6 +145,8 @@ final class FrameCaptureManager {
                 self.capturedFrames = reordered
                 self.isSelecting = false
                 self.selectionComplete = true
+                // Reset cap flag — after selection (300→180), there's room for 120 more on rescan
+                self.capNotified = false
                 completion?()
             }
         }

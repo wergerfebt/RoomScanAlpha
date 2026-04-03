@@ -27,7 +27,8 @@ final class RFQService {
                 id: id,
                 description: dict["description"] as? String,
                 status: status,
-                createdAt: dict["created_at"] as? String
+                createdAt: dict["created_at"] as? String,
+                address: dict["address"] as? String
             )
         }
     }
@@ -50,14 +51,19 @@ final class RFQService {
         }
     }
 
-    func createRFQ(description: String) async throws -> RFQ {
+    func createRFQ(description: String, address: String? = nil) async throws -> RFQ {
         let token = try await AuthManager.shared.getToken()
         let url = URL(string: "\(apiBaseURL)/api/rfqs")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: ["description": description])
+
+        var body: [String: Any] = ["description": description]
+        if let address, !address.isEmpty {
+            body["address"] = address
+        }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
@@ -69,7 +75,32 @@ final class RFQService {
             id: json["id"] as? String ?? "",
             description: json["description"] as? String,
             status: json["status"] as? String ?? "scan_pending",
-            createdAt: nil
+            createdAt: nil,
+            address: json["address"] as? String
         )
+    }
+
+    /// Save scope of work items for a scanned room.
+    func saveScope(rfqId: String, scanId: String, scope: RoomScope) async throws {
+        let token = try await AuthManager.shared.getToken()
+        let url = URL(string: "\(apiBaseURL)/api/rfqs/\(rfqId)/scans/\(scanId)/scope")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: Any] = [
+            "items": scope.items,
+            "notes": scope.notes
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            throw URLError(.badServerResponse, userInfo: [
+                NSLocalizedDescriptionKey: "Save scope failed (HTTP \(code))"
+            ])
+        }
     }
 }

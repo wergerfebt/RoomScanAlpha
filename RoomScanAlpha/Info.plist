@@ -9,6 +9,8 @@
 		<key>UIImageRespectsSafeAreaInsets</key>
 		<true/>
 	</dict>
+	<key>GIDClientID</key>
+	<string>839349778883-8u7hk4nupoh7g2hdau4u6i83370k4oqs.apps.googleusercontent.com</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

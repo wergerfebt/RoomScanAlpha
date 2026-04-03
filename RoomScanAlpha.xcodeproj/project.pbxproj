@@ -19,6 +19,7 @@
 		A1111111000000000000000A /* ScanningView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000000A /* ScanningView.swift */; };
 		A11111110000000000000010 /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = A18888880000000000000001 /* FirebaseAuth */; };
 		A11111110000000000000011 /* FirebaseMessaging in Frameworks */ = {isa = PBXBuildFile; productRef = A18888880000000000000002 /* FirebaseMessaging */; };
+		A1111111000000000000002B /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = A18888880000000000000003 /* GoogleSignIn */; };
 		A11111110000000000000012 /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000020 /* GoogleService-Info.plist */; };
 		A11111110000000000000013 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000021 /* AppDelegate.swift */; };
 		A11111110000000000000014 /* CapturedFrame.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000022 /* CapturedFrame.swift */; };
@@ -58,6 +59,15 @@
 		B1111111000000000000000E /* CornerAnnotationViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000E /* CornerAnnotationViewModelTests.swift */; };
 		A11111110000000000000029 /* FloorPlanView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000037 /* FloorPlanView.swift */; };
 		A1111111000000000000002A /* PanoramaSweepView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000038 /* PanoramaSweepView.swift */; };
+		A1111111000000000000002C /* RoomScope.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000039 /* RoomScope.swift */; };
+		A1111111000000000000002D /* SignInView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000003A /* SignInView.swift */; };
+		A1111111000000000000002E /* ProjectOverviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000003B /* ProjectOverviewView.swift */; };
+		A1111111000000000000002F /* NewProjectSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000003C /* NewProjectSheet.swift */; };
+		A11111110000000000000030 /* CoverageReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000003D /* CoverageReviewView.swift */; };
+		A11111110000000000000031 /* RoomViewerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000003E /* RoomViewerView.swift */; };
+		A11111110000000000000032 /* CoverageAudit.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000003F /* CoverageAudit.swift */; };
+		A11111110000000000000033 /* MeshCoverageAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000040 /* MeshCoverageAnalyzer.swift */; };
+		A11111110000000000000034 /* RoomViewerCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000041 /* RoomViewerCache.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -122,6 +132,15 @@
 		B10000000000000000000010 /* RoomScanAlphaTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RoomScanAlphaTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A10000000000000000000037 /* FloorPlanView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloorPlanView.swift; sourceTree = "<group>"; };
 		A10000000000000000000038 /* PanoramaSweepView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanoramaSweepView.swift; sourceTree = "<group>"; };
+		A10000000000000000000039 /* RoomScope.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoomScope.swift; sourceTree = "<group>"; };
+		A1000000000000000000003A /* SignInView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignInView.swift; sourceTree = "<group>"; };
+		A1000000000000000000003B /* ProjectOverviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectOverviewView.swift; sourceTree = "<group>"; };
+		A1000000000000000000003C /* NewProjectSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewProjectSheet.swift; sourceTree = "<group>"; };
+		A1000000000000000000003D /* CoverageReviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoverageReviewView.swift; sourceTree = "<group>"; };
+		A1000000000000000000003E /* RoomViewerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoomViewerView.swift; sourceTree = "<group>"; };
+		A1000000000000000000003F /* CoverageAudit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoverageAudit.swift; sourceTree = "<group>"; };
+		A10000000000000000000040 /* MeshCoverageAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeshCoverageAnalyzer.swift; sourceTree = "<group>"; };
+		A10000000000000000000041 /* RoomViewerCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoomViewerCache.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -131,6 +150,7 @@
 			files = (
 				A11111110000000000000010 /* FirebaseAuth in Frameworks */,
 				A11111110000000000000011 /* FirebaseMessaging in Frameworks */,
+				A1111111000000000000002B /* GoogleSignIn in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -180,6 +200,7 @@
 				A1000000000000000000002C /* RFQContext.swift */,
 				A10000000000000000000031 /* ScanRecord.swift */,
 				A10000000000000000000034 /* CornerAnnotation.swift */,
+				A10000000000000000000039 /* RoomScope.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -208,6 +229,10 @@
 				A10000000000000000000036 /* CornerAnnotationView.swift */,
 				A10000000000000000000037 /* FloorPlanView.swift */,
 				A10000000000000000000038 /* PanoramaSweepView.swift */,
+				A1000000000000000000003A /* SignInView.swift */,
+				A1000000000000000000003B /* ProjectOverviewView.swift */,
+				A1000000000000000000003C /* NewProjectSheet.swift */,
+				A1000000000000000000003D /* CoverageReviewView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -220,6 +245,8 @@
 				A10000000000000000000023 /* FrameCaptureManager.swift */,
 				A10000000000000000000026 /* ARMeshGeometry+Accessors.swift */,
 				A10000000000000000000033 /* FrameQualityScorer.swift */,
+				A1000000000000000000003F /* CoverageAudit.swift */,
+				A10000000000000000000040 /* MeshCoverageAnalyzer.swift */,
 			);
 			path = AR;
 			sourceTree = "<group>";
@@ -239,6 +266,7 @@
 				A10000000000000000000029 /* AuthManager.swift */,
 				A1000000000000000000002A /* CloudUploader.swift */,
 				A1000000000000000000002F /* RFQService.swift */,
+				A10000000000000000000041 /* RoomViewerCache.swift */,
 			);
 			path = Cloud;
 			sourceTree = "<group>";
@@ -292,6 +320,7 @@
 			packageProductDependencies = (
 				A18888880000000000000001 /* FirebaseAuth */,
 				A18888880000000000000002 /* FirebaseMessaging */,
+				A18888880000000000000003 /* GoogleSignIn */,
 			);
 			productName = RoomScanAlpha;
 			productReference = A10000000000000000000010 /* RoomScanAlpha.app */;
@@ -345,6 +374,7 @@
 			mainGroup = A13333330000000000000001;
 			packageReferences = (
 				A17777770000000000000001 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
+				A17777770000000000000002 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
 			);
 			productRefGroup = A13333330000000000000003 /* Products */;
 			projectDirPath = "";
@@ -413,6 +443,14 @@
 				A11111110000000000000028 /* CornerAnnotationView.swift in Sources */,
 				A11111110000000000000029 /* FloorPlanView.swift in Sources */,
 				A1111111000000000000002A /* PanoramaSweepView.swift in Sources */,
+				A1111111000000000000002C /* RoomScope.swift in Sources */,
+				A1111111000000000000002D /* SignInView.swift in Sources */,
+				A1111111000000000000002E /* ProjectOverviewView.swift in Sources */,
+				A1111111000000000000002F /* NewProjectSheet.swift in Sources */,
+				A11111110000000000000034 /* RoomViewerCache.swift in Sources */,
+				A11111110000000000000030 /* CoverageReviewView.swift in Sources */,
+				A11111110000000000000032 /* CoverageAudit.swift in Sources */,
+				A11111110000000000000033 /* MeshCoverageAnalyzer.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -580,6 +618,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = RoomScanAlpha/Info.plist;
 				INFOPLIST_KEY_NSCameraUsageDescription = "RoomScanAlpha uses your camera and LiDAR sensor to scan rooms in 3D.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -608,6 +647,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = RoomScanAlpha/Info.plist;
 				INFOPLIST_KEY_NSCameraUsageDescription = "RoomScanAlpha uses your camera and LiDAR sensor to scan rooms in 3D.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -706,6 +746,14 @@
 				minimumVersion = 11.0.0;
 			};
 		};
+		A17777770000000000000002 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/google/GoogleSignIn-iOS";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 8.0.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -718,6 +766,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = A17777770000000000000001 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseMessaging;
+		};
+		A18888880000000000000003 /* GoogleSignIn */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A17777770000000000000002 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;
+			productName = GoogleSignIn;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

@@ -56,12 +56,20 @@ final class ScanViewModel {
     var selectedRFQ: RFQ?
     var roomLabel: String = ""
     var rfqContext: RFQContext?
+    var roomScope: RoomScope?
+
+    // MARK: - Coverage Analysis
+
+    var uncoveredFaces: [UUID: Set<Int>] = [:]
+    var coverageRatio: Float = 0.0
+    var isAnalyzingCoverage: Bool = false
 
     // MARK: - UI Flags
 
     var showHistory = false
     var showInterruptionAlert = false
     var showLowStorageAlert = false
+    var showCapReachedAlert = false
 
     private var scanStartTime: Date?
 
@@ -99,10 +107,9 @@ final class ScanViewModel {
         state = .scanning
     }
 
-    /// Stop capturing and transition to corner annotation.
-    /// The AR session stays running — mesh reconstruction continues.
+    /// Stop capturing. State transition is handled by ContentView (→ reviewingCoverage).
     func stopScan() {
-        state = .annotatingCorners
+        // State is now set by ContentView.handleStopScan() — do not override here
     }
 
     /// Clear all captured data and return to the pre-scan ready state.

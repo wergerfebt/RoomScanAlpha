@@ -2,6 +2,7 @@ import UIKit
 import FirebaseCore
 import FirebaseMessaging
 import UserNotifications
+import GoogleSignIn
 
 final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate, MessagingDelegate {
 
@@ -12,11 +13,24 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         FirebaseApp.configure()
         print("[RoomScanAlpha] Firebase initialized")
 
+        // Configure Google Sign-In with the OAuth client ID from Firebase
+        if let clientID = FirebaseApp.app()?.options.clientID {
+            GIDSignIn.sharedInstance.configuration = GIDConfiguration(clientID: clientID)
+            print("[RoomScanAlpha] Google Sign-In configured")
+        } else {
+            print("[RoomScanAlpha] WARNING: Firebase clientID is nil — Google Sign-In will not work")
+        }
+
         UNUserNotificationCenter.current().delegate = self
         Messaging.messaging().delegate = self
 
         requestNotificationPermission(application)
         return true
+    }
+
+    // Handle Google Sign-In OAuth redirect URL
+    func application(_ app: UIApplication, open url: URL, options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {
+        return GIDSignIn.sharedInstance.handle(url)
     }
 
     private func requestNotificationPermission(_ application: UIApplication) {

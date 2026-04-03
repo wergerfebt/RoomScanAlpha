@@ -11,6 +11,9 @@ struct ScanResultView: View {
     @State private var showFloorPlan = false
     @State private var showRemoteMesh = false
     @State private var selectedMeshUrl: URL?
+    @State private var selectedScopeItems: Set<String> = []
+    @State private var scopeNotes: String = ""
+    @State private var scopeSaved = false
 
     var body: some View {
         ScrollView {
@@ -211,6 +214,9 @@ struct ScanResultView: View {
                 .padding(.horizontal, 24)
             }
 
+            // Scope of Work
+            scopeSelectionView
+
             // Scan stats
             VStack(spacing: 4) {
                 Text("\(viewModel.keyframeCount) keyframes  •  \(viewModel.meshTriangleCount) triangles")
@@ -245,6 +251,82 @@ struct ScanResultView: View {
                 Text("Scan ID: \(scanId.prefix(8))...")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    // MARK: - Scope of Work
+
+    private var scopeSelectionView: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionHeader("Scope of Work")
+
+            let items = ScopeItemCatalog.items(for: viewModel.roomLabel)
+
+            FlowLayout(spacing: 6) {
+                ForEach(items) { item in
+                    Button {
+                        if selectedScopeItems.contains(item.id) {
+                            selectedScopeItems.remove(item.id)
+                        } else {
+                            selectedScopeItems.insert(item.id)
+                        }
+                        scopeSaved = false
+                    } label: {
+                        Text(item.label)
+                            .font(.caption)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(selectedScopeItems.contains(item.id) ? Color.blue : Color.blue.opacity(0.1))
+                            .foregroundStyle(selectedScopeItems.contains(item.id) ? .white : .blue)
+                            .clipShape(Capsule())
+                    }
+                }
+            }
+
+            TextField("Notes (optional)", text: $scopeNotes, axis: .vertical)
+                .lineLimit(2...4)
+                .textFieldStyle(.roundedBorder)
+                .font(.subheadline)
+                .onChange(of: scopeNotes) { _, _ in scopeSaved = false }
+
+            if !selectedScopeItems.isEmpty || !scopeNotes.isEmpty {
+                Button {
+                    saveScope()
+                } label: {
+                    HStack {
+                        Image(systemName: scopeSaved ? "checkmark.circle.fill" : "square.and.arrow.up")
+                        Text(scopeSaved ? "Scope Saved" : "Save Scope")
+                    }
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .background(scopeSaved ? .green.opacity(0.1) : .blue.opacity(0.1))
+                    .foregroundStyle(scopeSaved ? .green : .blue)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+                .disabled(scopeSaved)
+            }
+        }
+        .padding()
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal, 24)
+    }
+
+    private func saveScope() {
+        guard let rfqId = viewModel.selectedRFQ?.id,
+              let scanId = viewModel.lastScanId ?? viewModel.scanResult?.scanId else { return }
+
+        let scope = RoomScope(items: Array(selectedScopeItems), notes: scopeNotes)
+        Task {
+            do {
+                try await RFQService.shared.saveScope(rfqId: rfqId, scanId: scanId, scope: scope)
+                scopeSaved = true
+                print("[RoomScanAlpha] Scope saved for scan \(scanId)")
+            } catch {
+                print("[RoomScanAlpha] Failed to save scope: \(error)")
             }
         }
     }

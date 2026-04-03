@@ -4,8 +4,7 @@ struct RFQSelectionView: View {
     @Binding var selectedRFQ: RFQ?
     @State private var rfqs: [RFQ] = []
     @State private var isLoading = true
-    @State private var showNewRFQ = false
-    @State private var newDescription = ""
+    @State private var showNewProject = false
     @State private var errorMessage: String?
 
     var body: some View {
@@ -31,8 +30,13 @@ struct RFQSelectionView: View {
                         } label: {
                             HStack {
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Text(rfq.description ?? "Untitled Project")
+                                    Text(rfq.title)
                                         .font(.headline)
+                                    if let address = rfq.address, !address.isEmpty {
+                                        Text(address)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
                                     Text(rfq.status.replacingOccurrences(of: "_", with: " ").capitalized)
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
@@ -52,16 +56,17 @@ struct RFQSelectionView: View {
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Button {
-                        showNewRFQ = true
+                        showNewProject = true
                     } label: {
                         Image(systemName: "plus")
                     }
                 }
             }
-            .alert("New Project", isPresented: $showNewRFQ) {
-                TextField("Project description", text: $newDescription)
-                Button("Create") { createRFQ() }
-                Button("Cancel", role: .cancel) { newDescription = "" }
+            .sheet(isPresented: $showNewProject) {
+                NewProjectSheet { title, description, address in
+                    showNewProject = false
+                    createRFQ(title: title, description: description, address: address)
+                }
             }
             .task {
                 await loadRFQs()
@@ -72,7 +77,6 @@ struct RFQSelectionView: View {
     private func loadRFQs() async {
         isLoading = true
         do {
-            _ = try await AuthManager.shared.signInAnonymously()
             rfqs = try await RFQService.shared.listRFQs()
         } catch {
             errorMessage = error.localizedDescription
@@ -81,12 +85,16 @@ struct RFQSelectionView: View {
         isLoading = false
     }
 
-    private func createRFQ() {
-        let desc = newDescription
-        newDescription = ""
+    private func createRFQ(title: String, description: String, address: String) {
+        // Use title as the description if no separate description provided,
+        // since the API stores description as the primary project text
+        let desc = description.isEmpty ? title : "\(title) — \(description)"
         Task {
             do {
-                let rfq = try await RFQService.shared.createRFQ(description: desc)
+                let rfq = try await RFQService.shared.createRFQ(
+                    description: desc,
+                    address: address.isEmpty ? nil : address
+                )
                 rfqs.insert(rfq, at: 0)
                 selectedRFQ = rfq
             } catch {

@@ -1,10 +1,7 @@
-// Shows per-face coverage analysis results as an AR overlay.
-// Faces with no viable camera candidate are highlighted in red.
+// Shows mesh coverage analysis results after scanning.
 // User can continue scanning to fill gaps or proceed to annotation.
 
 import SwiftUI
-import ARKit
-import SceneKit
 
 struct CoverageReviewView: View {
     let sessionManager: ARSessionManager
@@ -13,196 +10,103 @@ struct CoverageReviewView: View {
     let onLooksGood: () -> Void
 
     var body: some View {
-        ZStack {
-            CoverageARView(
-                sessionManager: sessionManager,
-                uncoveredFaces: viewModel.uncoveredFaces
-            )
-            .ignoresSafeArea()
+        VStack(spacing: 24) {
+            Spacer()
 
-            VStack {
-                statusBadge
-                    .padding(.top, 8)
+            coverageIcon
 
-                Spacer()
+            Text("Scan Coverage")
+                .font(.title2)
+                .fontWeight(.bold)
 
-                controlBar
-                    .padding(.bottom, 32)
+            if viewModel.isAnalyzingCoverage {
+                ProgressView("Analyzing mesh coverage...")
+                    .padding()
+            } else {
+                coverageSummary
             }
+
+            Spacer()
+
+            controlButtons
+                .padding(.bottom, 40)
         }
+        .padding()
     }
 
-    private var statusBadge: some View {
+    private var coverageIcon: some View {
+        let pct = Int(viewModel.coverageRatio * 100)
+        let color: Color = pct >= 95 ? .green : pct >= 80 ? .yellow : .red
+        let icon = pct >= 95 ? "checkmark.circle.fill" : pct >= 80 ? "exclamationmark.circle.fill" : "xmark.circle.fill"
+
+        return Image(systemName: icon)
+            .font(.system(size: 64))
+            .foregroundStyle(color)
+    }
+
+    private var coverageSummary: some View {
         let pct = Int(viewModel.coverageRatio * 100)
         let uncovered = viewModel.uncoveredFaces.values.reduce(0) { $0 + $1.count }
-        let analyzing = viewModel.isAnalyzingCoverage
-        let color: Color = pct >= 95 ? .green : pct >= 80 ? .yellow : .red
+        let total = uncovered > 0 ? Int(Double(uncovered) / max(1.0 - Double(viewModel.coverageRatio), 0.001)) : 0
 
-        return HStack(spacing: 8) {
-            if analyzing {
-                ProgressView()
-                    .scaleEffect(0.8)
-                Text("Analyzing coverage...")
-            } else if uncovered == 0 {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-                Text("All faces covered")
+        return VStack(spacing: 16) {
+            Text("\(pct)% Coverage")
+                .font(.system(.largeTitle, design: .rounded))
+                .fontWeight(.bold)
+
+            if uncovered > 0 {
+                VStack(spacing: 8) {
+                    Text("\(uncovered) of \(total) mesh faces have no camera coverage")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+
+                    if pct < 80 {
+                        Text("Consider scanning areas you may have missed — corners, ceiling, and behind obstacles.")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 20)
+                    }
+                }
             } else {
-                Circle()
-                    .fill(color)
-                    .frame(width: 10, height: 10)
-                Text("\(pct)% covered")
-                    .fontWeight(.semibold)
-                Text("Scan red areas")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Text("All mesh faces have camera coverage")
+                    .font(.subheadline)
+                    .foregroundStyle(.green)
             }
+
+            // Frame count info
+            Text("\(viewModel.keyframeCount) keyframes captured")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
         }
-        .font(.callout)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(.ultraThinMaterial)
-        .clipShape(Capsule())
+        .padding(.horizontal, 24)
     }
 
-    private var controlBar: some View {
-        HStack(spacing: 20) {
+    private var controlButtons: some View {
+        VStack(spacing: 16) {
+            Button(action: onLooksGood) {
+                Label("Looks Good — Annotate Corners", systemImage: "checkmark.circle.fill")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(.blue)
+                    .foregroundStyle(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+            .disabled(viewModel.isAnalyzingCoverage)
+
             Button(action: onContinueScanning) {
                 Label("Continue Scanning", systemImage: "camera.fill")
                     .font(.headline)
-                    .padding(.horizontal, 24)
+                    .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
-                    .background(.ultraThinMaterial)
-                    .clipShape(Capsule())
+                    .background(Color(uiColor: .systemGray5))
+                    .foregroundStyle(.primary)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
             }
-
-            Button(action: onLooksGood) {
-                Label("Looks Good", systemImage: "checkmark.circle.fill")
-                    .font(.headline)
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 14)
-                    .background(.ultraThinMaterial)
-                    .clipShape(Capsule())
-            }
+            .disabled(viewModel.isAnalyzingCoverage)
         }
-    }
-}
-
-// MARK: - Coverage AR View
-
-/// Renders the AR camera feed with red overlay on uncovered mesh faces.
-private struct CoverageARView: UIViewRepresentable {
-    let sessionManager: ARSessionManager
-    let uncoveredFaces: [UUID: Set<Int>]
-
-    func makeUIView(context: Context) -> ARSCNView {
-        let scnView = ARSCNView()
-        scnView.session = sessionManager.session
-        scnView.automaticallyUpdatesLighting = true
-        scnView.rendersContinuously = true
-        context.coordinator.scnView = scnView
-        context.coordinator.sessionManager = sessionManager
-        return scnView
-    }
-
-    func updateUIView(_ uiView: ARSCNView, context: Context) {
-        context.coordinator.uncoveredFaces = uncoveredFaces
-        context.coordinator.rebuildOverlay()
-
-        // If uncoveredFaces is empty (analysis still running), retry after a delay
-        if uncoveredFaces.isEmpty {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                context.coordinator.rebuildOverlay()
-            }
-        }
-    }
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(uncoveredFaces: uncoveredFaces)
-    }
-
-    final class Coordinator: NSObject {
-        var uncoveredFaces: [UUID: Set<Int>]
-        weak var scnView: ARSCNView?
-        weak var sessionManager: ARSessionManager?
-        private let overlayTag = "coverageOverlay"
-
-        init(uncoveredFaces: [UUID: Set<Int>]) {
-            self.uncoveredFaces = uncoveredFaces
-        }
-
-        func rebuildOverlay() {
-            guard let scnView = scnView else { return }
-            guard !uncoveredFaces.isEmpty else { return }
-
-            // Remove old overlay nodes
-            scnView.scene.rootNode.childNodes
-                .filter { $0.name == overlayTag }
-                .forEach { $0.removeFromParentNode() }
-
-            // Use lastMeshAnchors as primary source (snapshotted and reliable),
-            // fall back to live session frame
-            let meshAnchors: [ARMeshAnchor]
-            if let snapshotted = sessionManager?.lastMeshAnchors, !snapshotted.isEmpty {
-                meshAnchors = snapshotted
-            } else if let frame = scnView.session.currentFrame {
-                meshAnchors = frame.anchors.compactMap { $0 as? ARMeshAnchor }
-            } else {
-                return
-            }
-
-            for meshAnchor in meshAnchors {
-                guard let faceSet = uncoveredFaces[meshAnchor.identifier], !faceSet.isEmpty else { continue }
-
-                if let geometry = buildUncoveredGeometry(meshAnchor: meshAnchor, faceIndices: faceSet) {
-                    let material = SCNMaterial()
-                    material.fillMode = .fill
-                    material.diffuse.contents = UIColor.systemRed.withAlphaComponent(0.4)
-                    material.isDoubleSided = true
-                    material.lightingModel = .constant
-                    geometry.materials = [material]
-
-                    let node = SCNNode(geometry: geometry)
-                    node.name = overlayTag
-                    node.simdTransform = meshAnchor.transform
-                    scnView.scene.rootNode.addChildNode(node)
-                }
-            }
-        }
-
-        /// Build SCNGeometry from specific face indices of a mesh anchor (in local space).
-        private func buildUncoveredGeometry(meshAnchor: ARMeshAnchor, faceIndices: Set<Int>) -> SCNGeometry? {
-            let geo = meshAnchor.geometry
-            var reindex = [UInt32: UInt32]()
-            var vertices = [SCNVector3]()
-            var normals = [SCNVector3]()
-            var indices = [UInt32]()
-            var nextIdx: UInt32 = 0
-
-            for faceIdx in faceIndices {
-                guard faceIdx < geo.faces.count else { continue }
-                let face = geo.faceIndices(at: faceIdx)
-                for oldIdx in face {
-                    if let mapped = reindex[oldIdx] {
-                        indices.append(mapped)
-                    } else {
-                        let v = geo.vertex(at: oldIdx)
-                        vertices.append(SCNVector3(v.x, v.y, v.z))
-                        let n = geo.normal(at: oldIdx)
-                        normals.append(SCNVector3(n.x, n.y, n.z))
-                        reindex[oldIdx] = nextIdx
-                        indices.append(nextIdx)
-                        nextIdx += 1
-                    }
-                }
-            }
-
-            guard !indices.isEmpty else { return nil }
-
-            let vertexSource = SCNGeometrySource(vertices: vertices)
-            let normalSource = SCNGeometrySource(normals: normals)
-            let element = SCNGeometryElement(indices: indices, primitiveType: .triangles)
-            return SCNGeometry(sources: [vertexSource, normalSource], elements: [element])
-        }
+        .padding(.horizontal, 40)
     }
 }

@@ -1,5 +1,5 @@
 // Scores captured keyframes on sharpness (Laplacian variance) and feature density
-// (corner detection). Used post-scan to select the best 60 frames from ~80 captured.
+// (corner detection). Used post-scan to select the best 180 frames from ~250 captured.
 
 import Accelerate
 import UIKit
@@ -11,7 +11,7 @@ struct FrameQualityScorer {
     static let featureDensityWeight: Float = 0.5
 
     /// Target number of frames to keep after post-scan selection.
-    static let targetFrameCount = 60
+    static let targetFrameCount = 180
 
     /// Composite quality score for a captured frame's JPEG data. Returns 0–1.
     static func score(jpegData: Data) -> Float {
