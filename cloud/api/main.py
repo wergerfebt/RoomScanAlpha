@@ -19,8 +19,8 @@ from typing import Optional
 
 from pathlib import Path
 
-from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi import FastAPI, Header, HTTPException, Request, UploadFile, File, Form
+from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from google.cloud import storage, tasks_v2
 from google.cloud.sql.connector import Connector
 from google.auth import default as default_credentials, compute_engine
@@ -122,15 +122,17 @@ def verify_firebase_token(authorization: Optional[str]) -> dict:
 
 @app.get("/api/rfqs")
 def list_rfqs(authorization: str = Header(None)) -> dict:
-    """List the most recent RFQs, ordered by creation date descending."""
-    verify_firebase_token(authorization)
+    """List the current user's most recent RFQs, ordered by creation date descending."""
+    decoded = verify_firebase_token(authorization)
+    uid = decoded["uid"]
 
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
         cursor.execute(
             f"""SELECT id, description, status, created_at, address
-                FROM rfqs ORDER BY created_at DESC LIMIT {MAX_RFQS_PER_PAGE}"""
+                FROM rfqs WHERE user_id = %s ORDER BY created_at DESC LIMIT {MAX_RFQS_PER_PAGE}""",
+            (uid,),
         )
         rows = cursor.fetchall()
     finally:
@@ -152,19 +154,20 @@ def list_rfqs(authorization: str = Header(None)) -> dict:
 @app.post("/api/rfqs")
 async def create_rfq(request: Request, authorization: str = Header(None)) -> dict:
     """Create a new RFQ (request-for-quote project) to associate scans with."""
-    verify_firebase_token(authorization)
+    decoded = verify_firebase_token(authorization)
+    uid = decoded["uid"]
 
     body = await request.json()
     description = body.get("description", "")
-    address = body.get("address", None)
+    address = body.get("address", "")
     rfq_id = str(uuid.uuid4())
 
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
         cursor.execute(
-            """INSERT INTO rfqs (id, description, address, status, created_at) VALUES (%s, %s, %s, 'scan_pending', NOW())""",
-            (rfq_id, description, address),
+            """INSERT INTO rfqs (id, description, address, status, user_id, created_at) VALUES (%s, %s, %s, 'scan_pending', %s, NOW())""",
+            (rfq_id, description, address or None, uid),
         )
         conn.commit()
     finally:
@@ -232,9 +235,9 @@ async def upload_complete(rfq_id: str, request: Request, authorization: str = He
     try:
         cursor = conn.cursor()
         cursor.execute(
-            """INSERT INTO scanned_rooms (id, rfq_id, scan_status, scan_mesh_url, created_at)
-               VALUES (%s, %s, 'processing', %s, NOW())""",
-            (scan_id, rfq_id, blob_path),
+            """INSERT INTO scanned_rooms (id, rfq_id, room_label, scan_status, scan_mesh_url, created_at)
+               VALUES (%s, %s, %s, 'processing', %s, NOW())""",
+            (scan_id, rfq_id, body.get("room_label", ""), blob_path),
         )
         conn.commit()
     finally:
@@ -299,7 +302,6 @@ def get_scan_status(rfq_id: str, scan_id: str, authorization: str = Header(None)
         "scan_status", "floor_area_sqft", "wall_area_sqft", "ceiling_height_ft",
         "perimeter_linear_ft", "detected_components", "scan_dimensions",
         "room_polygon_ft", "wall_heights_ft", "polygon_source", "scan_mesh_url",
-        "scope",
     ]
 
     conn = get_db_connection()
@@ -371,29 +373,38 @@ def delete_scan(rfq_id: str, scan_id: str, authorization: str = Header(None)) ->
     return {"status": "deleted", "scan_id": scan_id}
 
 
-@app.put("/api/rfqs/{rfq_id}/scans/{scan_id}/scope")
-async def update_scan_scope(rfq_id: str, scan_id: str, request: Request, authorization: str = Header(None)) -> dict:
-    """Update the scope of work items for a scanned room."""
-    verify_firebase_token(authorization)
+@app.delete("/api/rfqs/{rfq_id}")
+def delete_rfq(rfq_id: str, authorization: str = Header(None)) -> dict:
+    """Soft-delete an RFQ and all its scans.
 
-    body = await request.json()
-    scope_data = json.dumps({"items": body.get("items", []), "notes": body.get("notes", "")})
+    Sets all scans to 'deleted' status, then deletes the RFQ row.
+    GCS blobs are preserved for future model training.
+    """
+    verify_firebase_token(authorization)
 
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
+        # Soft-delete all scans for this RFQ
         cursor.execute(
-            """UPDATE scanned_rooms SET scope = %s
-               WHERE id = %s AND rfq_id = %s AND scan_status != 'deleted'""",
-            (scope_data, scan_id, rfq_id),
+            """UPDATE scanned_rooms
+               SET scan_status = 'deleted'
+               WHERE rfq_id = %s AND scan_status != 'deleted'""",
+            (rfq_id,),
         )
-        conn.commit()
+        deleted_scans = cursor.rowcount
+
+        # Delete the RFQ itself
+        cursor.execute("DELETE FROM rfqs WHERE id = %s", (rfq_id,))
         if cursor.rowcount == 0:
-            raise HTTPException(status_code=404, detail="Scan not found")
+            conn.rollback()
+            raise HTTPException(status_code=404, detail="RFQ not found")
+
+        conn.commit()
     finally:
         conn.close()
 
-    return {"status": "ok", "scan_id": scan_id}
+    return {"status": "deleted", "rfq_id": rfq_id, "scans_deleted": deleted_scans}
 
 
 @app.get("/api/rfqs/{rfq_id}/contractor-view")
@@ -409,31 +420,14 @@ def contractor_view(rfq_id: str) -> dict:
 
         # Fetch RFQ info
         cursor.execute(
-            """SELECT description, status FROM rfqs WHERE id = %s""",
+            """SELECT description, status, project_scope, address FROM rfqs WHERE id = %s""",
             (rfq_id,),
         )
         rfq_row = cursor.fetchone()
         if not rfq_row:
             raise HTTPException(status_code=404, detail="RFQ not found")
 
-        description, rfq_status = rfq_row
-
-        # Try to fetch property address if the table exists
-        address = None
-        try:
-            cursor.execute(
-                """SELECT p.address_line1, p.city, p.state, p.zip
-                   FROM properties p
-                   JOIN rfqs r ON r.property_id = p.id
-                   WHERE r.id = %s""",
-                (rfq_id,),
-            )
-            addr_row = cursor.fetchone()
-            if addr_row:
-                address_parts = [p for p in addr_row if p]
-                address = ", ".join(address_parts) if address_parts else None
-        except Exception:
-            conn.rollback()  # reset transaction state after failed query
+        description, rfq_status, project_scope, address = rfq_row
 
         # Fetch all non-deleted scanned rooms for this RFQ
         room_columns = [
@@ -506,8 +500,171 @@ def contractor_view(rfq_id: str) -> dict:
         "rfq_id": rfq_id,
         "address": address,
         "job_description": description,
+        "project_scope": project_scope,
         "status": rfq_status,
         "rooms": rooms,
+    }
+
+
+@app.get("/api/contractors/me")
+def get_contractor_profile(authorization: str = Header(None)) -> dict:
+    """Return the authenticated contractor's profile. Auto-creates a row on first sign-in."""
+    decoded = verify_firebase_token(authorization)
+    uid = decoded["uid"]
+    email = decoded.get("email", "")
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, email, name, icon_url, yelp_url, google_reviews_url, review_rating, review_count FROM contractors WHERE firebase_uid = %s",
+            (uid,),
+        )
+        row = cursor.fetchone()
+
+        if not row:
+            contractor_id = str(uuid.uuid4())
+            cursor.execute(
+                "INSERT INTO contractors (id, firebase_uid, email) VALUES (%s, %s, %s)",
+                (contractor_id, uid, email),
+            )
+            conn.commit()
+            return {"id": contractor_id, "email": email, "name": None, "icon_url": None, "yelp_url": None, "google_reviews_url": None, "review_rating": None, "review_count": None}
+
+        columns = ["id", "email", "name", "icon_url", "yelp_url", "google_reviews_url", "review_rating", "review_count"]
+        result = _row_to_dict(columns, row)
+        result["id"] = str(result["id"])
+        if result["review_rating"] is not None:
+            result["review_rating"] = float(result["review_rating"])
+        return result
+    finally:
+        conn.close()
+
+
+@app.post("/api/rfqs/{rfq_id}/bids")
+async def submit_bid(
+    rfq_id: str,
+    price_cents: int = Form(...),
+    description: str = Form(...),
+    pdf: Optional[UploadFile] = File(None),
+    authorization: str = Header(None),
+) -> dict:
+    """Submit a bid for an RFQ. Requires Firebase Auth. Accepts multipart/form-data for PDF upload."""
+    decoded = verify_firebase_token(authorization)
+    uid = decoded["uid"]
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT id FROM contractors WHERE firebase_uid = %s", (uid,))
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=403, detail="Contractor profile not found. Call GET /api/contractors/me first.")
+        contractor_id = str(row[0])
+
+        bid_id = str(uuid.uuid4())
+        pdf_url = None
+
+        if pdf and pdf.filename:
+            blob_path = f"bids/{rfq_id}/{bid_id}.pdf"
+            bucket = storage_client.bucket(BUCKET_NAME)
+            blob = bucket.blob(blob_path)
+            content = await pdf.read()
+            blob.upload_from_string(content, content_type="application/pdf")
+
+            if not _credentials.token or not _credentials.valid:
+                _credentials.refresh(_auth_request)
+            pdf_url = blob.generate_signed_url(
+                version="v4",
+                expiration=datetime.timedelta(days=7),
+                method="GET",
+                service_account_email=SIGNING_SA_EMAIL,
+                access_token=_credentials.token,
+            )
+
+        cursor.execute(
+            """INSERT INTO bids (id, rfq_id, contractor_id, price_cents, description, pdf_url, received_at)
+               VALUES (%s, %s, %s, %s, %s, %s, NOW())""",
+            (bid_id, rfq_id, contractor_id, price_cents, description, pdf_url),
+        )
+        conn.commit()
+
+        cursor.execute("SELECT received_at FROM bids WHERE id = %s", (bid_id,))
+        received_at = cursor.fetchone()[0]
+    finally:
+        conn.close()
+
+    # TODO: trigger SendGrid email + FCM push to homeowner here
+
+    return {
+        "id": bid_id,
+        "rfq_id": rfq_id,
+        "contractor_id": contractor_id,
+        "price_cents": price_cents,
+        "description": description,
+        "pdf_url": pdf_url,
+        "received_at": received_at.isoformat() if received_at else None,
+    }
+
+
+@app.get("/api/rfqs/{rfq_id}/bids")
+def list_bids(rfq_id: str, token: str = None) -> dict:
+    """Return all bids for an RFQ with nested contractor profiles. Auth via bid_view_token."""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+
+        cursor.execute(
+            "SELECT description, bid_view_token FROM rfqs WHERE id = %s",
+            (rfq_id,),
+        )
+        rfq_row = cursor.fetchone()
+        if not rfq_row:
+            raise HTTPException(status_code=404, detail="RFQ not found")
+
+        project_description, bid_view_token = rfq_row
+        if not token or str(bid_view_token) != token:
+            raise HTTPException(status_code=403, detail="Invalid or missing bid view token")
+
+        cursor.execute(
+            """SELECT b.id, b.price_cents, b.description, b.pdf_url, b.received_at,
+                      c.id AS contractor_id, c.name, c.icon_url, c.yelp_url,
+                      c.google_reviews_url, c.review_rating, c.review_count
+               FROM bids b
+               JOIN contractors c ON c.id = b.contractor_id
+               WHERE b.rfq_id = %s
+               ORDER BY b.price_cents ASC""",
+            (rfq_id,),
+        )
+        rows = cursor.fetchall()
+    finally:
+        conn.close()
+
+    bids = []
+    for row in rows:
+        bid_id, price_cents, desc, pdf_url, received_at, c_id, c_name, c_icon, c_yelp, c_google, c_rating, c_count = row
+        bids.append({
+            "id": str(bid_id),
+            "price_cents": price_cents,
+            "description": desc,
+            "pdf_url": pdf_url,
+            "received_at": received_at.isoformat() if received_at else None,
+            "contractor": {
+                "id": str(c_id),
+                "name": c_name,
+                "icon_url": c_icon,
+                "yelp_url": c_yelp,
+                "google_reviews_url": c_google,
+                "review_rating": float(c_rating) if c_rating else None,
+                "review_count": c_count,
+            },
+        })
+
+    return {
+        "rfq_id": rfq_id,
+        "project_description": project_description,
+        "bids": bids,
     }
 
 
@@ -522,6 +679,34 @@ def serve_contractor_page(rfq_id: str) -> str:
     if not html_path.exists():
         raise HTTPException(status_code=500, detail="Contractor view page not found")
     return html_path.read_text()
+
+
+@app.get("/bids/{rfq_id}", response_class=HTMLResponse)
+def serve_bids_page(rfq_id: str) -> str:
+    """Serve the homeowner bid comparison page.
+
+    The page reads the bid_view_token from the ?token= query param and fetches
+    bids from /api/rfqs/{rfq_id}/bids?token=... to render the comparison view.
+    """
+    html_path = Path(__file__).parent / "web" / "bids.html"
+    if not html_path.exists():
+        raise HTTPException(status_code=500, detail="Bids page not found")
+    return html_path.read_text()
+
+
+@app.get("/favicon.ico")
+def favicon():
+    return FileResponse(Path(__file__).parent / "web" / "favicon.ico", media_type="image/x-icon")
+
+
+@app.get("/apple-touch-icon.png")
+def apple_touch_icon():
+    return FileResponse(Path(__file__).parent / "web" / "apple-touch-icon.png", media_type="image/png")
+
+
+@app.get("/og-image.png")
+def og_image():
+    return FileResponse(Path(__file__).parent / "web" / "og-image.png", media_type="image/png")
 
 
 @app.get("/health")

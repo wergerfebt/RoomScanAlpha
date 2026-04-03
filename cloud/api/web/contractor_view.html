@@ -2,100 +2,284 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Room Scan Alpha - Room Scan Viewer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>RoomScan - Room Scan Viewer</title>
+<link rel="icon" type="image/x-icon" href="/favicon.ico">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<meta property="og:title" content="RoomScan - Room Viewer">
+<meta property="og:description" content="3D room scan with measurements and floor plan">
+<meta property="og:image" content="/og-image.png">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary_large_image">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #1a1a1a; color: #f5f5f7; overflow: hidden; height: 100vh; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f2f4f8; color: #1d1d1f; overflow: hidden; height: 100vh; }
 
-  /* Layout */
-  .app { display: flex; height: 100vh; }
-  .sidebar { width: 320px; background: #2a2a2a; border-right: 1px solid #3a3a3a; display: flex; flex-direction: column; overflow-y: auto; flex-shrink: 0; }
-  .main-panel { flex: 1; display: flex; flex-direction: column; position: relative; }
-  .viewer-container { flex: 1; position: relative; }
+  /* Layout — sidebar overlays viewer as a slide-out drawer */
+  .app { position: relative; height: 100vh; }
+  .main-panel { width: 100%; height: 100%; display: flex; flex-direction: column; }
+  .viewer-container { flex: 1; position: relative; background: #e8ecf0; }
   .viewer-container canvas { display: block; }
 
+  /* Sidebar drawer */
+  .sidebar { position: absolute; top: 0; left: 0; z-index: 50; width: 320px; height: 100%;
+             background: #fff; border-right: 1px solid #e0e4ea; display: flex; flex-direction: column;
+             overflow-y: auto; box-shadow: 2px 0 12px rgba(0,0,0,0.1);
+             transition: transform 0.3s ease; transform: translateX(0);
+             padding-top: env(safe-area-inset-top, 0px); }
+  .sidebar.collapsed { transform: translateX(-100%); box-shadow: none; }
+
+  /* Expand tab — visible when sidebar is collapsed */
+  .sidebar-tab { position: absolute; top: 50%; left: 0; z-index: 49; transform: translateY(-50%);
+                 background: #fff; border: 1px solid #e0e4ea; border-left: none;
+                 border-radius: 0 8px 8px 0; padding: 12px 6px; cursor: pointer;
+                 box-shadow: 2px 0 8px rgba(0,0,0,0.08); transition: opacity 0.3s, left 0.3s;
+                 opacity: 0; pointer-events: none; }
+  .sidebar-tab svg { display: block; width: 20px; height: 20px; fill: #0055cc; }
+  .sidebar.collapsed ~ .sidebar-tab { opacity: 1; pointer-events: auto; }
+
+  /* Close button inside sidebar */
+  .sidebar-close { position: absolute; top: 12px; right: 12px; z-index: 51; background: none; border: none;
+                   cursor: pointer; padding: 4px; border-radius: 4px; color: #8e8e93; }
+  .sidebar-close:hover { background: #f0f3f8; color: #1d1d1f; }
+  .sidebar-close svg { width: 18px; height: 18px; fill: currentColor; }
+
+  /* Virtual joystick — touch/mobile only, bottom-left of viewer */
+  .joystick-zone { display: none; position: absolute; bottom: 24px; left: 16px; z-index: 20;
+                   width: 80px; height: 80px; touch-action: none; }
+  .joystick-base { width: 80px; height: 80px; border-radius: 50%;
+                   background: rgba(0,80,200,0.12); border: 2px solid rgba(0,80,200,0.35); }
+  .joystick-knob { position: absolute; width: 32px; height: 32px; border-radius: 50%;
+                   background: rgba(0,80,200,0.45); top: 24px; left: 24px;
+                   pointer-events: none; transition: none; }
+  @media (hover: none) and (pointer: coarse) {
+    .joystick-zone { display: block; }
+  }
+  @media (max-width: 768px) {
+    .joystick-zone { display: block; bottom: 80px; }
+  }
+
   /* Sidebar sections */
-  .sidebar-header { padding: 16px; border-bottom: 1px solid #3a3a3a; }
-  .sidebar-header h1 { font-size: 18px; font-weight: 700; }
-  .sidebar-header .subtitle { color: #86868b; font-size: 12px; margin-top: 2px; }
-  .job-info { padding: 12px 16px; border-bottom: 1px solid #3a3a3a; }
-  .job-info h2 { font-size: 14px; font-weight: 600; }
-  .job-info .address { color: #86868b; font-size: 12px; margin-top: 2px; }
+  .sidebar-header { padding: 16px; border-bottom: 1px solid #e0e4ea; }
+  .sidebar-header h1 { font-size: 18px; font-weight: 700; color: #0055cc; }
+  .sidebar-header .subtitle { color: #8e8e93; font-size: 12px; margin-top: 2px; }
+  .job-info { padding: 12px 16px; border-bottom: 1px solid #e0e4ea; }
+  .job-info .project-title { font-size: 16px; font-weight: 700; }
+  .job-info .address { color: #6e6e73; font-size: 12px; margin-top: 3px; }
+  .job-info .description { color: #8e8e93; font-size: 12px; margin-top: 6px; line-height: 1.4; }
+  .job-info .description.truncated { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .job-info .desc-toggle { color: #0055cc; font-size: 11px; font-weight: 600; cursor: pointer; margin-top: 2px; display: inline-block; }
 
   /* Floor plan */
-  .floor-plan-section { padding: 12px; border-bottom: 1px solid #3a3a3a; }
-  .floor-plan-section h3 { font-size: 12px; font-weight: 600; color: #86868b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
-  .floor-plan-canvas-wrap { background: #1a1a1a; border-radius: 8px; aspect-ratio: 4/3; position: relative; cursor: pointer; }
+  .floor-plan-section { padding: 12px; border-bottom: 1px solid #e0e4ea; }
+  .floor-plan-section .fp-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .floor-plan-section h3 { font-size: 12px; font-weight: 600; color: #8e8e93; text-transform: uppercase; letter-spacing: 0.5px; margin: 0; }
+  .fp-expand-btn { background: none; border: none; color: #0055cc; font-size: 11px; font-weight: 600; cursor: pointer; padding: 2px 6px; border-radius: 4px; }
+  .fp-expand-btn:hover { background: #e8f0fe; }
+  .floor-plan-canvas-wrap { background: #f7f8fa; border-radius: 8px; aspect-ratio: 4/3; position: relative; cursor: pointer; border: 1px solid #e0e4ea; }
   .floor-plan-canvas-wrap canvas { width: 100%; height: 100%; border-radius: 8px; }
+
+  /* Fullscreen floor plan overlay */
+  .fp-fullscreen { display: none; position: absolute; top: 0; left: 0; right: 0; bottom: 0; z-index: 40;
+                   background: #fff; flex-direction: column; }
+  .fp-fullscreen.active { display: flex; }
+  .fp-fullscreen-header { display: flex; align-items: center; padding: 10px 16px; border-bottom: 1px solid #e0e4ea; }
+  .fp-fullscreen-header h3 { flex: 1; font-size: 15px; font-weight: 600; }
+  .fp-fullscreen-close { background: none; border: none; font-size: 13px; font-weight: 600; color: #0055cc; cursor: pointer; padding: 4px 10px; border-radius: 6px; }
+  .fp-fullscreen-close:hover { background: #e8f0fe; }
+  .fp-fullscreen canvas { flex: 1; width: 100%; touch-action: none; }
+  .fp-fullscreen .fp-hint { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%);
+                            background: rgba(0,0,0,0.5); color: #fff; font-size: 11px; padding: 4px 12px;
+                            border-radius: 4px; pointer-events: none; }
 
   /* Room list */
   .room-list { padding: 8px; }
-  .room-list h3 { font-size: 12px; font-weight: 600; color: #86868b; text-transform: uppercase; letter-spacing: 0.5px; padding: 4px 8px; }
-  .room-item { padding: 10px 12px; border-radius: 8px; cursor: pointer; margin: 2px 0; transition: background 0.15s; }
-  .room-item:hover { background: #3a3a3a; }
-  .room-item.active { background: #0066cc33; border: 1px solid #0066cc; }
+  .room-list h3 { font-size: 12px; font-weight: 600; color: #8e8e93; text-transform: uppercase; letter-spacing: 0.5px; padding: 4px 8px; }
+  .room-item { padding: 10px 12px; border-radius: 8px; cursor: pointer; margin: 2px 0; transition: background 0.15s; border: 1px solid transparent; }
+  .room-item:hover { background: #f0f3f8; }
+  .room-item.active { background: #e8f0fe; border-color: #0055cc; }
   .room-item .name { font-size: 14px; font-weight: 500; }
-  .room-item .detail { font-size: 11px; color: #86868b; margin-top: 2px; }
+  .room-item .detail { font-size: 11px; color: #8e8e93; margin-top: 2px; }
 
   /* Metrics panel */
-  .metrics-section { padding: 12px 16px; border-top: 1px solid #3a3a3a; }
-  .metrics-section h3 { font-size: 12px; font-weight: 600; color: #86868b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+  .metrics-section { padding: 12px 16px; border-top: 1px solid #e0e4ea; }
+  .metrics-section h3 { font-size: 12px; font-weight: 600; color: #8e8e93; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
   .metric-row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 13px; }
-  .metric-row .label { color: #aaa; }
+  .metric-row .label { color: #6e6e73; }
   .metric-row .value { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .rfq-id-section { padding: 12px 16px; border-top: 1px solid #e0e4ea; color: #b0b3ba; font-size: 10px;
+                    font-family: monospace; word-break: break-all; margin-top: auto; }
 
   /* Top bar */
-  .top-bar { display: flex; align-items: center; gap: 12px; padding: 8px 16px; background: #2a2a2a; border-bottom: 1px solid #3a3a3a; }
+  .top-bar { display: flex; align-items: center; gap: 8px; padding: 8px 16px; background: #fff; border-bottom: 1px solid #e0e4ea; }
   .top-bar .room-name { font-size: 16px; font-weight: 600; flex: 1; }
   .btn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; border: none; transition: background 0.15s; }
-  .btn-toggle { background: #3a3a3a; color: #f5f5f7; }
-  .btn-toggle:hover { background: #4a4a4a; }
-  .btn-toggle.active { background: #0066cc; color: #fff; }
-  .btn-primary { background: #0066cc; color: #fff; text-decoration: none; }
-  .btn-primary:hover { background: #0055aa; }
+  .btn-toggle { background: #e8f0fe; color: #0055cc; }
+  .btn-toggle:hover { background: #d0e2fc; }
+  .btn-toggle.active { background: #0055cc; color: #fff; }
+  .btn-primary { background: #0055cc; color: #fff; text-decoration: none; }
+  .btn-primary:hover { background: #004ab5; }
 
   /* Loading / error */
-  .loading { display: flex; align-items: center; justify-content: center; height: 100%; color: #86868b; font-size: 16px; }
+  .loading { display: flex; align-items: center; justify-content: center; height: 100%; color: #8e8e93; font-size: 16px; }
+  .viewer-spinner { display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+                    z-index: 25; background: rgba(0,0,0,0.55); color: #fff; padding: 12px 20px;
+                    border-radius: 8px; font-size: 13px; font-weight: 600; pointer-events: none; }
+  .viewer-spinner::before { content: ''; display: inline-block; width: 14px; height: 14px;
+                            border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff;
+                            border-radius: 50%; animation: spin 0.8s linear infinite;
+                            vertical-align: middle; margin-right: 8px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
   .error { text-align: center; padding: 60px; }
-  .error h2 { font-size: 20px; margin-bottom: 8px; color: #f5f5f7; }
-  .error p { color: #86868b; }
+  .error h2 { font-size: 20px; margin-bottom: 8px; }
+  .error p { color: #8e8e93; }
 
   /* Measurement labels (CSS2D) */
-  .measure-label { background: rgba(33,150,243,0.85); color: #fff; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600; font-family: -apple-system, monospace; white-space: nowrap; pointer-events: none; }
-  .measure-label.area { background: rgba(76,175,80,0.85); font-size: 13px; }
-  .measure-label.height { background: rgba(255,152,0,0.85); }
+  .measure-label { background: rgba(0,85,204,0.85); color: #fff; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600; font-family: -apple-system, monospace; white-space: nowrap; pointer-events: none; }
+  .measure-label.area { background: rgba(52,168,83,0.9); font-size: 13px; }
+  .measure-label.height { background: rgba(234,134,0,0.9); }
 
-  /* Mobile */
+  /* Mini corner thumbnail (shows iso when in 3D, shows 3D when in iso fullscreen) */
+  .corner-thumb { position: absolute; bottom: 16px; right: 16px; z-index: 15;
+                  width: 160px; height: 120px; border-radius: 8px; overflow: hidden;
+                  border: 2px solid rgba(0,85,204,0.3); background: #1a1a1a; cursor: pointer;
+                  box-shadow: 0 2px 8px rgba(0,0,0,0.15); display: none; }
+  .corner-thumb:hover { border-color: #0055cc; }
+  .corner-thumb canvas { width: 100%; height: 100%; display: block; }
+  .corner-thumb .thumb-label { position: absolute; bottom: 4px; left: 0; right: 0; text-align: center;
+                               font-size: 9px; font-weight: 600; color: rgba(255,255,255,0.6); pointer-events: none; }
   @media (max-width: 768px) {
-    .sidebar { width: 100%; height: auto; max-height: 40vh; border-right: none; border-bottom: 1px solid #3a3a3a; }
-    .app { flex-direction: column; }
+    .corner-thumb { bottom: auto; top: 56px; right: 8px; width: 100px; height: 75px; }
   }
+
+  /* Fullscreen isometric overlay — below corner-thumb (z:15) so thumb stays clickable */
+  .iso-fullscreen { display: none; position: absolute; top: 0; left: 0; right: 0; bottom: 0; z-index: 14;
+                    background: #1a1a1a; }
+  .iso-fullscreen.active { display: block; }
+  .iso-fullscreen canvas { width: 100%; height: 100%; display: block; }
+
+  /* WASD key indicator — desktop only, bottom-left */
+  .wasd-keys { position: absolute; bottom: 16px; left: 16px; z-index: 15; display: grid;
+               grid-template-columns: repeat(3, 28px); grid-template-rows: repeat(2, 28px); gap: 3px;
+               pointer-events: none; }
+  .wasd-key { width: 28px; height: 28px; border-radius: 4px; display: flex; align-items: center;
+              justify-content: center; font-size: 11px; font-weight: 700; font-family: monospace;
+              background: rgba(0,0,0,0.25); color: rgba(255,255,255,0.4); border: 1px solid rgba(255,255,255,0.15); }
+  .wasd-key.active { background: rgba(0,85,204,0.7); color: #fff; border-color: rgba(0,85,204,0.9); }
+  .wasd-key.blank { visibility: hidden; }
+  @media (max-width: 768px) {
+    .wasd-keys { display: none; }
+  }
+
+  /* Mobile responsive */
+  @media (max-width: 768px) {
+    .sidebar { width: 280px; }
+    .top-bar { padding: 6px 12px; }
+    .top-bar .room-name { font-size: 14px; }
+    .btn { padding: 5px 10px; font-size: 12px; }
+    .floor-plan-section { display: none; }
+    #btn-hd { display: none !important; }
+  }
+
+  /* Modal overlay */
+  .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+                   z-index: 100; background: rgba(0,0,0,0.5); align-items: center; justify-content: center; }
+  .modal-content { background: #fff; border-radius: 12px; padding: 32px; max-width: 400px; width: 90%;
+                   position: relative; max-height: 90vh; overflow-y: auto; }
+  .modal-close { position: absolute; top: 12px; right: 16px; background: none; border: none;
+                 font-size: 24px; color: #8e8e93; cursor: pointer; }
+  .modal-close:hover { color: #1d1d1f; }
+  .modal-content h2 { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+  .modal-content .auth-subtitle { color: #8e8e93; font-size: 13px; margin-bottom: 20px; }
+  .modal-content input[type="email"],
+  .modal-content input[type="password"],
+  .modal-content input[type="number"],
+  .modal-content textarea { width: 100%; padding: 12px; border: 1px solid #e0e4ea; border-radius: 8px;
+                            font-size: 14px; margin-bottom: 12px; font-family: inherit; }
+  .modal-content input:focus,
+  .modal-content textarea:focus { outline: none; border-color: #0055cc; }
+  .form-label { font-size: 12px; font-weight: 600; color: #6e6e73; margin-bottom: 4px; display: block; }
+  .price-input-wrap { position: relative; }
+  .price-prefix { position: absolute; left: 12px; top: 50%; transform: translateY(-70%); color: #6e6e73;
+                  font-size: 14px; font-weight: 600; }
+  .price-input-wrap input { padding-left: 28px; }
+  .auth-error { color: #ff3b30; font-size: 13px; min-height: 20px; margin-bottom: 8px; }
+  .btn-full { width: 100%; justify-content: center; padding: 12px; font-size: 15px; }
+  .btn-link { background: none; border: none; color: #0055cc; font-size: 13px; cursor: pointer;
+              display: block; margin-top: 8px; text-align: center; width: 100%; }
+  .btn-link:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
 
 <div class="app">
   <div class="sidebar" id="sidebar">
+    <button class="sidebar-close" onclick="toggleSidebar()" title="Close panel">
+      <svg viewBox="0 0 24 24"><path d="M15.41 16.59L10.83 12l4.58-4.59L14 6l-6 6 6 6z"/></svg>
+    </button>
     <div class="sidebar-header">
       <h1>Room Scan Alpha</h1>
       <div class="subtitle">Interactive Room Viewer</div>
     </div>
     <div id="sidebar-content"><div class="loading">Loading...</div></div>
   </div>
+  <button class="sidebar-tab" id="sidebar-tab" onclick="toggleSidebar()" title="Show project info">
+    <svg viewBox="0 0 24 24"><path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6z"/></svg>
+  </button>
   <div class="main-panel">
     <div class="top-bar" id="top-bar">
       <span class="room-name" id="room-name">Select a room</span>
-      <button class="btn btn-toggle" id="btn-measures" onclick="toggleMeasurements()">Show Measurements</button>
-      <a class="btn btn-primary" id="btn-quote" href="#" target="_blank">Submit Quote</a>
+      <button class="btn btn-toggle active" id="btn-measures" onclick="toggleMeasurements()">Hide Measurements</button>
+      <button class="btn btn-toggle" id="btn-hd" onclick="toggleHD()" style="display:none">HD</button>
+      <div id="quote-section"></div>
     </div>
     <div class="viewer-container" id="viewer-container">
       <div class="loading" id="viewer-loading">Select a room from the sidebar</div>
+      <div class="fp-fullscreen" id="fp-fullscreen">
+        <div class="fp-fullscreen-header">
+          <h3>Floor Plan</h3>
+          <button class="fp-fullscreen-close" onclick="closeFpFullscreen()">Close</button>
+        </div>
+        <canvas id="fp-canvas-full"></canvas>
+        <div class="fp-hint">Scroll to zoom · Drag to pan · Click room to select · Click outside to show all</div>
+      </div>
+      <div class="viewer-spinner" id="viewer-spinner">Loading HD...</div>
+      <div class="iso-fullscreen" id="iso-fullscreen">
+        <canvas id="iso-full-canvas"></canvas>
+      </div>
+      <div class="wasd-keys" id="wasd-keys">
+        <div class="wasd-key blank"></div>
+        <div class="wasd-key" id="key-w">W</div>
+        <div class="wasd-key blank"></div>
+        <div class="wasd-key" id="key-a">A</div>
+        <div class="wasd-key" id="key-s">S</div>
+        <div class="wasd-key" id="key-d">D</div>
+      </div>
+      <div class="corner-thumb" id="corner-thumb" onclick="toggleIsoFullscreen()">
+        <canvas id="iso-canvas"></canvas>
+        <div class="thumb-label" id="thumb-label">3D Model</div>
+      </div>
+      <div class="joystick-zone" id="joystick-zone">
+        <div class="joystick-base" id="joystick-base">
+          <div class="joystick-knob" id="joystick-knob"></div>
+        </div>
+      </div>
     </div>
   </div>
 </div>
 
 <!-- Three.js from CDN -->
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script>
+  firebase.initializeApp({
+    apiKey: "AIzaSyCW1KBTi5nuNCpJjZG48gQThaSaeK6h6gg",
+    authDomain: "roomscanalpha.firebaseapp.com",
+    projectId: "roomscanalpha"
+  });
+</script>
+
 <script type="importmap">
 {
   "imports": {
@@ -109,13 +293,23 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
 
 const API_BASE = window.location.origin;
 let scene, camera, renderer, cssRenderer, controls;
 let measurementGroup = null;
-let measurementsVisible = false;
+let measurementsVisible = true;
 let currentData = null;
 let activeRoomIndex = -1;
+let isHD = false;
+let currentTextureUrls = null;
+let loadedMeshGroup = null;
+
+// Room cache: { contentGroup, measureGroup, camPos, camTarget, isHD, hdGroup } per room index
+// contentGroup contains the preview mesh (OBJ or quads). hdGroup is the HD mesh (separate).
+const roomCache = {};
+let activeContentGroup = null; // the THREE.Group currently visible for room content
 
 // --- Init ---
 
@@ -135,7 +329,7 @@ async function init() {
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     currentData = await resp.json();
     renderSidebar(currentData);
-    setupQuoteButton(rfqId);
+    renderQuoteSection();
     if (currentData.rooms?.length > 0) loadRoom(0);
   } catch (e) { showError('Failed to load', e.message); }
 }
@@ -148,15 +342,23 @@ function showError(title, msg) {
 
 function renderSidebar(data) {
   let html = '';
-  if (data.job_description || data.address) {
-    html += `<div class="job-info"><h2>${esc(data.job_description || 'Project')}</h2>`;
-    if (data.address) html += `<div class="address">${esc(data.address)}</div>`;
-    html += '</div>';
-  }
 
-  // Floor plan
+  // Project info: title, address, description
+  const title = data.project_scope || 'Project';
+  html += '<div class="job-info">';
+  html += `<div class="project-title">${esc(title)}</div>`;
+  if (data.address) html += `<div class="address">${esc(data.address)}</div>`;
+  if (data.job_description) {
+    html += `<div class="description truncated" id="job-desc">${esc(data.job_description)}</div>`;
+    if (data.job_description.length > 60) {
+      html += `<span class="desc-toggle" id="desc-toggle" onclick="window._toggleDesc()">Show more</span>`;
+    }
+  }
+  html += '</div>';
+
+  // Floor plan with expand button
   if (data.rooms?.some(r => r.room_polygon_ft)) {
-    html += `<div class="floor-plan-section"><h3>Floor Plan</h3><div class="floor-plan-canvas-wrap"><canvas id="fp-canvas"></canvas></div></div>`;
+    html += `<div class="floor-plan-section"><div class="fp-header"><h3>Floor Plan</h3><button class="fp-expand-btn" onclick="openFpFullscreen()">Expand</button></div><div class="floor-plan-canvas-wrap"><canvas id="fp-canvas"></canvas></div></div>`;
   }
 
   // Room list
@@ -173,15 +375,93 @@ function renderSidebar(data) {
   // Metrics (filled when room selected)
   html += '<div class="metrics-section" id="metrics-panel"></div>';
 
+  // RFQ ID at bottom
+  html += `<div class="rfq-id-section">RFQ: ${esc(data.rfq_id || '')}</div>`;
+
   document.getElementById('sidebar-content').innerHTML = html;
 
   // Draw floor plan after DOM update
-  requestAnimationFrame(() => drawFloorPlan(data));
+  requestAnimationFrame(() => drawFloorPlan(data, 'fp-canvas'));
 }
 
-function drawFloorPlan(data) {
-  const canvas = document.getElementById('fp-canvas');
+// Floor plan zoom/pan state for fullscreen canvas
+const fpTransform = { panX: 0, panY: 0, zoom: 1 };
+let fpDrag = null; // { startX, startY, startPanX, startPanY }
+let fpDidDrag = false; // true if pointer moved during drag — suppresses click
+let fpPinchDist = null;
+let fpLastOpts = null;
+
+function resetFpTransform() { fpTransform.panX = 0; fpTransform.panY = 0; fpTransform.zoom = 1; }
+
+function setupFpInteraction() {
+  const canvas = document.getElementById('fp-canvas-full');
+  if (!canvas || canvas._fpSetup) return;
+  canvas._fpSetup = true;
+
+  function redraw() {
+    if (currentData && fpLastOpts) drawFloorPlan(currentData, 'fp-canvas-full', fpLastOpts);
+  }
+
+  // Wheel zoom
+  canvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? 0.9 : 1.1;
+    fpTransform.zoom = Math.max(0.3, Math.min(5, fpTransform.zoom * delta));
+    redraw();
+  }, { passive: false });
+
+  // Mouse drag to pan
+  canvas.addEventListener('mousedown', (e) => {
+    fpDrag = { startX: e.clientX, startY: e.clientY, startPanX: fpTransform.panX, startPanY: fpTransform.panY };
+    fpDidDrag = false;
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!fpDrag) return;
+    const dx = e.clientX - fpDrag.startX, dy = e.clientY - fpDrag.startY;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) fpDidDrag = true;
+    fpTransform.panX = fpDrag.startPanX + dx;
+    fpTransform.panY = fpDrag.startPanY + dy;
+    redraw();
+  });
+  window.addEventListener('mouseup', () => { fpDrag = null; });
+
+  // Touch drag + pinch zoom
+  canvas.addEventListener('touchstart', (e) => {
+    if (e.touches.length === 1) {
+      fpDrag = { startX: e.touches[0].clientX, startY: e.touches[0].clientY, startPanX: fpTransform.panX, startPanY: fpTransform.panY };
+      fpDidDrag = false;
+    } else if (e.touches.length === 2) {
+      fpDrag = null;
+      fpDidDrag = true; // pinch counts as drag (no click)
+      fpPinchDist = Math.hypot(e.touches[1].clientX - e.touches[0].clientX, e.touches[1].clientY - e.touches[0].clientY);
+    }
+  }, { passive: true });
+  canvas.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+    if (e.touches.length === 1 && fpDrag) {
+      const dx = e.touches[0].clientX - fpDrag.startX, dy = e.touches[0].clientY - fpDrag.startY;
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) fpDidDrag = true;
+      fpTransform.panX = fpDrag.startPanX + dx;
+      fpTransform.panY = fpDrag.startPanY + dy;
+      redraw();
+    } else if (e.touches.length === 2 && fpPinchDist) {
+      const dist = Math.hypot(e.touches[1].clientX - e.touches[0].clientX, e.touches[1].clientY - e.touches[0].clientY);
+      fpTransform.zoom = Math.max(0.3, Math.min(5, fpTransform.zoom * (dist / fpPinchDist)));
+      fpPinchDist = dist;
+      redraw();
+    }
+  }, { passive: false });
+  canvas.addEventListener('touchend', () => { fpDrag = null; fpPinchDist = null; });
+}
+
+function drawFloorPlan(data, canvasId, opts) {
+  const canvas = document.getElementById(canvasId || 'fp-canvas');
   if (!canvas) return;
+  const singleRoom = opts?.singleRoom;
+  const showMeasurements = opts?.showMeasurements || false;
+  const isFullscreen = (canvasId === 'fp-canvas-full');
+  if (isFullscreen) { fpLastOpts = opts; setupFpInteraction(); }
+
   const dpr = window.devicePixelRatio || 1;
   const rect = canvas.parentElement.getBoundingClientRect();
   canvas.width = rect.width * dpr;
@@ -190,74 +470,139 @@ function drawFloorPlan(data) {
   ctx.scale(dpr, dpr);
   const w = rect.width, h = rect.height;
 
-  // Each room's polygon is in its own AR coordinate system (origin ≈ 0,0).
-  // Offset each room so they tile side-by-side instead of overlapping.
-  const GAP_FT = 3; // gap between rooms in feet
-  const roomPolys = []; // [{poly: [[x,y],...], roomIdx}]
+  // Apply zoom/pan for fullscreen
+  if (isFullscreen) {
+    ctx.translate(fpTransform.panX, fpTransform.panY);
+    ctx.translate(w/2, h/2);
+    ctx.scale(fpTransform.zoom, fpTransform.zoom);
+    ctx.translate(-w/2, -h/2);
+  }
+
+  // Collect rooms to show
+  const GAP_FT = 3;
+  const roomPolys = [];
   let cursorX = 0;
   (data.rooms || []).forEach((r, i) => {
+    if (singleRoom !== undefined && i !== singleRoom) return;
     if (!r.room_polygon_ft || r.room_polygon_ft.length < 3) return;
     const poly = r.room_polygon_ft;
-    // Compute this room's local bounding box
     let rMinX = Infinity, rMaxX = -Infinity, rMinY = Infinity, rMaxY = -Infinity;
     poly.forEach(([x, y]) => { rMinX = Math.min(rMinX, x); rMaxX = Math.max(rMaxX, x); rMinY = Math.min(rMinY, y); rMaxY = Math.max(rMaxY, y); });
-    // Offset: shift so room's left edge starts at cursorX, and center vertically
     const offX = cursorX - rMinX;
-    const offY = -rMinY; // align top edges
+    const offY = -rMinY;
     const offsetPoly = poly.map(([x, y]) => [x + offX, y + offY]);
     roomPolys.push({ poly: offsetPoly, roomIdx: i });
     cursorX += (rMaxX - rMinX) + GAP_FT;
   });
   if (roomPolys.length === 0) return;
 
-  // Collect all offset points for bounding box
   let allPts = [];
   roomPolys.forEach(rp => rp.poly.forEach(p => allPts.push(p)));
 
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
   allPts.forEach(([x, y]) => { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y); });
   const polyW = maxX - minX || 1, polyH = maxY - minY || 1;
-  const pad = 0.12;
+  const pad = showMeasurements ? 0.18 : 0.12; // more padding for measurement labels
   const scale = Math.min(w * (1 - 2*pad) / polyW, h * (1 - 2*pad) / polyH);
   const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
   const tx = x => w/2 + (x - cx) * scale;
   const ty = y => h/2 + (y - cy) * scale;
 
-  // Store offset polys on data.rooms for click hit-testing
   roomPolys.forEach(rp => { data.rooms[rp.roomIdx]._offsetPoly = rp.poly; });
 
   roomPolys.forEach(({ poly, roomIdx: i }) => {
     const room = data.rooms[i];
     const isActive = i === activeRoomIndex;
+    const isSingle = singleRoom !== undefined;
 
+    // Fill + stroke
     ctx.beginPath();
     ctx.moveTo(tx(poly[0][0]), ty(poly[0][1]));
     poly.slice(1).forEach(([x, y]) => ctx.lineTo(tx(x), ty(y)));
     ctx.closePath();
-    ctx.fillStyle = isActive ? 'rgba(0,102,204,0.2)' : 'rgba(255,255,255,0.05)';
+    ctx.fillStyle = (isActive || isSingle) ? 'rgba(0,85,204,0.1)' : 'rgba(0,0,0,0.03)';
     ctx.fill();
-    ctx.strokeStyle = isActive ? '#0066cc' : '#555';
-    ctx.lineWidth = isActive ? 2 : 1;
+    ctx.strokeStyle = (isActive || isSingle) ? '#0055cc' : '#c0c4cc';
+    ctx.lineWidth = (isActive || isSingle) ? 2 : 1;
     ctx.stroke();
 
-    // Label
+    // Wall measurements
+    if (showMeasurements || isSingle) {
+      for (let j = 0; j < poly.length; j++) {
+        const k = (j + 1) % poly.length;
+        const [x0, y0] = poly[j];
+        const [x1, y1] = poly[k];
+        const wallFt = Math.sqrt((x1-x0)**2 + (y1-y0)**2);
+        if (wallFt < 0.5) continue; // skip tiny walls
+
+        const mx = (tx(x0) + tx(x1)) / 2;
+        const my = (ty(y0) + ty(y1)) / 2;
+
+        // Offset label outward from room center
+        const pcx = poly.reduce((s, p) => s + p[0], 0) / poly.length;
+        const pcy = poly.reduce((s, p) => s + p[1], 0) / poly.length;
+        const nx = my - (ty(y0) + ty(y1)) / 2; // not needed, use perpendicular
+        const dx = tx(x1) - tx(x0), dy = ty(y1) - ty(y0);
+        const len = Math.sqrt(dx*dx + dy*dy) || 1;
+        // Perpendicular pointing away from room center
+        let px = -dy/len, py = dx/len;
+        const toCenter = (tx(pcx) - mx) * px + (ty(pcy) - my) * py;
+        if (toCenter > 0) { px = -px; py = -py; } // flip to point outward
+        const labelOffset = 14;
+
+        ctx.save();
+        ctx.font = 'bold 11px -apple-system, sans-serif';
+        ctx.fillStyle = '#0055cc';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(formatFtIn(wallFt), mx + px * labelOffset, my + py * labelOffset);
+        ctx.restore();
+      }
+
+      // Floor area at center
+      if (room.floor_area_sqft) {
+        const pcx = poly.reduce((s, p) => s + p[0], 0) / poly.length;
+        const pcy = poly.reduce((s, p) => s + p[1], 0) / poly.length;
+        ctx.save();
+        ctx.font = 'bold 13px -apple-system, sans-serif';
+        ctx.fillStyle = '#34a853';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(`${Math.round(room.floor_area_sqft)} SF`, tx(pcx), ty(pcy) + 14);
+        ctx.restore();
+      }
+    }
+
+    // Room label
     const lx = poly.reduce((s, p) => s + p[0], 0) / poly.length;
     const ly = poly.reduce((s, p) => s + p[1], 0) / poly.length;
-    ctx.font = `${isActive ? 'bold ' : ''}11px -apple-system, sans-serif`;
-    ctx.fillStyle = isActive ? '#0066cc' : '#888';
+    ctx.font = `${(isActive || isSingle) ? 'bold ' : ''}${isSingle ? '14' : '11'}px -apple-system, sans-serif`;
+    ctx.fillStyle = (isActive || isSingle) ? '#0055cc' : '#8e8e93';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(room.room_label || `Room ${i+1}`, tx(lx), ty(ly));
+    ctx.fillText(room.room_label || `Room ${i+1}`, tx(lx), ty(ly) - (showMeasurements ? 6 : 0));
   });
 
-  // Click handler
+  // Click handler (accounts for zoom/pan on fullscreen canvas)
   canvas.onclick = (e) => {
+    // Don't register click if the user was dragging/panning
+    if (fpDidDrag) return;
     const br = canvas.getBoundingClientRect();
-    const mx = (e.clientX - br.left), my = (e.clientY - br.top);
+    let mx = (e.clientX - br.left), my = (e.clientY - br.top);
+    // Reverse zoom/pan transform for fullscreen
+    if (isFullscreen) {
+      mx = (mx - fpTransform.panX - w/2) / fpTransform.zoom + w/2;
+      my = (my - fpTransform.panY - h/2) / fpTransform.zoom + h/2;
+    }
     const fpx = (mx - w/2) / scale + cx, fpy = (my - h/2) / scale + cy;
     for (let i = 0; i < data.rooms.length; i++) {
       const poly = data.rooms[i]._offsetPoly;
       if (poly && pointInPoly(fpx, fpy, poly)) { window._selectRoom(i); return; }
+    }
+    // Clicked outside all rooms — in expanded view, show all rooms with measurements
+    if (isFullscreen) {
+      resetFpTransform();
+      drawFloorPlan(data, canvasId, { showMeasurements: true });
     }
   };
 }
@@ -286,8 +631,19 @@ window._selectRoom = function(index) {
   renderMetrics(room);
   loadRoom(index);
 
+  // Auto-collapse sidebar on mobile after room selection
+  if (window.innerWidth <= 768) {
+    document.getElementById('sidebar').classList.add('collapsed');
+    setTimeout(onResize, 350);
+  }
+
   // Redraw floor plan with highlight
-  drawFloorPlan(currentData);
+  drawFloorPlan(currentData, 'fp-canvas');
+  // Also update fullscreen floor plan if open
+  if (document.getElementById('fp-fullscreen').classList.contains('active')) {
+    const opts = { singleRoom: index, showMeasurements: true };
+    requestAnimationFrame(() => drawFloorPlan(currentData, 'fp-canvas-full', opts));
+  }
 };
 
 function renderMetrics(room) {
@@ -299,11 +655,34 @@ function renderMetrics(room) {
   if (room.ceiling_height_ft) html += metricRow('Ceiling Height', `${room.ceiling_height_ft} ft`);
   if (room.perimeter_linear_ft) html += metricRow('Perimeter', `${room.perimeter_linear_ft} ft`);
 
+  if (room.wall_heights_ft && room.wall_heights_ft.length > 0) {
+    html += '<h3 style="margin-top:12px">Wall Heights</h3>';
+    room.wall_heights_ft.forEach((h, i) => { html += metricRow(`Wall ${i + 1}`, `${h} ft`); });
+  }
+
   if (room.detected_components) {
     const items = Array.isArray(room.detected_components) ? room.detected_components : room.detected_components.detected || [];
     if (items.length > 0) {
-      html += '<h3 style="margin-top:12px">Detected</h3>';
-      items.forEach(c => { html += `<div class="metric-row"><span class="label">${esc(c)}</span></div>`; });
+      html += '<h3 style="margin-top:12px">Detected Materials</h3>';
+      items.forEach(c => {
+        const label = c.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+        html += `<div class="metric-row"><span class="label">${esc(label)}</span></div>`;
+      });
+    }
+  }
+
+  if (room.scope) {
+    const scopeItems = room.scope.items || [];
+    const scopeNotes = room.scope.notes || '';
+    if (scopeItems.length > 0 || scopeNotes) {
+      html += '<h3 style="margin-top:12px">Scope of Work</h3>';
+      scopeItems.forEach(item => {
+        const label = item.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+        html += `<div class="metric-row"><span class="label">${esc(label)}</span></div>`;
+      });
+      if (scopeNotes) {
+        html += `<div style="color:#6e6e73;font-size:12px;margin-top:6px;line-height:1.4;font-style:italic">${esc(scopeNotes)}</div>`;
+      }
     }
   }
   panel.innerHTML = html;
@@ -313,9 +692,221 @@ function metricRow(label, value) {
   return `<div class="metric-row"><span class="label">${label}</span><span class="value">${value}</span></div>`;
 }
 
-function setupQuoteButton(rfqId) {
-  const btn = document.getElementById('btn-quote');
-  btn.href = `mailto:quotes@quoterra.co?subject=Quote for ${encodeURIComponent(rfqId)}&body=RFQ ID: ${encodeURIComponent(rfqId)}%0A%0AMy quote:%0A`;
+// --- Auth & Bid Submission ---
+
+let currentContractor = null;
+
+firebase.auth().onAuthStateChanged(async (user) => {
+  if (user) {
+    const token = await user.getIdToken();
+    currentContractor = { uid: user.uid, email: user.email, token };
+    try {
+      const resp = await fetch(`${API_BASE}/api/contractors/me`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (resp.ok) currentContractor.profile = await resp.json();
+    } catch (e) { console.warn('Failed to fetch contractor profile:', e); }
+    renderQuoteSection();
+  } else {
+    currentContractor = null;
+    renderQuoteSection();
+  }
+});
+
+async function refreshToken() {
+  const user = firebase.auth().currentUser;
+  if (user) {
+    currentContractor.token = await user.getIdToken(true);
+  }
+}
+
+function renderQuoteSection() {
+  const el = document.getElementById('quote-section');
+  if (!el) return;
+
+  if (!currentContractor) {
+    el.innerHTML = `
+      <button class="btn btn-primary" onclick="showAuthModal()">Sign In to Submit Quote</button>
+    `;
+  } else {
+    el.innerHTML = `
+      <button class="btn btn-primary" onclick="showBidModal()">Submit Quote</button>
+    `;
+  }
+}
+
+function showAuthModal() {
+  let modal = document.getElementById('auth-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'auth-modal';
+    modal.className = 'modal-overlay';
+    document.body.appendChild(modal);
+  }
+  modal.innerHTML = `
+    <div class="modal-content">
+      <button class="modal-close" onclick="closeModal('auth-modal')">&times;</button>
+      <h2 id="auth-title">Sign In</h2>
+      <p class="auth-subtitle">Sign in to submit your quote</p>
+      <input type="email" id="auth-email" placeholder="Email" autocomplete="email">
+      <input type="password" id="auth-password" placeholder="Password" autocomplete="current-password">
+      <div id="auth-error" class="auth-error"></div>
+      <button class="btn btn-primary btn-full" id="auth-submit" onclick="handleAuth()">Sign In</button>
+      <button class="btn-link" id="auth-toggle" onclick="toggleAuthMode()">Don't have an account? Create one</button>
+      <button class="btn-link" id="auth-forgot" onclick="handleForgotPassword()">Forgot password?</button>
+    </div>
+  `;
+  modal.style.display = 'flex';
+  modal._isCreateMode = false;
+}
+
+function toggleAuthMode() {
+  const modal = document.getElementById('auth-modal');
+  modal._isCreateMode = !modal._isCreateMode;
+  document.getElementById('auth-title').textContent = modal._isCreateMode ? 'Create Account' : 'Sign In';
+  document.getElementById('auth-submit').textContent = modal._isCreateMode ? 'Create Account' : 'Sign In';
+  document.getElementById('auth-toggle').textContent = modal._isCreateMode
+    ? 'Already have an account? Sign In'
+    : "Don't have an account? Create one";
+  document.getElementById('auth-forgot').style.display = modal._isCreateMode ? 'none' : '';
+  document.getElementById('auth-error').textContent = '';
+}
+
+async function handleAuth() {
+  const email = document.getElementById('auth-email').value.trim();
+  const password = document.getElementById('auth-password').value;
+  const errorEl = document.getElementById('auth-error');
+  const submitBtn = document.getElementById('auth-submit');
+  const isCreate = document.getElementById('auth-modal')._isCreateMode;
+
+  if (!email || !password) { errorEl.textContent = 'Email and password required.'; return; }
+
+  submitBtn.disabled = true;
+  submitBtn.textContent = isCreate ? 'Creating...' : 'Signing in...';
+  errorEl.textContent = '';
+
+  try {
+    if (isCreate) {
+      await firebase.auth().createUserWithEmailAndPassword(email, password);
+    } else {
+      await firebase.auth().signInWithEmailAndPassword(email, password);
+    }
+    closeModal('auth-modal');
+  } catch (e) {
+    errorEl.textContent = friendlyAuthError(e.code);
+    submitBtn.disabled = false;
+    submitBtn.textContent = isCreate ? 'Create Account' : 'Sign In';
+  }
+}
+
+async function handleForgotPassword() {
+  const email = document.getElementById('auth-email').value.trim();
+  const errorEl = document.getElementById('auth-error');
+  if (!email) { errorEl.textContent = 'Enter your email first.'; return; }
+  try {
+    await firebase.auth().sendPasswordResetEmail(email);
+    errorEl.style.color = '#34a853';
+    errorEl.textContent = 'Reset link sent — check your email.';
+  } catch (e) {
+    errorEl.textContent = friendlyAuthError(e.code);
+  }
+}
+
+function friendlyAuthError(code) {
+  const map = {
+    'auth/email-already-in-use': 'An account with this email already exists.',
+    'auth/wrong-password': 'Incorrect password.',
+    'auth/user-not-found': 'No account found with this email.',
+    'auth/weak-password': 'Password must be at least 6 characters.',
+    'auth/invalid-email': 'Please enter a valid email address.',
+    'auth/too-many-requests': 'Too many attempts. Try again later.',
+  };
+  return map[code] || 'Authentication failed. Please try again.';
+}
+
+function showBidModal() {
+  let modal = document.getElementById('bid-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'bid-modal';
+    modal.className = 'modal-overlay';
+    document.body.appendChild(modal);
+  }
+  modal.innerHTML = `
+    <div class="modal-content">
+      <button class="modal-close" onclick="closeModal('bid-modal')">&times;</button>
+      <h2>Submit Quote</h2>
+      <p class="auth-subtitle">Submitting as ${esc(currentContractor.email)}</p>
+      <label class="form-label">Price</label>
+      <div class="price-input-wrap">
+        <span class="price-prefix">$</span>
+        <input type="number" id="bid-price" placeholder="0.00" step="0.01" min="0">
+      </div>
+      <label class="form-label">Description of Work</label>
+      <textarea id="bid-description" rows="4" placeholder="Describe your scope of work..."></textarea>
+      <label class="form-label">Estimate PDF (optional)</label>
+      <input type="file" id="bid-pdf" accept="application/pdf">
+      <div id="bid-error" class="auth-error"></div>
+      <button class="btn btn-primary btn-full" id="bid-submit" onclick="handleBidSubmit()">Submit Quote</button>
+    </div>
+  `;
+  modal.style.display = 'flex';
+}
+
+async function handleBidSubmit() {
+  const priceStr = document.getElementById('bid-price').value;
+  const description = document.getElementById('bid-description').value.trim();
+  const pdfInput = document.getElementById('bid-pdf');
+  const errorEl = document.getElementById('bid-error');
+  const submitBtn = document.getElementById('bid-submit');
+
+  const price = parseFloat(priceStr);
+  if (!price || price <= 0) { errorEl.textContent = 'Enter a valid price.'; return; }
+  if (!description) { errorEl.textContent = 'Description is required.'; return; }
+
+  const priceCents = Math.round(price * 100);
+
+  submitBtn.disabled = true;
+  submitBtn.textContent = 'Submitting...';
+  errorEl.textContent = '';
+
+  try {
+    await refreshToken();
+
+    const formData = new FormData();
+    formData.append('price_cents', priceCents);
+    formData.append('description', description);
+    if (pdfInput.files[0]) {
+      formData.append('pdf', pdfInput.files[0]);
+    }
+
+    const rfqId = getRfqId();
+    const resp = await fetch(`${API_BASE}/api/rfqs/${rfqId}/bids`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${currentContractor.token}` },
+      body: formData,
+    });
+
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${resp.status}`);
+    }
+
+    const bid = await resp.json();
+    closeModal('bid-modal');
+
+    const el = document.getElementById('quote-section');
+    el.innerHTML = `<span class="btn btn-primary" style="opacity:0.7;cursor:default;">Quote Submitted</span>`;
+  } catch (e) {
+    errorEl.textContent = e.message;
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'Submit Quote';
+  }
+}
+
+function closeModal(id) {
+  const modal = document.getElementById(id);
+  if (modal) modal.style.display = 'none';
 }
 
 // --- Three.js Scene ---
@@ -360,23 +951,127 @@ function initThree() {
   scene.add(dir);
 
   window.addEventListener('resize', onResize);
+  new ResizeObserver(() => onResize()).observe(container);
+
+  // Auto-collapse sidebar when user touches/clicks the 3D viewer
+  renderer.domElement.addEventListener('pointerdown', () => {
+    const sidebar = document.getElementById('sidebar');
+    if (!sidebar.classList.contains('collapsed')) {
+      sidebar.classList.add('collapsed');
+      setTimeout(onResize, 350);
+    }
+  });
+
   animate();
 }
 
 function onResize() {
   const container = document.getElementById('viewer-container');
   if (!container || !camera) return;
-  camera.aspect = container.clientWidth / container.clientHeight;
+  const w = container.clientWidth, h = container.clientHeight;
+  if (w === 0 || h === 0) return;
+  camera.aspect = w / h;
   camera.updateProjectionMatrix();
-  renderer.setSize(container.clientWidth, container.clientHeight);
-  cssRenderer.setSize(container.clientWidth, container.clientHeight);
+  renderer.setSize(w, h);
+  cssRenderer.setSize(w, h);
+}
+
+// WASD movement (desktop)
+const _keys = {};
+window.addEventListener('keydown', e => { _keys[e.key.toLowerCase()] = true; });
+window.addEventListener('keyup', e => { _keys[e.key.toLowerCase()] = false; });
+const MOVE_SPEED = 0.03;
+
+// Virtual joystick (mobile)
+const _joystick = { dx: 0, dz: 0, active: false };
+{
+  const zone = document.getElementById('joystick-zone');
+  const base = document.getElementById('joystick-base');
+  const knob = document.getElementById('joystick-knob');
+  const RADIUS = 24; // max knob travel from center (80px base, 32px knob)
+  let touchId = null;
+  let baseRect = null;
+
+  function onStart(e) {
+    const t = e.changedTouches[0];
+    touchId = t.identifier;
+    baseRect = base.getBoundingClientRect();
+    _joystick.active = true;
+    onMove(e);
+    e.preventDefault();
+  }
+  function onMove(e) {
+    if (touchId === null) return;
+    for (const t of e.changedTouches) {
+      if (t.identifier !== touchId) continue;
+      const cx = baseRect.left + baseRect.width / 2;
+      const cy = baseRect.top + baseRect.height / 2;
+      let dx = t.clientX - cx;
+      let dy = t.clientY - cy;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist > RADIUS) { dx *= RADIUS / dist; dy *= RADIUS / dist; }
+      knob.style.left = (24 + dx) + 'px';
+      knob.style.top = (24 + dy) + 'px';
+      // Normalize to -1..1
+      _joystick.dx = dx / RADIUS;
+      _joystick.dz = dy / RADIUS;
+    }
+    e.preventDefault();
+  }
+  function onEnd(e) {
+    for (const t of e.changedTouches) {
+      if (t.identifier !== touchId) continue;
+      touchId = null;
+      _joystick.active = false;
+      _joystick.dx = 0;
+      _joystick.dz = 0;
+      knob.style.left = '24px';
+      knob.style.top = '24px';
+    }
+  }
+  zone.addEventListener('touchstart', onStart, { passive: false });
+  zone.addEventListener('touchmove', onMove, { passive: false });
+  zone.addEventListener('touchend', onEnd);
+  zone.addEventListener('touchcancel', onEnd);
 }
 
 function animate() {
   requestAnimationFrame(animate);
+
+  // Movement: WASD (desktop) + virtual joystick (mobile)
+  if (camera && controls) {
+    const forward = new THREE.Vector3();
+    camera.getWorldDirection(forward);
+    forward.y = 0;
+    forward.normalize();
+    const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
+    const delta = new THREE.Vector3();
+    // Desktop WASD
+    if (_keys['w']) delta.add(forward.clone().multiplyScalar(MOVE_SPEED));
+    if (_keys['s']) delta.add(forward.clone().multiplyScalar(-MOVE_SPEED));
+    if (_keys['a']) delta.add(right.clone().multiplyScalar(-MOVE_SPEED));
+    if (_keys['d']) delta.add(right.clone().multiplyScalar(MOVE_SPEED));
+    // Mobile joystick (dz = forward/back, dx = strafe)
+    if (_joystick.active) {
+      delta.add(forward.clone().multiplyScalar(-_joystick.dz * MOVE_SPEED));
+      delta.add(right.clone().multiplyScalar(_joystick.dx * MOVE_SPEED));
+    }
+    if (delta.lengthSq() > 0) {
+      camera.position.add(delta);
+      controls.target.add(delta);
+    }
+  }
+
+  // Update WASD key indicator
+  for (const k of ['w','a','s','d']) {
+    const el = document.getElementById('key-' + k);
+    if (el) el.classList.toggle('active', !!_keys[k]);
+  }
+
   controls.update();
   renderer.render(scene, camera);
   cssRenderer.render(scene, camera);
+  renderIso();
 }
 
 // --- Load Room ---
@@ -385,32 +1080,83 @@ async function loadRoom(index) {
   const room = currentData.rooms[index];
   if (!scene) initThree();
 
-  // Clear existing room geometry and measurements
-  clearScene();
+  // Save camera state for outgoing room
+  if (activeRoomIndex >= 0 && roomCache[activeRoomIndex]) {
+    roomCache[activeRoomIndex].camPos = camera.position.clone();
+    roomCache[activeRoomIndex].camTarget = controls.target.clone();
+  }
+
+  // Hide everything currently visible
+  Object.values(roomCache).forEach(c => {
+    if (c.contentGroup) c.contentGroup.visible = false;
+    if (c.measureGroup) c.measureGroup.visible = false;
+    if (c.hdGroup) c.hdGroup.visible = false;
+  });
+  if (activeContentGroup) { activeContentGroup.visible = false; activeContentGroup = null; }
+  loadedMeshGroup = null;
+  measurementGroup = null;
+
+  const textureUrls = room.texture_urls || {};
+  currentTextureUrls = textureUrls;
+  const hasOBJ = textureUrls.obj && textureUrls.mtl;
+
+  const hdBtn = document.getElementById('btn-hd');
+  hdBtn.style.display = (hasOBJ && textureUrls.obj_standard) ? '' : 'none';
+
+  // --- Cached room: show instantly ---
+  if (roomCache[index]) {
+    const cached = roomCache[index];
+    isHD = cached.isHD || false;
+    hdBtn.classList.toggle('active', isHD);
+    hdBtn.textContent = isHD ? 'HD On' : 'HD';
+
+    if (isHD && cached.hdGroup) {
+      cached.hdGroup.visible = true;
+      activeContentGroup = cached.hdGroup;
+    } else {
+      cached.contentGroup.visible = true;
+      activeContentGroup = cached.contentGroup;
+    }
+    loadedMeshGroup = activeContentGroup;
+    cached.measureGroup.visible = measurementsVisible;
+    measurementGroup = cached.measureGroup;
+
+    camera.position.copy(cached.camPos);
+    controls.target.copy(cached.camTarget);
+    controls.update();
+    updateIsoView(room);
+    return;
+  }
+
+  // --- Fresh room: build from scratch ---
+  isHD = false;
+  hdBtn.classList.remove('active');
+  hdBtn.textContent = 'HD';
 
   const polygon = room.room_polygon_ft;
   if (!polygon || polygon.length < 3) return;
 
   const FT_TO_M = 1 / 3.28084;
-
-  // Convert polygon from feet to meters for 3D scene
   const cornersM = polygon.map(([x, z]) => [x * FT_TO_M, z * FT_TO_M]);
   const ceilingHeightM = (room.ceiling_height_ft || 8) * FT_TO_M;
-
-  // wall_heights_ft are absolute Y coords in AR space, not wall heights.
-  // Compute floor Y: avg(corners_y) - ceiling_height
   const cornersYM = (room.wall_heights_ft || []).map(h => h * FT_TO_M);
   const avgCeilingY = cornersYM.length > 0 ? cornersYM.reduce((s, v) => s + v, 0) / cornersYM.length : ceilingHeightM;
   const floorY = avgCeilingY - ceilingHeightM;
-
-  const textureUrls = room.texture_urls || {};
-
-  // Room center
   const cx = cornersM.reduce((s, p) => s + p[0], 0) / cornersM.length;
   const cz = cornersM.reduce((s, p) => s + p[1], 0) / cornersM.length;
 
-  // Build walls as interior-facing surfaces using BufferGeometry
-  // Each wall is a quad from two polygon corners, floor to ceiling, with normal facing inward
+  // Create a group to hold all this room's preview content
+  const contentGroup = new THREE.Group();
+  scene.add(contentGroup);
+  activeContentGroup = contentGroup;
+
+  if (hasOBJ) {
+    loadOBJMesh(textureUrls.obj, textureUrls.atlas, true, contentGroup);
+  } else {
+    buildQuadRoom(contentGroup);
+  }
+
+  function buildQuadRoom(group) {
   for (let i = 0; i < cornersM.length; i++) {
     const j = (i + 1) % cornersM.length;
     const [x0, z0] = cornersM[i];
@@ -418,14 +1164,10 @@ async function loadRoom(index) {
     const h0 = cornersYM[i] || (floorY + ceilingHeightM);
     const h1 = cornersYM[j] || (floorY + ceilingHeightM);
 
-    // Quad vertices: bottom at floorY, top at ceiling Y per corner
-    // Winding order for interior face (facing into room): BL, TL, TR, BL, TR, BR
     const vertices = new Float32Array([
-      x0, floorY, z0,   x0, h0, z0,   x1, h1, z1,  // tri 1
-      x0, floorY, z0,   x1, h1, z1,   x1, floorY, z1,  // tri 2
+      x0, floorY, z0,   x0, h0, z0,   x1, h1, z1,
+      x0, floorY, z0,   x1, h1, z1,   x1, floorY, z1,
     ]);
-
-    // UVs: U goes 0→1 along wall width, V goes 0→1 from floor to ceiling
     const uvs = new Float32Array([
       0, 0,   0, 1,   1, 1,
       0, 0,   1, 1,   1, 0,
@@ -440,45 +1182,47 @@ async function loadRoom(index) {
     if (texUrl) {
       const loader = new THREE.TextureLoader();
       loader.crossOrigin = 'anonymous';
-      const tex = loader.load(texUrl,
-        () => { console.log(`wall_${i} texture loaded`); },
-        undefined,
-        (err) => { console.error(`wall_${i} texture FAILED`, err); }
-      );
+      const tex = loader.load(texUrl);
       tex.colorSpace = THREE.SRGBColorSpace;
-      tex.flipY = false; // Projected texture row 0 = UV V=0 (floor), no flip needed
-      // MeshBasicMaterial: projected photos don't need lighting, display at full brightness
+      tex.flipY = false;
       mat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide });
     } else {
       mat = new THREE.MeshBasicMaterial({ color: 0xd8d0c8, side: THREE.DoubleSide });
     }
-
-    scene.add(new THREE.Mesh(geom, mat));
+    group.add(new THREE.Mesh(geom, mat));
   }
+  group.add(buildPolygonSurface(cornersM, floorY, textureUrls.floor, 0x8b7355, true));
+  group.add(buildPolygonSurface(cornersM, avgCeilingY, textureUrls.ceiling, 0xe8e4e0, false));
+  } // end buildQuadRoom
 
-  // Build floor and ceiling as fan-triangulated BufferGeometry directly in XZ plane
-  // (avoids ShapeGeometry 2D triangulation bugs with rotated polygons)
-  scene.add(buildPolygonSurface(cornersM, floorY, textureUrls.floor, 0x8b7355, true));       // floor
-  scene.add(buildPolygonSurface(cornersM, avgCeilingY, textureUrls.ceiling, 0xe8e4e0, false)); // ceiling
-
-  // Position camera at room center, eye height above floor
+  // Position camera
   const eyeHeight = floorY + Math.min(1.6, ceilingHeightM * 0.65);
   camera.position.set(cx, eyeHeight, cz);
-
-  // For interior look-around, OrbitControls target must be very close to camera
-  // (tiny offset forward so rotation pivots in-place, not around a distant wall)
   const [wx0, wz0] = cornersM[0];
   const [wx1, wz1] = cornersM[1];
   const lookX = (wx0 + wx1) / 2;
   const lookZ = (wz0 + wz1) / 2;
   const dx = lookX - cx, dz = lookZ - cz;
   const lookDist = Math.sqrt(dx * dx + dz * dz) || 1;
-  // Target is 0.01m from camera toward first wall — rotation pivots in place
   controls.target.set(cx + dx / lookDist * 0.01, eyeHeight, cz + dz / lookDist * 0.01);
   controls.update();
 
   // Build measurements
   buildMeasurements(room, cornersM, floorY, avgCeilingY, ceilingHeightM);
+
+  // Isometric mini-view
+  updateIsoView(room);
+
+  // Cache
+  roomCache[index] = {
+    contentGroup,
+    measureGroup: measurementGroup,
+    camPos: camera.position.clone(),
+    camTarget: controls.target.clone(),
+    isHD: false,
+    hdGroup: null,
+  };
+  loadedMeshGroup = contentGroup;
 }
 
 // Build a horizontal polygon surface at a given Y height using fan triangulation.
@@ -544,6 +1288,7 @@ function buildPolygonSurface(cornersM, y, textureUrl, fallbackColor, normalUp) {
 }
 
 function clearScene() {
+  // Only used for full teardown — room switching uses show/hide via cache
   if (!scene) return;
   const toRemove = [];
   scene.traverse(obj => {
@@ -558,13 +1303,14 @@ function clearScene() {
     }
   });
   measurementGroup = null;
+  loadedMeshGroup = null;
 }
 
 // --- Measurements ---
 
 function buildMeasurements(room, cornersM, floorY, ceilingY, ceilingHeightM) {
   measurementGroup = new THREE.Group();
-  measurementGroup.visible = measurementsVisible;
+  measurementGroup.visible = true;
 
   // Room center for nudging lines inward
   const roomCx = cornersM.reduce((s, p) => s + p[0], 0) / cornersM.length;
@@ -608,21 +1354,21 @@ function buildMeasurements(room, cornersM, floorY, ceilingY, ceilingHeightM) {
     ceilLine.renderOrder = 999;
     measurementGroup.add(ceilLine);
 
-    // Floor edge
+    // Floor edge — placed exactly at wall corners (no nudge, avoids parallax from above)
     const floorLine = new THREE.Line(
       new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(nx0, floorY, nz0),
-        new THREE.Vector3(nx1, floorY, nz1),
+        new THREE.Vector3(x0, floorY, z0),
+        new THREE.Vector3(x1, floorY, z1),
       ]),
       edgeMat(0x2196F3),
     );
     floorLine.renderOrder = 999;
     measurementGroup.add(floorLine);
 
-    // Vertical edge at corner i
+    // Vertical edge at corner i — from exact floor to nudged ceiling
     const vertLine = new THREE.Line(
       new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(nx0, floorY, nz0),
+        new THREE.Vector3(x0, floorY, z0),
         new THREE.Vector3(nx0, ceilingY, nz0),
       ]),
       edgeMat(0x2196F3),
@@ -687,13 +1433,374 @@ window.toggleMeasurements = function() {
   btn.textContent = measurementsVisible ? 'Hide Measurements' : 'Show Measurements';
 };
 
-// --- Util ---
+// --- OBJ Loading ---
+
+function loadOBJMesh(objUrl, atlasUrl, showSpinner, targetGroup) {
+  const spinner = document.getElementById('viewer-spinner');
+  if (showSpinner) { spinner.textContent = 'Loading...'; spinner.style.display = 'block'; }
+
+  const parent = targetGroup || scene;
+  const texLoader = new THREE.TextureLoader();
+  texLoader.crossOrigin = 'anonymous';
+  const objLoader = new OBJLoader();
+
+  objLoader.load(objUrl, (obj) => {
+    let atlasMat;
+    if (atlasUrl) {
+      const tex = texLoader.load(atlasUrl, () => { spinner.style.display = 'none'; });
+      tex.colorSpace = THREE.SRGBColorSpace;
+      atlasMat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide });
+    } else {
+      atlasMat = new THREE.MeshBasicMaterial({ color: 0xd8d0c8, side: THREE.DoubleSide });
+      spinner.style.display = 'none';
+    }
+    obj.traverse(child => { if (child.isMesh) child.material = atlasMat; });
+    parent.add(obj);
+    console.log('OBJ loaded');
+  }, undefined, (err) => {
+    console.error('OBJ load failed:', err);
+    spinner.style.display = 'none';
+  });
+}
+
+window.toggleHD = function() {
+  if (!currentTextureUrls) return;
+  const btn = document.getElementById('btn-hd');
+  isHD = !isHD;
+  btn.classList.toggle('active', isHD);
+  btn.textContent = isHD ? 'HD On' : 'HD';
+
+  const cached = roomCache[activeRoomIndex];
+
+  if (isHD && currentTextureUrls.obj_standard) {
+    if (cached?.contentGroup) cached.contentGroup.visible = false;
+
+    if (cached?.hdGroup) {
+      cached.hdGroup.visible = true;
+      activeContentGroup = cached.hdGroup;
+      document.getElementById('viewer-spinner').style.display = 'none';
+    } else {
+      const hdGroup = new THREE.Group();
+      scene.add(hdGroup);
+      activeContentGroup = hdGroup;
+      loadOBJMesh(currentTextureUrls.obj_standard, currentTextureUrls.atlas_standard, true, hdGroup);
+      if (cached) { cached.hdGroup = hdGroup; cached.isHD = true; }
+    }
+  } else {
+    if (cached?.hdGroup) cached.hdGroup.visible = false;
+    if (cached?.contentGroup) {
+      cached.contentGroup.visible = true;
+      activeContentGroup = cached.contentGroup;
+    }
+    if (cached) cached.isHD = false;
+    document.getElementById('viewer-spinner').style.display = 'none';
+  }
+};
+
+window._toggleDesc = function() {
+  const desc = document.getElementById('job-desc');
+  const toggle = document.getElementById('desc-toggle');
+  if (!desc) return;
+  desc.classList.toggle('truncated');
+  toggle.textContent = desc.classList.contains('truncated') ? 'Show more' : 'Show less';
+};
+
+window.openFpFullscreen = function() {
+  const overlay = document.getElementById('fp-fullscreen');
+  overlay.classList.add('active');
+  resetFpTransform();
+  if (currentData) {
+    const opts = activeRoomIndex >= 0
+      ? { singleRoom: activeRoomIndex, showMeasurements: true }
+      : { showMeasurements: true };
+    requestAnimationFrame(() => drawFloorPlan(currentData, 'fp-canvas-full', opts));
+  }
+};
+
+window.closeFpFullscreen = function() {
+  document.getElementById('fp-fullscreen').classList.remove('active');
+};
+
+window.toggleSidebar = function() {
+  document.getElementById('sidebar').classList.toggle('collapsed');
+  setTimeout(onResize, 350);
+};
 
 function esc(s) {
   const el = document.createElement('span');
   el.textContent = s || '';
   return el.innerHTML;
 }
+
+// --- Isometric 3D Room View ---
+
+let isoRenderer = null, isoScene = null, isoCamera = null;
+let isoFullRenderer = null, isoFullControls = null, isoCssRenderer = null;
+let isoRoomGroup = null, isoMeasureGroup = null;
+let isoCenter = null;
+let isoSpan = 1;
+let isoFullscreen = false;
+
+function buildIsoRoomGeometry(room) {
+  const FT_TO_M = 1 / 3.28084;
+  const M_TO_FT = 3.28084;
+  const poly = room.room_polygon_ft;
+  const cornersM = poly.map(([x, z]) => [x * FT_TO_M, z * FT_TO_M]);
+  const ceilingHeightM = (room.ceiling_height_ft || 8) * FT_TO_M;
+  const cornersYM = (room.wall_heights_ft || []).map(h => h * FT_TO_M);
+  const avgCeilingY = cornersYM.length > 0 ? cornersYM.reduce((s, v) => s + v, 0) / cornersYM.length : ceilingHeightM;
+  const floorY = avgCeilingY - ceilingHeightM;
+  const n = cornersM.length;
+
+  const group = new THREE.Group();
+  const wallMat = new THREE.MeshPhongMaterial({ color: 0x4488cc, transparent: true, opacity: 0.35, side: THREE.DoubleSide });
+  const floorMat = new THREE.MeshPhongMaterial({ color: 0x5599dd, transparent: true, opacity: 0.5, side: THREE.DoubleSide });
+  const edgeMat = new THREE.LineBasicMaterial({ color: 0x88bbee });
+
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    const [x0, z0] = cornersM[i], [x1, z1] = cornersM[j];
+    const h0 = cornersYM[i] || avgCeilingY, h1 = cornersYM[j] || avgCeilingY;
+    const verts = new Float32Array([x0,floorY,z0, x0,h0,z0, x1,h1,z1, x0,floorY,z0, x1,h1,z1, x1,floorY,z1]);
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(verts, 3));
+    geom.computeVertexNormals();
+    group.add(new THREE.Mesh(geom, wallMat));
+    group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(x0,h0,z0), new THREE.Vector3(x1,h1,z1)]), edgeMat));
+    group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(x0,floorY,z0), new THREE.Vector3(x1,floorY,z1)]), edgeMat));
+    group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(x0,floorY,z0), new THREE.Vector3(x0,h0,z0)]), edgeMat));
+  }
+
+  const cx = cornersM.reduce((s, p) => s + p[0], 0) / n;
+  const cz = cornersM.reduce((s, p) => s + p[1], 0) / n;
+  const fv = [];
+  for (let i = 0; i < n; i++) { const j = (i+1)%n; fv.push(cx,floorY,cz, cornersM[i][0],floorY,cornersM[i][1], cornersM[j][0],floorY,cornersM[j][1]); }
+  const fg = new THREE.BufferGeometry(); fg.setAttribute('position', new THREE.Float32BufferAttribute(fv, 3)); fg.computeVertexNormals();
+  group.add(new THREE.Mesh(fg, floorMat));
+
+  // Camera indicator
+  const indicator = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 8), new THREE.MeshBasicMaterial({ color: 0xff3333 }));
+  indicator.name = 'camIndicator';
+  group.add(indicator);
+  const lookLine = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(0,0,-0.4)]),
+    new THREE.LineBasicMaterial({ color: 0xff3333 })
+  );
+  lookLine.name = 'camLookLine';
+  group.add(lookLine);
+
+  // Measurements (CSS2D labels) — separate group
+  const measures = new THREE.Group();
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    const [x0, z0] = cornersM[i], [x1, z1] = cornersM[j];
+    const h0 = cornersYM[i] || avgCeilingY, h1 = cornersYM[j] || avgCeilingY;
+    const wallLen = Math.sqrt((x1-x0)**2 + (z1-z0)**2) * M_TO_FT;
+    if (wallLen < 0.5) continue;
+    const div = document.createElement('div');
+    div.className = 'measure-label';
+    div.textContent = formatFtIn(wallLen);
+    const label = new CSS2DObject(div);
+    label.position.set((x0+x1)/2, (h0+h1)/2 + 0.08, (z0+z1)/2);
+    measures.add(label);
+  }
+  // Height label at first significant corner
+  if (n > 0) {
+    const hDiv = document.createElement('div');
+    hDiv.className = 'measure-label height';
+    hDiv.textContent = formatFtIn(ceilingHeightM * M_TO_FT);
+    const hLabel = new CSS2DObject(hDiv);
+    hLabel.position.set(cornersM[0][0], (floorY + avgCeilingY) / 2, cornersM[0][1]);
+    measures.add(hLabel);
+  }
+  // Floor area
+  if (room.floor_area_sqft) {
+    const aDiv = document.createElement('div');
+    aDiv.className = 'measure-label area';
+    aDiv.textContent = `${Math.round(room.floor_area_sqft)} SF`;
+    const aLabel = new CSS2DObject(aDiv);
+    aLabel.position.set(cx, floorY + 0.05, cz);
+    measures.add(aLabel);
+  }
+
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  cornersM.forEach(([x, z]) => { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z); });
+
+  return {
+    group, measures,
+    center: { x: (minX+maxX)/2, y: (floorY+avgCeilingY)/2, z: (minZ+maxZ)/2 },
+    span: Math.max(maxX-minX, maxZ-minZ, ceilingHeightM) * 0.8,
+  };
+}
+
+function updateIsoView(room) {
+  const thumb = document.getElementById('corner-thumb');
+  if (!room?.room_polygon_ft || room.room_polygon_ft.length < 3) {
+    thumb.style.display = 'none'; return;
+  }
+  thumb.style.display = 'block';
+  document.getElementById('thumb-label').textContent = isoFullscreen ? '3D Texture' : '3D Model';
+
+  if (!isoScene) {
+    isoScene = new THREE.Scene();
+    isoScene.background = new THREE.Color(0x1a1a1a);
+    isoScene.add(new THREE.AmbientLight(0xffffff, 0.8));
+    const d = new THREE.DirectionalLight(0xffffff, 0.4); d.position.set(1,2,1); isoScene.add(d);
+  }
+  if (isoRoomGroup) { isoScene.remove(isoRoomGroup); }
+  if (isoMeasureGroup) {
+    // Dispose CSS2D label DOM elements to prevent them lingering on screen
+    isoMeasureGroup.traverse(obj => {
+      if (obj.isCSS2DObject && obj.element?.parentNode) {
+        obj.element.parentNode.removeChild(obj.element);
+      }
+    });
+    isoScene.remove(isoMeasureGroup);
+  }
+
+  const built = buildIsoRoomGeometry(room);
+  isoRoomGroup = built.group;
+  isoMeasureGroup = built.measures;
+  isoMeasureGroup.visible = isoFullscreen; // only show in fullscreen
+  isoCenter = built.center;
+  isoSpan = built.span;
+  isoScene.add(isoRoomGroup);
+  isoScene.add(isoMeasureGroup);
+
+  if (!isoRenderer) {
+    isoRenderer = new THREE.WebGLRenderer({ canvas: document.getElementById('iso-canvas'), antialias: true });
+    isoRenderer.setPixelRatio(window.devicePixelRatio);
+  }
+  isoRenderer.setSize(thumb.clientWidth, thumb.clientHeight);
+
+  if (!isoCamera) {
+    isoCamera = new THREE.OrthographicCamera(-1,1,1,-1, 0.01, 100);
+  }
+  const s = isoSpan;
+  const thumbAspect = (thumb.clientWidth || 160) / (thumb.clientHeight || 120);
+  isoCamera.left = -s; isoCamera.right = s;
+  isoCamera.top = s / thumbAspect; isoCamera.bottom = -s / thumbAspect;
+  isoCamera.updateProjectionMatrix();
+
+  if (!isoFullRenderer) {
+    const fCanvas = document.getElementById('iso-full-canvas');
+    const fContainer = document.getElementById('iso-fullscreen');
+    isoFullRenderer = new THREE.WebGLRenderer({ canvas: fCanvas, antialias: true });
+    isoFullRenderer.setPixelRatio(window.devicePixelRatio);
+    isoFullRenderer.setSize(fContainer.clientWidth, fContainer.clientHeight);
+
+    isoCssRenderer = new CSS2DRenderer();
+    isoCssRenderer.setSize(fContainer.clientWidth, fContainer.clientHeight);
+    isoCssRenderer.domElement.style.position = 'absolute';
+    isoCssRenderer.domElement.style.top = '0';
+    isoCssRenderer.domElement.style.left = '0';
+    isoCssRenderer.domElement.style.pointerEvents = 'none';
+    fContainer.appendChild(isoCssRenderer.domElement);
+
+    isoFullControls = new OrbitControls(isoCamera, fCanvas);
+    isoFullControls.enableDamping = true;
+    isoFullControls.dampingFactor = 0.1;
+  }
+}
+
+function syncIsoCamera() {
+  if (!isoCamera || !isoCenter || !camera) return;
+  if (isoFullscreen) {
+    isoFullControls.update();
+  } else {
+    const forward = new THREE.Vector3();
+    camera.getWorldDirection(forward);
+    const yaw = Math.atan2(forward.x, forward.z);
+    const dist = isoSpan * 2;
+    const pitch = 0.6;
+    isoCamera.position.set(
+      isoCenter.x + Math.sin(yaw + Math.PI) * dist * Math.cos(pitch),
+      isoCenter.y + dist * Math.sin(pitch),
+      isoCenter.z + Math.cos(yaw + Math.PI) * dist * Math.cos(pitch)
+    );
+    isoCamera.lookAt(isoCenter.x, isoCenter.y, isoCenter.z);
+    isoCamera.updateProjectionMatrix();
+  }
+
+  if (isoRoomGroup && camera) {
+    const indicator = isoRoomGroup.getObjectByName('camIndicator');
+    const lookLine = isoRoomGroup.getObjectByName('camLookLine');
+    if (indicator) indicator.position.copy(camera.position);
+    if (lookLine) {
+      lookLine.position.copy(camera.position);
+      const fwd = new THREE.Vector3();
+      camera.getWorldDirection(fwd);
+      lookLine.lookAt(camera.position.x + fwd.x, camera.position.y, camera.position.z + fwd.z);
+    }
+  }
+}
+
+function renderIso() {
+  if (!isoScene || !isoCamera) return;
+  syncIsoCamera();
+  if (isoFullscreen && isoFullRenderer) {
+    const c = document.getElementById('iso-fullscreen');
+    const fw = c.clientWidth, fh = c.clientHeight;
+    isoFullRenderer.setSize(fw, fh);
+    // Update ortho camera aspect for fullscreen
+    const fAspect = (fw || 1) / (fh || 1);
+    const s = isoSpan;
+    isoCamera.left = -s * fAspect; isoCamera.right = s * fAspect;
+    isoCamera.top = s; isoCamera.bottom = -s;
+    isoCamera.updateProjectionMatrix();
+    isoFullRenderer.render(isoScene, isoCamera);
+    if (isoCssRenderer) {
+      isoCssRenderer.setSize(c.clientWidth, c.clientHeight);
+      isoCssRenderer.render(isoScene, isoCamera);
+    }
+    // Render main 3D scene into corner thumbnail
+    if (isoRenderer && renderer && scene && camera) {
+      const thumb = document.getElementById('corner-thumb');
+      isoRenderer.setSize(thumb.clientWidth, thumb.clientHeight);
+      isoRenderer.render(scene, camera);
+    }
+  } else if (isoRenderer) {
+    // Update ortho camera aspect for mini thumbnail
+    const thumb = document.getElementById('corner-thumb');
+    const tw = thumb.clientWidth || 160, th = thumb.clientHeight || 120;
+    const tAspect = tw / th;
+    const s = isoSpan;
+    isoCamera.left = -s; isoCamera.right = s;
+    isoCamera.top = s / tAspect; isoCamera.bottom = -s / tAspect;
+    isoCamera.updateProjectionMatrix();
+    isoRenderer.setSize(tw, th);
+    isoRenderer.render(isoScene, isoCamera);
+  }
+}
+
+window.toggleIsoFullscreen = function() {
+  isoFullscreen = !isoFullscreen;
+  const thumb = document.getElementById('corner-thumb');
+  document.getElementById('iso-fullscreen').classList.toggle('active', isoFullscreen);
+  document.getElementById('thumb-label').textContent = isoFullscreen ? '3D Texture' : '3D Model';
+  // Always keep thumbnail visible
+  thumb.style.display = 'block';
+
+  if (isoMeasureGroup) isoMeasureGroup.visible = isoFullscreen;
+
+  if (isoFullscreen && isoFullControls && isoCenter) {
+    isoFullControls.target.set(isoCenter.x, isoCenter.y, isoCenter.z);
+    const s = isoSpan * 2;
+    isoCamera.position.set(isoCenter.x + s*0.7, isoCenter.y + s*0.5, isoCenter.z + s*0.7);
+    isoFullControls.update();
+    const c = document.getElementById('iso-fullscreen');
+    isoFullRenderer.setSize(c.clientWidth, c.clientHeight);
+  }
+};
+
+// --- Expose auth/bid functions for onclick handlers ---
+window.showAuthModal = showAuthModal;
+window.showBidModal = showBidModal;
+window.closeModal = closeModal;
+window.toggleAuthMode = toggleAuthMode;
+window.handleAuth = handleAuth;
+window.handleForgotPassword = handleForgotPassword;
+window.handleBidSubmit = handleBidSubmit;
 
 // --- Start ---
 init();
