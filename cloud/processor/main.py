@@ -815,6 +815,207 @@ def _compute_from_annotation(annotation: Optional[dict], ply_metrics: dict) -> d
     }
 
 
+@app.post("/coverage")
+async def check_coverage(request: Request) -> dict:
+    """Check texture coverage on a decimated mesh — returns uncovered face locations.
+
+    Called by the iOS app after uploading scan.zip but before triggering full processing.
+    Decimates the mesh to 10K faces (matching OpenMVS preview resolution), then checks
+    which faces have at least one viable keyframe camera.
+
+    Returns uncovered face centroids + normals so the app can render AR overlay patches.
+    """
+    body = await request.json()
+    scan_id = body.get("scan_id")
+    rfq_id = body.get("rfq_id")
+    blob_path = body.get("blob_path")
+
+    if not all([scan_id, rfq_id, blob_path]):
+        raise HTTPException(status_code=400, detail="Missing required fields")
+
+    print(f"[Coverage] Starting coverage check for scan {scan_id}")
+
+    import trimesh
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        zip_path = os.path.join(tmpdir, "scan.zip")
+        extract_dir = os.path.join(tmpdir, "scan")
+
+        # Download and extract
+        try:
+            _download_from_gcs(blob_path, zip_path)
+            _extract_zip(zip_path, extract_dir)
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
+
+        scan_root = _find_scan_root(extract_dir)
+        if not scan_root:
+            return {"status": "error", "error": "Could not find scan root directory"}
+
+        # Parse mesh
+        ply_path = os.path.join(scan_root, "mesh.ply")
+        if not os.path.exists(ply_path):
+            return {"status": "error", "error": "mesh.ply not found"}
+
+        mesh = trimesh.load(ply_path, process=False)
+        original_faces = len(mesh.faces)
+        print(f"[Coverage] Loaded mesh: {original_faces} faces")
+
+        # Decimate to 10K faces (same as OpenMVS preview)
+        target_faces = 10000
+        if original_faces > target_faces:
+            mesh = mesh.simplify_quadric_decimation(face_count=target_faces)
+            print(f"[Coverage] Decimated: {original_faces} → {len(mesh.faces)} faces")
+
+        # Load keyframe camera data from metadata
+        metadata_path = os.path.join(scan_root, "metadata.json")
+        if not os.path.exists(metadata_path):
+            return {"status": "error", "error": "metadata.json not found"}
+
+        with open(metadata_path) as f:
+            metadata = json.load(f)
+
+        cameras = _load_cameras(scan_root, metadata)
+        if not cameras:
+            return {"status": "error", "error": "No keyframe cameras found"}
+
+        print(f"[Coverage] Loaded {len(cameras)} cameras")
+
+        # Check coverage per face
+        uncovered = _check_face_coverage(mesh, cameras)
+
+        coverage_ratio = 1.0 - (len(uncovered) / max(len(mesh.faces), 1))
+        print(f"[Coverage] {len(mesh.faces)} faces, {len(uncovered)} uncovered "
+              f"({int((1 - coverage_ratio) * 100)}% gaps)")
+
+        return {
+            "status": "ok",
+            "coverage_ratio": round(coverage_ratio, 3),
+            "total_faces": len(mesh.faces),
+            "uncovered_count": len(uncovered),
+            "uncovered_faces": uncovered[:2000],  # Cap response size
+        }
+
+
+def _load_cameras(scan_root: str, metadata: dict) -> list[dict]:
+    """Load camera transforms and intrinsics from scan metadata + per-frame JSONs."""
+    cameras = []
+    intrinsics = metadata.get("camera_intrinsics", {})
+    fx = intrinsics.get("fx", 0)
+    fy = intrinsics.get("fy", 0)
+    cx = intrinsics.get("cx", 0)
+    cy = intrinsics.get("cy", 0)
+    img_res = metadata.get("image_resolution", {})
+    img_w = img_res.get("width", 1920)
+    img_h = img_res.get("height", 1440)
+
+    keyframes_dir = os.path.join(scan_root, "keyframes")
+    for kf in metadata.get("keyframes", []):
+        frame_json_path = os.path.join(keyframes_dir, kf["filename"].replace(".jpg", ".json"))
+        if not os.path.exists(frame_json_path):
+            continue
+        with open(frame_json_path) as f:
+            frame_data = json.load(f)
+        transform = frame_data.get("camera_transform")
+        if not transform or len(transform) != 16:
+            continue
+
+        # camera_transform is world-from-camera, 4x4 column-major
+        T = np.array(transform, dtype=np.float64).reshape(4, 4, order='F')
+        cam_pos = T[:3, 3]
+        cam_from_world = np.linalg.inv(T)
+
+        cameras.append({
+            "position": cam_pos,
+            "cam_from_world": cam_from_world,
+            "fx": fx, "fy": fy, "cx": cx, "cy": cy,
+            "img_w": img_w, "img_h": img_h,
+        })
+
+    return cameras
+
+
+def _check_face_coverage(mesh, cameras: list[dict]) -> list[dict]:
+    """Check which mesh faces have no viable camera. Returns uncovered face data."""
+    # Thresholds matching MeshCoverageAnalyzer.swift and OpenMVS criteria
+    MIN_DISTANCE = 0.2
+    MAX_DISTANCE = 5.0
+    MIN_ANGLE_WALL = 0.1       # ~84° from perpendicular
+    MIN_ANGLE_FLOOR_CEIL = 0.02  # ~89°
+    IMAGE_MARGIN = 50.0
+
+    vertices = np.array(mesh.vertices, dtype=np.float64)
+    faces = np.array(mesh.faces)
+    face_normals = np.array(mesh.face_normals, dtype=np.float64)
+
+    # Compute face centroids
+    v0 = vertices[faces[:, 0]]
+    v1 = vertices[faces[:, 1]]
+    v2 = vertices[faces[:, 2]]
+    centroids = (v0 + v1 + v2) / 3.0
+
+    # Classify faces by normal direction (Y-component > 0.7 = floor/ceiling)
+    is_floor_ceil = np.abs(face_normals[:, 1]) > 0.7
+
+    uncovered = []
+    for i in range(len(faces)):
+        centroid = centroids[i]
+        normal = face_normals[i]
+        angle_threshold = MIN_ANGLE_FLOOR_CEIL if is_floor_ceil[i] else MIN_ANGLE_WALL
+        has_viable = False
+
+        for cam in cameras:
+            to_cam = cam["position"] - centroid
+            dist = np.linalg.norm(to_cam)
+            if dist < MIN_DISTANCE or dist > MAX_DISTANCE:
+                continue
+
+            # Viewing angle
+            to_cam_norm = to_cam / dist
+            angle_dot = np.dot(normal, to_cam_norm)
+            if angle_dot < angle_threshold:
+                continue
+
+            # Projection bounds check
+            world_pt = np.append(centroid, 1.0)
+            cam_pt = cam["cam_from_world"] @ world_pt
+            depth = -cam_pt[2]
+            if depth < 0.1:
+                continue
+
+            px = cam["fx"] * cam_pt[0] / depth + cam["cx"]
+            py = -cam["fy"] * cam_pt[1] / depth + cam["cy"]
+
+            if (px >= IMAGE_MARGIN and px < cam["img_w"] - IMAGE_MARGIN and
+                    py >= IMAGE_MARGIN and py < cam["img_h"] - IMAGE_MARGIN):
+                has_viable = True
+                break
+
+        if not has_viable:
+            uncovered.append({
+                "centroid": [round(float(centroid[0]), 4),
+                             round(float(centroid[1]), 4),
+                             round(float(centroid[2]), 4)],
+                "normal": [round(float(normal[0]), 4),
+                           round(float(normal[1]), 4),
+                           round(float(normal[2]), 4)],
+            })
+
+    return uncovered
+
+
+def _find_scan_root(extract_dir: str) -> Optional[str]:
+    """Find the scan root directory (contains mesh.ply + metadata.json)."""
+    # Could be directly in extract_dir or one level down
+    if os.path.exists(os.path.join(extract_dir, "mesh.ply")):
+        return extract_dir
+    for entry in os.listdir(extract_dir):
+        candidate = os.path.join(extract_dir, entry)
+        if os.path.isdir(candidate) and os.path.exists(os.path.join(candidate, "mesh.ply")):
+            return candidate
+    return None
+
+
 @app.get("/health")
 def health() -> dict:
     """Health check endpoint for Cloud Run readiness/liveness probes."""

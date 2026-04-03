@@ -373,6 +373,63 @@ def delete_scan(rfq_id: str, scan_id: str, authorization: str = Header(None)) ->
     return {"status": "deleted", "scan_id": scan_id}
 
 
+@app.post("/api/rfqs/{rfq_id}/scans/{scan_id}/coverage")
+async def check_coverage(rfq_id: str, scan_id: str, authorization: str = Header(None)) -> dict:
+    """Check texture coverage by calling the processor's /coverage endpoint.
+
+    Proxies the request to the OIDC-protected scan-processor service.
+    The processor decimates the mesh to 10K faces and checks per-face camera viability.
+    Returns uncovered face centroids + normals for AR overlay on the iOS app.
+    """
+    verify_firebase_token(authorization)
+
+    # Look up the blob path for this scan
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT scan_mesh_url FROM scanned_rooms WHERE id = %s AND rfq_id = %s",
+            (scan_id, rfq_id),
+        )
+        row = cursor.fetchone()
+    finally:
+        conn.close()
+
+    if not row or not row[0]:
+        raise HTTPException(status_code=404, detail="Scan not found or not yet uploaded")
+
+    # Derive blob_path from scan_mesh_url (scans/{rfq_id}/{scan_id}/mesh.ply → scans/{rfq_id}/{scan_id}/scan.zip)
+    mesh_path = row[0]
+    blob_path = mesh_path.rsplit("/", 1)[0] + "/scan.zip"
+
+    # Call processor /coverage endpoint with OIDC auth
+    import requests as http_requests
+    try:
+        if not _credentials.token or not _credentials.valid:
+            _credentials.refresh(_auth_request)
+
+        # Get OIDC token for processor
+        from google.oauth2 import id_token as google_id_token
+        import google.auth.transport.requests as google_transport
+        oidc_request = google_transport.Request()
+        token = google_id_token.fetch_id_token(oidc_request, PROCESSOR_URL)
+
+        resp = http_requests.post(
+            f"{PROCESSOR_URL}/coverage",
+            json={"scan_id": scan_id, "rfq_id": rfq_id, "blob_path": blob_path},
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            timeout=60,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        print(f"[API] Coverage check failed: {e}")
+        raise HTTPException(status_code=502, detail=f"Coverage check failed: {str(e)}")
+
+
 @app.delete("/api/rfqs/{rfq_id}")
 def delete_rfq(rfq_id: str, authorization: str = Header(None)) -> dict:
     """Soft-delete an RFQ and all its scans.
