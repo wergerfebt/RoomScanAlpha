@@ -145,7 +145,8 @@ def update_scan_status(
                        wall_heights_ft = %s,
                        polygon_source = %s,
                        scan_mesh_url = %s,
-                       texture_manifest = %s
+                       texture_manifest = %s,
+                       scope = %s
                    WHERE id = %s""",
                 (
                     status,
@@ -160,6 +161,7 @@ def update_scan_status(
                     room_data.get("polygon_source"),
                     room_data.get("scan_mesh_url"),
                     json.dumps(room_data.get("texture_manifest")),
+                    json.dumps(room_data.get("room_scope")),
                     scan_id,
                 ),
             )
@@ -289,65 +291,86 @@ async def process_scan(request: Request) -> dict:
         annotation = metadata.get("corner_annotation")
         polygon_result = _compute_from_annotation(annotation, room_metrics)
 
-        # Step 7A: Texture projection — project keyframe images onto wall/floor/ceiling surfaces
+        # Step 7A: Texture generation — OpenMVS TextureMesh with seam leveling
         texture_manifest = None
-        if annotation and len(annotation.get("corners_xz", [])) >= 3:
+        USE_OPENMVS = os.environ.get("USE_OPENMVS", "true").lower() == "true"
+
+        if USE_OPENMVS:
             try:
-                from pipeline.texture_projection import (
-                    build_surfaces_from_annotation, load_keyframes,
-                    load_panoramic_keyframes, project_textures, save_textures,
-                )
+                from pipeline.openmvs_texture import texture_scan
 
-                ceiling_ft = room_metrics.get("ceiling_height_ft", 0)
-                ceiling_m = ceiling_ft / M_TO_FT if ceiling_ft else None
-                surfaces = build_surfaces_from_annotation(
-                    corners_xz=annotation["corners_xz"],
-                    corners_y=annotation["corners_y"],
-                    ceiling_height_m=ceiling_m,
-                )
+                tex_output = texture_scan(scan_root, metadata)
 
-                # Build trimesh for mesh-based depth correction (fixes ghosting/seams)
-                tri_mesh = None
-                try:
-                    import trimesh as _trimesh
-                    tri_mesh = _trimesh.Trimesh(
-                        vertices=parsed_mesh.positions,
-                        faces=parsed_mesh.faces,
-                        vertex_normals=parsed_mesh.normals,
-                    )
-                    print(f"[Processor] Built trimesh: {len(tri_mesh.vertices)} vertices, "
-                          f"{len(tri_mesh.faces)} faces")
-                except Exception as e:
-                    print(f"[Processor] Trimesh construction failed, using flat-plane projection: {e}")
+                # Upload all resolution levels to GCS
+                gcs_base = blob_path.rsplit("/", 1)[0]
+                texture_manifest = {}
+                for key, local_path in tex_output.items():
+                    fname = os.path.basename(local_path)
+                    # Prefix non-default levels to avoid filename collisions
+                    if "_standard" in key:
+                        gcs_fname = f"standard_{fname}"
+                    else:
+                        gcs_fname = fname
+                    gcs_path = f"{gcs_base}/{gcs_fname}"
+                    _upload_to_gcs(local_path, gcs_path)
+                    texture_manifest[key] = gcs_fname
 
-                # Load both panoramic and walk-around keyframes for maximum
-                # vertical coverage — panoramic covers horizontal sweep, walk-around
-                # fills floor/ceiling edges from natural user tilting
-                pano_keyframes = load_panoramic_keyframes(scan_root, metadata)
-                walk_keyframes = load_keyframes(scan_root, metadata)
-                keyframes = pano_keyframes + walk_keyframes
-                print(f"[Processor] Loaded {len(pano_keyframes)} panoramic + "
-                      f"{len(walk_keyframes)} walk-around = {len(keyframes)} total keyframes")
-
-                if surfaces and keyframes:
-                    tex_results = project_textures(keyframes, surfaces, mesh=tri_mesh)
-                    tex_dir = os.path.join(scan_root, "textures")
-                    texture_manifest = save_textures(tex_results, tex_dir)
-
-                    # Upload textures to GCS
-                    gcs_base = blob_path.rsplit("/", 1)[0]
-                    for surface_id, filename in texture_manifest.items():
-                        local_path = os.path.join(tex_dir, filename)
-                        gcs_path = f"{gcs_base}/textures/{filename}"
-                        _upload_to_gcs(local_path, gcs_path)
-                    texture_manifest = {
-                        sid: f"textures/{fname}" for sid, fname in texture_manifest.items()
-                    }
-                    print(f"[Processor] Texture projection complete: {len(texture_manifest)} surfaces")
+                print(f"[Processor] OpenMVS texturing complete: {list(texture_manifest.keys())}")
             except Exception as e:
-                print(f"[Processor] Warning: texture projection failed: {e}")
+                print(f"[Processor] Warning: OpenMVS texturing failed: {e}")
                 import traceback
                 traceback.print_exc()
+
+        # Fallback: old per-surface texture projection
+        if not USE_OPENMVS or texture_manifest is None:
+            if annotation and len(annotation.get("corners_xz", [])) >= 3:
+                try:
+                    from pipeline.texture_projection import (
+                        build_surfaces_from_annotation, load_keyframes,
+                        load_panoramic_keyframes, project_textures, save_textures,
+                    )
+
+                    ceiling_ft = room_metrics.get("ceiling_height_ft", 0)
+                    ceiling_m = ceiling_ft / M_TO_FT if ceiling_ft else None
+                    surfaces = build_surfaces_from_annotation(
+                        corners_xz=annotation["corners_xz"],
+                        corners_y=annotation["corners_y"],
+                        ceiling_height_m=ceiling_m,
+                    )
+
+                    tri_mesh = None
+                    try:
+                        import trimesh as _trimesh
+                        tri_mesh = _trimesh.Trimesh(
+                            vertices=parsed_mesh.positions,
+                            faces=parsed_mesh.faces,
+                            vertex_normals=parsed_mesh.normals,
+                        )
+                    except Exception:
+                        pass
+
+                    pano_keyframes = load_panoramic_keyframes(scan_root, metadata)
+                    walk_keyframes = load_keyframes(scan_root, metadata)
+                    keyframes = pano_keyframes + walk_keyframes
+
+                    if surfaces and keyframes:
+                        tex_results = project_textures(keyframes, surfaces, mesh=tri_mesh)
+                        tex_dir = os.path.join(scan_root, "textures")
+                        texture_manifest = save_textures(tex_results, tex_dir)
+
+                        gcs_base = blob_path.rsplit("/", 1)[0]
+                        for surface_id, filename in texture_manifest.items():
+                            local_path = os.path.join(tex_dir, filename)
+                            gcs_path = f"{gcs_base}/textures/{filename}"
+                            _upload_to_gcs(local_path, gcs_path)
+                        texture_manifest = {
+                            sid: f"textures/{fname}" for sid, fname in texture_manifest.items()
+                        }
+                        print(f"[Processor] Fallback texture projection: {len(texture_manifest)} surfaces")
+                except Exception as e:
+                    print(f"[Processor] Warning: fallback texture projection failed: {e}")
+                    import traceback
+                    traceback.print_exc()
 
         # Step 4c: Upload mesh.ply to a known GCS path for direct access (signed URLs)
         mesh_gcs_path = blob_path.rsplit("/", 1)[0] + "/mesh.ply"
@@ -370,6 +393,7 @@ async def process_scan(request: Request) -> dict:
             "polygon_source": polygon_result["polygon_source"],
             "scan_mesh_url": mesh_gcs_path,
             "texture_manifest": texture_manifest,
+            "room_scope": metadata.get("room_scope"),
         }
         rfq_ready = update_scan_status(scan_id, rfq_id, "complete", room_data=room_data)
         send_fcm_notification(scan_id, "complete", rfq_ready=rfq_ready)
@@ -623,14 +647,21 @@ def compute_room_metrics_from_parsed(mesh: ParsedMesh) -> dict:
 
 
 def _compute_ceiling_height(mesh: ParsedMesh) -> float:
-    """Compute ceiling height as the Y-distance between floor and ceiling vertices."""
+    """Compute ceiling height as the Y-distance between floor and ceiling vertices.
+
+    Uses median floor Y and 90th percentile ceiling Y instead of min/max
+    to exclude outlier mesh vertices that extend below/above the actual surfaces.
+    """
+    import numpy as np
     floor_group = mesh.classification_groups.get(CLASSIFICATION_FLOOR)
     ceiling_group = mesh.classification_groups.get(CLASSIFICATION_CEILING)
 
     if floor_group and ceiling_group and len(floor_group.vertex_ids) > 0 and len(ceiling_group.vertex_ids) > 0:
-        floor_min_y = mesh.positions[floor_group.vertex_ids, 1].min()
-        ceiling_max_y = mesh.positions[ceiling_group.vertex_ids, 1].max()
-        return float(ceiling_max_y - floor_min_y)
+        floor_ys = mesh.positions[floor_group.vertex_ids, 1]
+        ceiling_ys = mesh.positions[ceiling_group.vertex_ids, 1]
+        floor_y = float(np.median(floor_ys))
+        ceiling_y = float(np.percentile(ceiling_ys, 90))
+        return ceiling_y - floor_y
     return 0.0
 
 
