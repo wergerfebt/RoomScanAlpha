@@ -323,7 +323,7 @@ final class CloudUploader {
 
             print("[RoomScanAlpha] Poll status: \(status) (attempt \(attempt)/\(maxAttempts))")
 
-            if status == "scan_ready" || status == "failed" {
+            if status == "complete" || status == "scan_ready" || status == "failed" {
                 // detected_components: Miro format { "detected": ["label_key", ...] }
                 let componentsObj = json["detected_components"] as? [String: Any]
                 let components = componentsObj?["detected"] as? [String]

@@ -60,6 +60,8 @@ struct ContentView: View {
                     },
                     onLooksGood: {
                         // Frame selection already ran during handleStopScan — proceed directly
+                        // Resume session for annotation (needs live AR for raycasting + mesh updates)
+                        sessionManager.resumeSession()
                         viewModel.state = .annotatingCorners
                     }
                 )
