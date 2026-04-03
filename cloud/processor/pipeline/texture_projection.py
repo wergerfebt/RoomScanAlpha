@@ -13,6 +13,8 @@ Coordinate convention:
   - Intrinsics in pixels (fx, fy, cx, cy)
 """
 
+from __future__ import annotations
+
 import json
 import math
 import os
@@ -21,6 +23,7 @@ from typing import Optional
 
 import numpy as np
 from PIL import Image, ImageOps
+from scipy.optimize import least_squares
 
 
 # --- Data Structures ---
@@ -54,6 +57,7 @@ class Keyframe:
     image_height: int
     depth_width: int
     depth_height: int
+    source: str = "walkaround"   # "walkaround" or "panoramic"
 
 
 @dataclass
@@ -69,7 +73,8 @@ class TextureResult:
 WALL_PX_PER_METER = 100
 FLOOR_CEIL_PX_PER_METER = 50
 MAX_TEXTURE_DIM = 2048
-MAX_KEYFRAMES_PER_SURFACE = 15
+MAX_KEYFRAMES_WALL = 20
+MAX_KEYFRAMES_FLOOR_CEIL = 40   # floor/ceiling need more frames — oblique views cover narrow strips
 DEPTH_TOLERANCE_M = 0.5         # depth tolerance for floor/ceiling only
 
 
@@ -78,11 +83,33 @@ DEPTH_TOLERANCE_M = 0.5         # depth tolerance for floor/ceiling only
 def project_textures(
     keyframes: list[Keyframe],
     surfaces: list[Surface],
+    mesh: Optional[trimesh.Trimesh] = None,
 ) -> list[TextureResult]:
-    """Project keyframe images onto surfaces with depth-aware multi-keyframe blending."""
+    """Project keyframe images onto surfaces with depth-aware multi-keyframe blending.
+
+    If a trimesh is provided, texel positions are corrected using mesh raycasting
+    to account for depth variation (protruding objects, recessed door frames, etc.),
+    eliminating ghosting and seam artifacts from multi-view projection.
+    """
+    if mesh is not None:
+        print(f"[TextureProjection] Mesh depth correction enabled "
+              f"({len(mesh.vertices)} vertices, {len(mesh.faces)} faces)")
+
+    # Photometric pose refinement: correct per-keyframe drift before projection
+    pose_corrections = None
+    if mesh is not None and len(keyframes) >= 2:
+        try:
+            pose_corrections = _refine_poses_photometric(surfaces, keyframes, mesh)
+            if pose_corrections:
+                print(f"[TextureProjection] Pose corrections computed for "
+                      f"{len(pose_corrections)} keyframes")
+        except Exception as e:
+            print(f"[TextureProjection] Pose refinement failed, using raw poses: {e}")
+
     results = []
     for surface in surfaces:
-        result = _project_surface(surface, keyframes)
+        result = _project_surface(surface, keyframes, mesh=mesh,
+                                  pose_corrections=pose_corrections)
         results.append(result)
         coverage_pct = result.coverage * 100
         print(f"[TextureProjection] {surface.surface_id}: "
@@ -91,7 +118,12 @@ def project_textures(
     return results
 
 
-def _project_surface(surface: Surface, keyframes: list[Keyframe]) -> TextureResult:
+def _project_surface(
+    surface: Surface,
+    keyframes: list[Keyframe],
+    mesh: Optional[trimesh.Trimesh] = None,
+    pose_corrections: Optional[dict[int, tuple[float, float, float]]] = None,
+) -> TextureResult:
     """Project and blend keyframes onto a single surface with depth validation."""
     px_per_m = WALL_PX_PER_METER if surface.surface_type == "wall" else FLOOR_CEIL_PX_PER_METER
     tex_w = min(int(surface.width_m * px_per_m), MAX_TEXTURE_DIM)
@@ -100,7 +132,29 @@ def _project_surface(surface: Surface, keyframes: list[Keyframe]) -> TextureResu
     tex_h = max(tex_h, 4)
 
     scored = _score_keyframes(surface, keyframes)
-    top_keyframes = scored[:MAX_KEYFRAMES_PER_SURFACE]
+
+    # Select keyframes with guaranteed representation from both sources.
+    # Panoramic frames have broad uniform coverage (further away, wider angle);
+    # walk-around frames have close-up detail but narrow coverage.
+    # Without reserving slots, close walk-around frames outscore panoramic ones
+    # and entire wall sections get no coverage.
+    # Floor/ceiling need more keyframes — oblique views cover narrow strips.
+    max_kf = MAX_KEYFRAMES_FLOOR_CEIL if surface.surface_type in ("floor", "ceiling") else MAX_KEYFRAMES_WALL
+    HALF = max_kf // 2
+    pano_scored = [(s, kf) for s, kf in scored if kf.source == "panoramic"]
+    walk_scored = [(s, kf) for s, kf in scored if kf.source != "panoramic"]
+    top_keyframes = pano_scored[:HALF] + walk_scored[:HALF]
+    # Fill remaining slots from whichever source has more candidates
+    remaining = max_kf - len(top_keyframes)
+    if remaining > 0:
+        used = {id(kf) for _, kf in top_keyframes}
+        extras = [(s, kf) for s, kf in scored if id(kf) not in used]
+        top_keyframes.extend(extras[:remaining])
+
+    pano_count = sum(1 for _, kf in top_keyframes if kf.source == "panoramic")
+    walk_count = len(top_keyframes) - pano_count
+    print(f"[TextureProjection] {surface.surface_id}: selected "
+          f"{pano_count} panoramic + {walk_count} walk-around keyframes")
 
     if not top_keyframes:
         return TextureResult(
@@ -127,11 +181,22 @@ def _project_surface(surface: Surface, keyframes: list[Keyframe]) -> TextureResu
         + vv[:, :, np.newaxis] * surface.v_axis[np.newaxis, np.newaxis, :]
     )
 
-    flat_pts = world_pts.reshape(-1, 3)
+    if mesh is not None:
+        try:
+            flat_pts = _build_mesh_depth_map(surface, mesh, tex_w, tex_h)
+        except Exception as e:
+            print(f"[TextureProjection] Mesh raycasting failed for {surface.surface_id}, "
+                  f"falling back to flat plane: {e}")
+            flat_pts = world_pts.reshape(-1, 3)
+    else:
+        flat_pts = world_pts.reshape(-1, 3)
     N = flat_pts.shape[0]
 
-    accum_color = np.zeros((N, 3), dtype=np.float64)
-    accum_weight = np.zeros(N, dtype=np.float64)
+    # Winner-takes-all: for each texel, keep the color from the single
+    # highest-weight keyframe. Avoids ghosting from blending frames with
+    # slightly misaligned camera poses (~1-3cm ARKit drift).
+    best_color = np.zeros((N, 3), dtype=np.float64)
+    best_weight = np.zeros(N, dtype=np.float64)
 
     for score, kf, cam_from_world, K in kf_data:
         pts_h = np.hstack([flat_pts, np.ones((N, 1))])
@@ -147,6 +212,12 @@ def _project_surface(surface: Surface, keyframes: list[Keyframe]) -> TextureResu
         px = K[0, 0] * cam_pts[:, 0] / depth + K[0, 2]
         py = -K[1, 1] * cam_pts[:, 1] / depth + K[1, 2]
 
+        # Apply photometric pose correction if available
+        if pose_corrections and kf.index in pose_corrections:
+            dx, dy, dtheta = pose_corrections[kf.index]
+            px = px + dx + dtheta * (py - kf.cy)
+            py = py + dy - dtheta * (px - kf.cx)
+
         # Bounds check
         in_bounds = (
             in_front
@@ -160,11 +231,6 @@ def _project_surface(surface: Surface, keyframes: list[Keyframe]) -> TextureResu
         valid_idx = np.where(in_bounds)[0]
         valid_px = px[valid_idx]
         valid_py = py[valid_idx]
-        valid_depth = depth[valid_idx]
-
-        # Depth validation disabled: depth maps measure distance to whatever is
-        # in view (furniture, objects), not necessarily the target surface.
-        # Rely on viewing angle + coverage scoring to select good keyframes.
 
         if len(valid_idx) == 0:
             continue
@@ -173,7 +239,7 @@ def _project_surface(surface: Surface, keyframes: list[Keyframe]) -> TextureResu
         colors = _bilinear_sample(kf.image, valid_px, valid_py)
 
         # Radial weight falloff: pixels near image center contribute more,
-        # edges contribute less. This creates smooth blending in overlap regions.
+        # edges contribute less.
         img_cx = kf.image_width / 2.0
         img_cy = kf.image_height / 2.0
         max_dist = math.sqrt(img_cx ** 2 + img_cy ** 2)
@@ -181,16 +247,19 @@ def _project_surface(surface: Surface, keyframes: list[Keyframe]) -> TextureResu
         radial_weight = np.clip(1.0 - (pixel_dist / max_dist) ** 2, 0.1, 1.0)
 
         weight = score * radial_weight  # per-pixel weight
-        accum_color[valid_idx] += colors * weight[:, np.newaxis]
-        accum_weight[valid_idx] += weight
 
-    # Normalize
-    has_data = accum_weight > 0
+        # Only update texels where this frame has a higher weight than the current best
+        better = weight > best_weight[valid_idx]
+        if not np.any(better):
+            continue
+        better_idx = valid_idx[better]
+        best_color[better_idx] = colors[better]
+        best_weight[better_idx] = weight[better]
+
+    # No normalization needed — best_color has the winning frame's raw color
+    has_data = best_weight > 0
     result_flat = np.zeros((N, 3), dtype=np.uint8)
-    result_flat[has_data] = np.clip(
-        accum_color[has_data] / accum_weight[has_data, np.newaxis],
-        0, 255
-    ).astype(np.uint8)
+    result_flat[has_data] = np.clip(best_color[has_data], 0, 255).astype(np.uint8)
 
     coverage = has_data.sum() / N if N > 0 else 0.0
 
@@ -199,6 +268,379 @@ def _project_surface(surface: Surface, keyframes: list[Keyframe]) -> TextureResu
         image=result_flat.reshape(tex_h, tex_w, 3),
         coverage=coverage,
     )
+
+
+# --- Mesh Depth Correction ---
+
+def _build_mesh_depth_map(
+    surface: Surface,
+    mesh: "trimesh.Trimesh",
+    tex_w: int,
+    tex_h: int,
+) -> np.ndarray:
+    """Raycast from each texel on the flat wall plane into the mesh to find the true 3D position.
+
+    For each texel, casts rays along the surface normal (both directions) to find
+    the nearest mesh intersection. If a hit is found within MESH_TOLERANCE of the
+    flat plane, the corrected 3D position is used instead. This fixes ghosting caused
+    by depth variation (protruding objects, recessed door frames, etc.).
+
+    Returns: (N, 3) array of mesh-corrected world positions, where N = tex_w * tex_h.
+    """
+    MESH_TOLERANCE = 0.5  # meters from wall plane
+
+    # Build UV grid of flat wall positions (same grid as _project_surface)
+    us = np.linspace(0, surface.width_m, tex_w, endpoint=False) + surface.width_m / (2 * tex_w)
+    vs = np.linspace(0, surface.height_m, tex_h, endpoint=False) + surface.height_m / (2 * tex_h)
+    uu, vv = np.meshgrid(us, vs)
+
+    flat_pts = (
+        surface.origin[np.newaxis, np.newaxis, :]
+        + uu[:, :, np.newaxis] * surface.u_axis[np.newaxis, np.newaxis, :]
+        + vv[:, :, np.newaxis] * surface.v_axis[np.newaxis, np.newaxis, :]
+    ).reshape(-1, 3)
+
+    N = flat_pts.shape[0]
+    corrected = flat_pts.copy()
+
+    normal = surface.normal.astype(np.float64)
+    normals_fwd = np.tile(normal, (N, 1))
+
+    # Raycast forward (along surface normal, into the room)
+    hit_locs_fwd, ray_idx_fwd, _ = mesh.ray.intersects_location(
+        ray_origins=flat_pts, ray_directions=normals_fwd, multiple_hits=False,
+    )
+
+    # Raycast backward (opposite direction, behind the wall plane)
+    hit_locs_bwd, ray_idx_bwd, _ = mesh.ray.intersects_location(
+        ray_origins=flat_pts, ray_directions=-normals_fwd, multiple_hits=False,
+    )
+
+    # Apply forward hits within tolerance
+    if len(hit_locs_fwd) > 0:
+        dists_fwd = np.linalg.norm(hit_locs_fwd - flat_pts[ray_idx_fwd], axis=1)
+        valid_fwd = dists_fwd < MESH_TOLERANCE
+        if np.any(valid_fwd):
+            corrected[ray_idx_fwd[valid_fwd]] = hit_locs_fwd[valid_fwd]
+
+    # Apply backward hits — only if closer than the forward hit (or no forward hit)
+    if len(hit_locs_bwd) > 0:
+        dists_bwd = np.linalg.norm(hit_locs_bwd - flat_pts[ray_idx_bwd], axis=1)
+        valid_bwd = dists_bwd < MESH_TOLERANCE
+        if np.any(valid_bwd):
+            bwd_indices = ray_idx_bwd[valid_bwd]
+            bwd_dists = dists_bwd[valid_bwd]
+            bwd_pts = hit_locs_bwd[valid_bwd]
+
+            # Check if forward already set a closer hit
+            current_dists = np.linalg.norm(corrected[bwd_indices] - flat_pts[bwd_indices], axis=1)
+            closer = bwd_dists < current_dists
+            if np.any(closer):
+                corrected[bwd_indices[closer]] = bwd_pts[closer]
+
+    hit_count = np.sum(np.any(corrected != flat_pts, axis=1))
+    print(f"[TextureProjection] Mesh depth correction: {hit_count}/{N} texels corrected "
+          f"({hit_count * 100 / N:.0f}%)")
+
+    return corrected
+
+
+# --- Photometric Pose Refinement ---
+
+REFINE_PX_PER_METER = 10         # downsampled grid for overlap sampling
+MIN_OVERLAP_PAIRS = 50           # minimum overlap pairs to include a keyframe pair
+GRADIENT_THRESHOLD = 5.0         # minimum gradient magnitude to keep a sample point
+MAX_CORRECTION_PX = 30.0         # bound on dx, dy
+MAX_CORRECTION_THETA = 0.02      # bound on dθ (radians)
+
+
+def _refine_poses_photometric(
+    surfaces: list[Surface],
+    keyframes: list[Keyframe],
+    mesh: "trimesh.Trimesh",
+) -> dict[int, tuple[float, float, float]]:
+    """Compute per-keyframe (dx, dy, dθ) corrections via photometric optimization.
+
+    Samples points on surfaces visible in 2+ keyframes, then optimizes
+    corrections to minimize color disagreement at overlap points.
+    Uses the LiDAR mesh as ground truth geometry (Zhou & Koltun, SIGGRAPH 2014).
+
+    Returns: dict mapping keyframe index → (dx, dy, dtheta).
+    """
+    import trimesh as _trimesh
+
+    if len(keyframes) < 2:
+        return {}
+
+    # Precompute grayscale images + per-keyframe transforms
+    kf_gray = []
+    kf_transforms = []  # (cam_from_world, K, kf)
+    for kf in keyframes:
+        gray = np.mean(kf.image.astype(np.float64), axis=2)
+        kf_gray.append(gray)
+        cam_from_world = np.linalg.inv(kf.camera_transform)
+        K = np.array([[kf.fx, 0, kf.cx], [0, kf.fy, kf.cy], [0, 0, 1]], dtype=np.float64)
+        kf_transforms.append((cam_from_world, K, kf))
+
+    # Collect sample points from all surfaces
+    all_world_pts = []
+    for surface in surfaces:
+        px_per_m = REFINE_PX_PER_METER
+        sw = max(int(surface.width_m * px_per_m), 2)
+        sh = max(int(surface.height_m * px_per_m), 2)
+
+        us = np.linspace(0, surface.width_m, sw, endpoint=False) + surface.width_m / (2 * sw)
+        vs = np.linspace(0, surface.height_m, sh, endpoint=False) + surface.height_m / (2 * sh)
+        uu, vv = np.meshgrid(us, vs)
+
+        pts = (
+            surface.origin[np.newaxis, np.newaxis, :]
+            + uu[:, :, np.newaxis] * surface.u_axis[np.newaxis, np.newaxis, :]
+            + vv[:, :, np.newaxis] * surface.v_axis[np.newaxis, np.newaxis, :]
+        ).reshape(-1, 3)
+
+        # Mesh-correct sample points (same logic as _build_mesh_depth_map but simplified)
+        normal = surface.normal.astype(np.float64)
+        normals_fwd = np.tile(normal, (len(pts), 1))
+        try:
+            hit_locs, ray_idx, _ = mesh.ray.intersects_location(
+                ray_origins=pts, ray_directions=normals_fwd, multiple_hits=False,
+            )
+            if len(hit_locs) > 0:
+                dists = np.linalg.norm(hit_locs - pts[ray_idx], axis=1)
+                valid = dists < 0.5
+                if np.any(valid):
+                    pts[ray_idx[valid]] = hit_locs[valid]
+        except Exception:
+            pass
+
+        all_world_pts.append(pts)
+
+    world_pts = np.vstack(all_world_pts)
+    N_pts = len(world_pts)
+
+    if N_pts == 0:
+        return {}
+
+    # Project all sample points into all keyframes, record visibility
+    # visibility[k] = (valid_mask, px_array, py_array) for keyframe k
+    pts_h = np.hstack([world_pts, np.ones((N_pts, 1))])
+    visibility = []
+
+    for cam_from_world, K, kf in kf_transforms:
+        cam_pts = (cam_from_world @ pts_h.T).T[:, :3]
+        depth = -cam_pts[:, 2]
+        in_front = depth > 0.01
+
+        px = K[0, 0] * cam_pts[:, 0] / depth + K[0, 2]
+        py = -K[1, 1] * cam_pts[:, 1] / depth + K[1, 2]
+
+        # Margin of MAX_CORRECTION_PX to allow for correction shifts
+        margin = MAX_CORRECTION_PX + 1
+        in_bounds = (
+            in_front
+            & (px >= margin) & (px < kf.image_width - margin)
+            & (py >= margin) & (py < kf.image_height - margin)
+        )
+
+        visibility.append((in_bounds, px, py))
+
+    # Build overlap pairs: for each sample point, find keyframe pairs that both see it
+    # Structure: list of (point_idx, kf_idx_i, px_i, py_i, kf_idx_j, px_j, py_j)
+    overlap_point_idxs = []
+    overlap_kf_i = []
+    overlap_kf_j = []
+    overlap_px_i = []
+    overlap_py_i = []
+    overlap_px_j = []
+    overlap_py_j = []
+
+    # Build per-point visibility list efficiently
+    vis_masks = np.array([v[0] for v in visibility])  # (K, N_pts) bool
+    n_visible = vis_masks.sum(axis=0)  # per-point count
+    multi_vis = np.where(n_visible >= 2)[0]
+
+    for pt_idx in multi_vis:
+        kf_indices = np.where(vis_masks[:, pt_idx])[0]
+        for ii in range(len(kf_indices)):
+            for jj in range(ii + 1, len(kf_indices)):
+                ki = kf_indices[ii]
+                kj = kf_indices[jj]
+                overlap_point_idxs.append(pt_idx)
+                overlap_kf_i.append(ki)
+                overlap_kf_j.append(kj)
+                overlap_px_i.append(visibility[ki][1][pt_idx])
+                overlap_py_i.append(visibility[ki][2][pt_idx])
+                overlap_px_j.append(visibility[kj][1][pt_idx])
+                overlap_py_j.append(visibility[kj][2][pt_idx])
+
+    if len(overlap_point_idxs) == 0:
+        print("[PoseRefinement] No overlap pairs found, skipping refinement")
+        return {}
+
+    overlap_px_i = np.array(overlap_px_i)
+    overlap_py_i = np.array(overlap_py_i)
+    overlap_px_j = np.array(overlap_px_j)
+    overlap_py_j = np.array(overlap_py_j)
+    overlap_kf_i = np.array(overlap_kf_i)
+    overlap_kf_j = np.array(overlap_kf_j)
+
+    # Filter out textureless regions using gradient magnitude
+    keep_mask = np.ones(len(overlap_px_i), dtype=bool)
+    for idx in range(len(overlap_px_i)):
+        ki = overlap_kf_i[idx]
+        gray = kf_gray[ki]
+        ix = int(np.clip(overlap_px_i[idx], 1, kf_transforms[ki][2].image_width - 2))
+        iy = int(np.clip(overlap_py_i[idx], 1, kf_transforms[ki][2].image_height - 2))
+        gx = float(gray[iy, min(ix + 1, gray.shape[1] - 1)] - gray[iy, max(ix - 1, 0)])
+        gy = float(gray[min(iy + 1, gray.shape[0] - 1), ix] - gray[max(iy - 1, 0), ix])
+        if math.sqrt(gx * gx + gy * gy) < GRADIENT_THRESHOLD:
+            keep_mask[idx] = False
+
+    overlap_px_i = overlap_px_i[keep_mask]
+    overlap_py_i = overlap_py_i[keep_mask]
+    overlap_px_j = overlap_px_j[keep_mask]
+    overlap_py_j = overlap_py_j[keep_mask]
+    overlap_kf_i = overlap_kf_i[keep_mask]
+    overlap_kf_j = overlap_kf_j[keep_mask]
+
+    n_pairs = len(overlap_px_i)
+    if n_pairs < MIN_OVERLAP_PAIRS:
+        print(f"[PoseRefinement] Only {n_pairs} textured overlap pairs, skipping refinement")
+        return {}
+
+    print(f"[PoseRefinement] {N_pts} sample points, {len(multi_vis)} multi-view, "
+          f"{n_pairs} textured overlap pairs across {len(keyframes)} keyframes")
+
+    # Find reference keyframe (pin at zero correction) — use highest average visibility
+    vis_counts = vis_masks.sum(axis=1)
+    ref_kf_idx = int(np.argmax(vis_counts))
+
+    # Keyframe index mapping for optimization variables
+    # All keyframes get 3 params (dx, dy, dθ), but ref keyframe is pinned at 0
+    n_kf = len(keyframes)
+
+    def _sample_gray(kf_idx: int, px: np.ndarray, py: np.ndarray) -> np.ndarray:
+        """Bilinear sample grayscale image at sub-pixel coords."""
+        gray = kf_gray[kf_idx]
+        h, w = gray.shape
+        x0 = np.floor(px).astype(int)
+        y0 = np.floor(py).astype(int)
+        x1 = np.minimum(x0 + 1, w - 1)
+        y1 = np.minimum(y0 + 1, h - 1)
+        x0 = np.clip(x0, 0, w - 1)
+        y0 = np.clip(y0, 0, h - 1)
+        xf = px - x0
+        yf = py - y0
+        return (gray[y0, x0] * (1 - xf) * (1 - yf)
+                + gray[y0, x1] * xf * (1 - yf)
+                + gray[y1, x0] * (1 - xf) * yf
+                + gray[y1, x1] * xf * yf)
+
+    def _apply_correction(px, py, cx, cy, dx, dy, dtheta):
+        """Apply 2D affine pose correction to pixel coordinates."""
+        px_c = px + dx + dtheta * (py - cy)
+        py_c = py + dy - dtheta * (px - cx)
+        return px_c, py_c
+
+    # Precompute cx, cy arrays for vectorized access
+    cx_arr = np.array([kf_transforms[k][2].cx for k in range(n_kf)])
+    cy_arr = np.array([kf_transforms[k][2].cy for k in range(n_kf)])
+
+    # Build index mapping: exclude ref keyframe from optimization variables
+    # opt_indices[k] = index into params array, or -1 for ref (pinned at 0)
+    opt_indices = []
+    opt_count = 0
+    for k in range(n_kf):
+        if k == ref_kf_idx:
+            opt_indices.append(-1)
+        else:
+            opt_indices.append(opt_count)
+            opt_count += 1
+    opt_indices = np.array(opt_indices)
+
+    def _get_corrections(params):
+        """Expand optimization params to full n_kf×3 corrections array."""
+        full = np.zeros((n_kf, 3), dtype=np.float64)
+        for k in range(n_kf):
+            if opt_indices[k] >= 0:
+                full[k] = params[opt_indices[k] * 3: opt_indices[k] * 3 + 3]
+        return full
+
+    def residual_fn(params):
+        """Compute photometric residuals for all overlap pairs."""
+        corrections = _get_corrections(params)
+
+        # Vectorized: apply corrections to all pairs at once
+        dx_i = corrections[overlap_kf_i, 0]
+        dy_i = corrections[overlap_kf_i, 1]
+        dt_i = corrections[overlap_kf_i, 2]
+        dx_j = corrections[overlap_kf_j, 0]
+        dy_j = corrections[overlap_kf_j, 1]
+        dt_j = corrections[overlap_kf_j, 2]
+
+        cx_i = cx_arr[overlap_kf_i]
+        cy_i = cy_arr[overlap_kf_i]
+        cx_j = cx_arr[overlap_kf_j]
+        cy_j = cy_arr[overlap_kf_j]
+
+        px_i_c = overlap_px_i + dx_i + dt_i * (overlap_py_i - cy_i)
+        py_i_c = overlap_py_i + dy_i - dt_i * (overlap_px_i - cx_i)
+        px_j_c = overlap_px_j + dx_j + dt_j * (overlap_py_j - cy_j)
+        py_j_c = overlap_py_j + dy_j - dt_j * (overlap_px_j - cx_j)
+
+        # Sample each keyframe's grayscale at corrected coordinates
+        val_i = np.empty(n_pairs, dtype=np.float64)
+        val_j = np.empty(n_pairs, dtype=np.float64)
+
+        for k in range(n_kf):
+            mask_i = overlap_kf_i == k
+            if np.any(mask_i):
+                val_i[mask_i] = _sample_gray(k, px_i_c[mask_i], py_i_c[mask_i])
+            mask_j = overlap_kf_j == k
+            if np.any(mask_j):
+                val_j[mask_j] = _sample_gray(k, px_j_c[mask_j], py_j_c[mask_j])
+
+        return val_i - val_j
+
+    # Set up bounds for optimized keyframes only (exclude ref)
+    n_opt_params = opt_count * 3
+    lower = np.empty(n_opt_params)
+    upper = np.empty(n_opt_params)
+    for i in range(opt_count):
+        lower[i * 3] = -MAX_CORRECTION_PX
+        lower[i * 3 + 1] = -MAX_CORRECTION_PX
+        lower[i * 3 + 2] = -MAX_CORRECTION_THETA
+        upper[i * 3] = MAX_CORRECTION_PX
+        upper[i * 3 + 1] = MAX_CORRECTION_PX
+        upper[i * 3 + 2] = MAX_CORRECTION_THETA
+
+    x0 = np.zeros(n_opt_params)
+
+    result = least_squares(
+        residual_fn, x0,
+        method='trf',
+        bounds=(lower, upper),
+        diff_step=0.5,  # finite-difference step in pixels
+        max_nfev=100,
+        verbose=0,
+    )
+
+    corrections = _get_corrections(result.x)
+
+    # Build output dict mapping keyframe.index → (dx, dy, dθ)
+    pose_corrections: dict[int, tuple[float, float, float]] = {}
+    for k, kf in enumerate(keyframes):
+        dx, dy, dtheta = corrections[k]
+        if abs(dx) > 0.01 or abs(dy) > 0.01 or abs(dtheta) > 0.0001:
+            pose_corrections[kf.index] = (float(dx), float(dy), float(dtheta))
+
+    print(f"[PoseRefinement] Optimization: cost {result.cost:.1f}, "
+          f"{result.nfev} evaluations, ref=keyframe {keyframes[ref_kf_idx].index}")
+    for kf_idx, (dx, dy, dt) in sorted(pose_corrections.items()):
+        print(f"[PoseRefinement]   keyframe {kf_idx}: dx={dx:.1f}px, dy={dy:.1f}px, dθ={dt:.4f}rad")
+
+    return pose_corrections
 
 
 # --- Keyframe Scoring ---
@@ -551,6 +993,7 @@ def load_panoramic_keyframes(scan_root: str, metadata: dict) -> list[Keyframe]:
             image_height=img_h,
             depth_width=depth_w,
             depth_height=depth_h,
+            source="panoramic",
         ))
 
     print(f"[TextureProjection] Loaded {len(keyframes)} panoramic keyframes "

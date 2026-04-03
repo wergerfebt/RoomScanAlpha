@@ -273,7 +273,8 @@ async def process_scan(request: Request) -> dict:
 
         # Step 4: Parse PLY and compute room dimensions (meters → imperial at output)
         try:
-            room_metrics = compute_room_metrics(os.path.join(scan_root, "mesh.ply"))
+            parsed_mesh = parse_and_classify(os.path.join(scan_root, "mesh.ply"))
+            room_metrics = compute_room_metrics_from_parsed(parsed_mesh)
             print(f"[Processor] Room metrics: {room_metrics}")
         except Exception as e:
             update_scan_status(scan_id, rfq_id, "failed", f"PLY parse failed: {str(e)}")
@@ -305,16 +306,31 @@ async def process_scan(request: Request) -> dict:
                     ceiling_height_m=ceiling_m,
                 )
 
-                # Prefer panoramic sweep frames (co-located, aligned to corner 0)
-                keyframes = load_panoramic_keyframes(scan_root, metadata)
-                if not keyframes:
-                    keyframes = load_keyframes(scan_root, metadata)
-                    print("[Processor] Using walk-around keyframes (no panoramic frames)")
-                else:
-                    print(f"[Processor] Using {len(keyframes)} panoramic sweep frames")
+                # Build trimesh for mesh-based depth correction (fixes ghosting/seams)
+                tri_mesh = None
+                try:
+                    import trimesh as _trimesh
+                    tri_mesh = _trimesh.Trimesh(
+                        vertices=parsed_mesh.positions,
+                        faces=parsed_mesh.faces,
+                        vertex_normals=parsed_mesh.normals,
+                    )
+                    print(f"[Processor] Built trimesh: {len(tri_mesh.vertices)} vertices, "
+                          f"{len(tri_mesh.faces)} faces")
+                except Exception as e:
+                    print(f"[Processor] Trimesh construction failed, using flat-plane projection: {e}")
+
+                # Load both panoramic and walk-around keyframes for maximum
+                # vertical coverage — panoramic covers horizontal sweep, walk-around
+                # fills floor/ceiling edges from natural user tilting
+                pano_keyframes = load_panoramic_keyframes(scan_root, metadata)
+                walk_keyframes = load_keyframes(scan_root, metadata)
+                keyframes = pano_keyframes + walk_keyframes
+                print(f"[Processor] Loaded {len(pano_keyframes)} panoramic + "
+                      f"{len(walk_keyframes)} walk-around = {len(keyframes)} total keyframes")
 
                 if surfaces and keyframes:
-                    tex_results = project_textures(keyframes, surfaces)
+                    tex_results = project_textures(keyframes, surfaces, mesh=tri_mesh)
                     tex_dir = os.path.join(scan_root, "textures")
                     texture_manifest = save_textures(tex_results, tex_dir)
 
@@ -519,10 +535,16 @@ def _validate_depth_files(scan_root: str) -> None:
 # --- Room Metrics Computation ---
 
 def compute_room_metrics(ply_path: str) -> dict:
-    """Parse a binary PLY mesh and compute real room dimensions from classified geometry.
+    """Parse a binary PLY mesh and compute real room dimensions from classified geometry."""
+    try:
+        mesh = parse_and_classify(ply_path)
+    except ValueError:
+        return _empty_metrics()
+    return compute_room_metrics_from_parsed(mesh)
 
-    Uses Stage 1 (parse_and_classify) for PLY parsing and classification grouping,
-    then computes surface areas, ceiling height, and perimeter from the classified mesh.
+
+def compute_room_metrics_from_parsed(mesh: ParsedMesh) -> dict:
+    """Compute real room dimensions from an already-parsed classified mesh.
 
     All vertex positions are in meters (ARKit Y-up, right-handed coordinate system).
     Output dimensions are converted to imperial (sq ft / ft) at the return boundary.
@@ -531,11 +553,6 @@ def compute_room_metrics(ply_path: str) -> dict:
         Dict with keys: floor_area_sqft, wall_area_sqft, ceiling_height_ft,
         perimeter_linear_ft, detected_components, scan_dimensions.
     """
-    try:
-        mesh = parse_and_classify(ply_path)
-    except ValueError:
-        return _empty_metrics()
-
     # Compute surface areas by classification (in meters²)
     floor_area_m2 = _sum_triangle_area(mesh, CLASSIFICATION_FLOOR)
     wall_area_m2 = _sum_triangle_area(mesh, CLASSIFICATION_WALL)
