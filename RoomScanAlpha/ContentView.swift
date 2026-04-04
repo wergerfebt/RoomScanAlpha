@@ -163,29 +163,13 @@ struct ContentView: View {
 
     private func handleStopScan() {
         sessionManager.isCapturing = false
-        // Snapshot mesh but do NOT pause — session stays running to preserve world tracking.
-        // Pausing + resuming causes ARKit to re-initialize, introducing coordinate drift.
+        // Snapshot mesh but do NOT pause — session stays running during annotation
         sessionManager.snapshotMeshAnchors()
+        // Go straight to annotation (matching original working flow)
+        viewModel.state = .annotatingCorners
 
-        // Transition to coverage review
-        viewModel.isAnalyzingCoverage = true
-        viewModel.state = .reviewingCoverage
-
-        // Run frame selection first (reduces 250→180), then coverage analysis on the selected set.
-        // This frees ~70 frames of memory and makes coverage analysis faster.
-        sessionManager.frameCaptureManager.selectBestFrames { [self] in
-            print("[RoomScanAlpha] Frame selection complete — \(sessionManager.frameCaptureManager.keyframeCount) frames")
-
-            MeshCoverageAnalyzer.analyze(
-                meshAnchors: sessionManager.lastMeshAnchors,
-                frames: sessionManager.frameCaptureManager.capturedFrames
-            ) { result in
-                viewModel.uncoveredFaces = result.uncoveredFaces
-                viewModel.coverageRatio = result.coverageRatio
-                viewModel.isAnalyzingCoverage = false
-                print("[RoomScanAlpha] Coverage: \(Int(result.coverageRatio * 100))% (\(result.uncoveredCount) uncovered of \(result.totalFaces) faces)")
-            }
-        }
+        // Kick off frame selection in background while user annotates
+        sessionManager.frameCaptureManager.selectBestFrames()
     }
 
     private func handleRedoScan() {
