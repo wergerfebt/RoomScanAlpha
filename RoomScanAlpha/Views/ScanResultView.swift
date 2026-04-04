@@ -21,7 +21,7 @@ struct ScanResultView: View {
                 Spacer().frame(height: 20)
 
                 if let result = viewModel.scanResult {
-                    if result.status == "scan_ready" {
+                    if result.status == "complete" || result.status == "scan_ready" {
                         readyView(result: result)
                     } else {
                         failedView(result: result)
