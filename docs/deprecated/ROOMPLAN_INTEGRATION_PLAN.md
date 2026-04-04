@@ -1,3 +1,5 @@
+> **DEPRECATED:** Explored Apple RoomPlan as an alternative to RANSAC for Stage 3 room geometry. Abandoned — ARKit's mesh classification + user corner annotation proved sufficient. Not implemented.
+
 # RoomPlan Integration Plan
 
 ## Context

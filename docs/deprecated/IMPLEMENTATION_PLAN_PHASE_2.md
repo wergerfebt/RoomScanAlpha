@@ -1,3 +1,5 @@
+> **DEPRECATED:** Phase 2 plan for DNN training data + bird's-eye-view corner annotation. Not started. RoomFormer models are baked into the processor container but unused. See `cloud/DNN_COMPONENT_TAXONOMY.md` for the detection class spec.
+
 # Implementation Plan — Phase 2: Training Data Capture + BEV Corner Annotation
 
 ## Overview

@@ -1,3 +1,5 @@
+> **DEPRECATED:** Original system architecture plan from project inception. Superseded by actual implementation. See `CLAUDE.md` for current architecture, data flow, and conventions.
+
 # RoomScanAlpha
 
 iOS room scanning app using LiDAR. Captures room geometry and camera keyframes on-device, uploads to Google Cloud for CV processing (ORB/homography stitching, Vertex AI object recognition), and displays structured room data (dimensions, detected components, appliances).

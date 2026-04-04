@@ -1,3 +1,5 @@
+> **DEPRECATED:** Panoramic sweep was removed and replaced by denser walk-around capture (8° rotation, 0.3s interval). The code still exists (`PanoramaSweepView.swift`) but is never entered in the scan flow.
+
 ## Panoramic Sweep — Implementation Status (2026-03-30)
 
 ### What Was Built

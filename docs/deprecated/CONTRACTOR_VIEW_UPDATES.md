@@ -1,3 +1,5 @@
+> **DEPRECATED:** Spec for adding bid submission to the contractor viewer. Implemented differently — the deployed `contractor_view.html` has OBJ mesh loading, HD toggle, and Firebase Auth bid submission. See the actual HTML file for current implementation.
+
 # Contractor View Updates — Bid Submission + Auth
 
 Spec for updating `cloud/api/web/contractor_view.html` and `cloud/api/main.py` to support contractor authentication and bid submission directly from the contractor view page.

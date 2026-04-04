@@ -1,3 +1,5 @@
+> **DEPRECATED:** Parallel agent prompt for a platform expansion sprint. The multi-agent branch strategy and router refactoring were never fully executed. See `PLATFORM_ARCHITECTURE.md` for the current marketplace plan and `CLAUDE.md` for system architecture.
+
 # Quoterra Platform Build — Parallel Agent Prompt
 
 ## Project Overview

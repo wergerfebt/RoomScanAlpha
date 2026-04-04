@@ -1,3 +1,5 @@
+> **DEPRECATED:** MVP plan for the 1-month Quoterra pilot. Most features were implemented but the app has since evolved significantly (auth, project overview, coverage review, OpenMVS integration). See `CLAUDE.md` for current state.
+
 # Implementation Plan — MVP Alpha (Quoterra Chicago Test)
 
 ## Overview

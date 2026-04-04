@@ -1,3 +1,5 @@
+> **DEPRECATED:** Original plan for a glTF-based web viewer. Implemented differently — uses Three.js `OBJLoader` with OpenMVS texture atlases, interior camera controls, and HD toggle. See `cloud/api/web/contractor_view.html`.
+
 # Web Viewer Plan — Interactive 3D Room Tour
 
 > **Prerequisite**: `CLOUD_PIPELINE_PLAN.md` (Stages 1-4b + 6) and `VISUALIZATION_PLAN.md` (Stages 5, 7, 8) must produce glTF models, floor plan SVGs, and annotation JSON before this viewer has content to display.

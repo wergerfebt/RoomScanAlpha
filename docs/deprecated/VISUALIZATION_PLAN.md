@@ -1,3 +1,5 @@
+> **DEPRECATED:** Plan for floor plans, measurement annotations, and glTF export. Implemented differently — the contractor viewer uses Three.js with OBJ meshes and CSS2D measurement labels. See `cloud/api/web/contractor_view.html`.
+
 # Visualization Plan — Floor Plans & Measurement Annotations
 
 > **Prerequisite**: `CLOUD_PIPELINE_PLAN.md` Stages 1-4b + 6 must be complete (real measurements + detected components in DB). This plan covers Layer 3 visual output — textured geometry, 2D floor plans, and 3D measurement annotations.

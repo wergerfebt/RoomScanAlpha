@@ -1,3 +1,5 @@
+> **DEPRECATED:** Original pipeline design doc from early development. The actual pipeline (stages 1-3 + OpenMVS texturing) is implemented in `cloud/processor/pipeline/` and documented in `CLAUDE.md`.
+
 # Cloud Pipeline Plan — Scan Processing & Measurement Extraction
 
 ## MVP Scope & Build Order
