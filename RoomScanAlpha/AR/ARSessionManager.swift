@@ -11,6 +11,9 @@ final class ARSessionManager: NSObject, ARSessionDelegate {
     private(set) var lastMeshAnchors: [ARMeshAnchor] = []
     private var isPaused = true
 
+    /// Stored configuration for resuming without resetting the world origin.
+    private var currentConfig: ARWorldTrackingConfiguration?
+
     /// When false, the AR session runs (for preview) but frames are not captured.
     var isCapturing = false
 
@@ -38,6 +41,7 @@ final class ARSessionManager: NSObject, ARSessionDelegate {
         config.sceneReconstruction = .meshWithClassification
         config.frameSemantics.insert(.sceneDepth)
         config.environmentTexturing = .automatic
+        currentConfig = config
         isPaused = false
         session.run(config)
         print("[RoomScanAlpha] AR session started with LiDAR mesh reconstruction")
@@ -65,12 +69,14 @@ final class ARSessionManager: NSObject, ARSessionDelegate {
         print("[RoomScanAlpha] AR session paused — \(frameCaptureManager.keyframeCount) keyframes, \(lastMeshAnchors.count) mesh anchors")
     }
 
-    /// Resume the AR session without resetting captured frames. Used after coverage review.
+    /// Resume the AR session without resetting captured frames or world origin.
+    /// Reuses the stored configuration to preserve the coordinate system.
     func resumeSession() {
-        let config = ARWorldTrackingConfiguration()
-        config.sceneReconstruction = .meshWithClassification
-        config.frameSemantics.insert(.sceneDepth)
-        config.environmentTexturing = .automatic
+        guard let config = currentConfig else {
+            print("[RoomScanAlpha] Warning: no stored config, starting fresh session")
+            startSession()
+            return
+        }
         isPaused = false
         session.run(config)
         print("[RoomScanAlpha] AR session resumed — \(frameCaptureManager.keyframeCount) keyframes preserved")

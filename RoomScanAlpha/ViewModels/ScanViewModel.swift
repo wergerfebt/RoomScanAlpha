@@ -63,6 +63,8 @@ final class ScanViewModel {
     var uncoveredFaces: [UUID: Set<Int>] = [:]
     var coverageRatio: Float = 0.0
     var isAnalyzingCoverage: Bool = false
+    /// Set to true when returning from coverage review to rescan. Cleared on new scan.
+    var isResumingFromCoverage: Bool = false
 
     // MARK: - UI Flags
 
@@ -98,6 +100,7 @@ final class ScanViewModel {
         panoramaStartTransform = nil
         panoramaFrameCount = 0
         scanStartTime = nil
+        isResumingFromCoverage = false
         state = .scanReady
     }
 

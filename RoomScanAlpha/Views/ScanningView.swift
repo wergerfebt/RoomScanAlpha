@@ -84,11 +84,14 @@ struct ScanningView: View {
                 viewModel.showCapReachedAlert = true
             }
             // Start or resume AR session — capture is gated by isCapturing flag.
-            // Use resumeSession() if frames already exist (returning from coverage review)
-            // to avoid wiping captured frames.
-            if sessionManager.frameCaptureManager.keyframeCount > 0 {
+            // resumeSession() preserves frames + world coordinate system (for returning from coverage review).
+            // startSession() resets everything (for a fresh new scan).
+            if viewModel.isResumingFromCoverage {
+                // Returning from coverage review — frames already selected, resume without reset
+                viewModel.isResumingFromCoverage = false
                 sessionManager.resumeSession()
             } else {
+                // Fresh scan (first scan or new room) — start clean
                 sessionManager.startSession()
             }
         }

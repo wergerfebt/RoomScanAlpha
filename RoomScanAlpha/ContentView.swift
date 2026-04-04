@@ -56,12 +56,12 @@ struct ContentView: View {
                         viewModel.uncoveredFaces = [:]
                         viewModel.coverageRatio = 0
                         viewModel.isAnalyzingCoverage = false
+                        viewModel.isResumingFromCoverage = true
                         viewModel.state = .scanReady
                     },
                     onLooksGood: {
                         // Frame selection already ran during handleStopScan — proceed directly
-                        // Resume session for annotation (needs live AR for raycasting + mesh updates)
-                        sessionManager.resumeSession()
+                        // Session is still running (never paused), so annotation has live AR
                         viewModel.state = .annotatingCorners
                     }
                 )
@@ -163,9 +163,9 @@ struct ContentView: View {
 
     private func handleStopScan() {
         sessionManager.isCapturing = false
-        // Snapshot mesh and pause session — coverage review is non-AR
+        // Snapshot mesh but do NOT pause — session stays running to preserve world tracking.
+        // Pausing + resuming causes ARKit to re-initialize, introducing coordinate drift.
         sessionManager.snapshotMeshAnchors()
-        sessionManager.pauseSession()
 
         // Transition to coverage review
         viewModel.isAnalyzingCoverage = true
