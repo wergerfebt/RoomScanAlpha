@@ -1,0 +1,1605 @@
+{
+  "camera_intrinsics": {
+    "cx": 958.9948,
+    "cy": 725.38055,
+    "fx": 1428.3756,
+    "fy": 1428.3756
+  },
+  "corner_annotation": {
+    "annotation_method": "ar_crosshair_snap",
+    "corners_xz": [
+      [
+        1.8689312,
+        -1.1887679
+      ],
+      [
+        1.9350071,
+        -0.66520935
+      ],
+      [
+        2.0435762,
+        -0.6729997
+      ],
+      [
+        2.5699942,
+        2.9428613
+      ],
+      [
+        -1.0744928,
+        3.4585428
+      ],
+      [
+        -1.7414287,
+        -0.6152553
+      ]
+    ],
+    "corners_y": [
+      1.6567544,
+      1.7107171,
+      1.6543949,
+      1.68211,
+      1.6818801,
+      1.6501821
+    ],
+    "timestamp": "2026-03-30T18:28:44Z"
+  },
+  "depth_format": {
+    "byte_order": "little_endian",
+    "height": 192,
+    "pixel_format": "kCVPixelFormatType_DepthFloat32",
+    "width": 256
+  },
+  "device": "iPhone",
+  "device_name": "iPhone",
+  "floor_id": "15FC9C91-BD9C-47E9-BF06-EB4AF867E2AD",
+  "image_resolution": {
+    "height": 1440,
+    "width": 1920
+  },
+  "ios_version": "26.3",
+  "keyframe_count": 60,
+  "keyframes": [
+    {
+      "depth_filename": "frame_001.depth",
+      "filename": "frame_001.jpg",
+      "index": 1,
+      "timestamp": 55983.31842725
+    },
+    {
+      "depth_filename": "frame_002.depth",
+      "filename": "frame_002.jpg",
+      "index": 2,
+      "timestamp": 55986.052658958
+    },
+    {
+      "depth_filename": "frame_003.depth",
+      "filename": "frame_003.jpg",
+      "index": 3,
+      "timestamp": 55987.453118833
+    },
+    {
+      "depth_filename": "frame_004.depth",
+      "filename": "frame_004.jpg",
+      "index": 4,
+      "timestamp": 55988.820234333
+    },
+    {
+      "depth_filename": "frame_006.depth",
+      "filename": "frame_006.jpg",
+      "index": 6,
+      "timestamp": 55991.004284458
+    },
+    {
+      "depth_filename": "frame_007.depth",
+      "filename": "frame_007.jpg",
+      "index": 7,
+      "timestamp": 55992.154661791
+    },
+    {
+      "depth_filename": "frame_008.depth",
+      "filename": "frame_008.jpg",
+      "index": 8,
+      "timestamp": 55994.088629041
+    },
+    {
+      "depth_filename": "frame_009.depth",
+      "filename": "frame_009.jpg",
+      "index": 9,
+      "timestamp": 55994.588793
+    },
+    {
+      "depth_filename": "frame_010.depth",
+      "filename": "frame_010.jpg",
+      "index": 10,
+      "timestamp": 55995.255678083
+    },
+    {
+      "depth_filename": "frame_011.depth",
+      "filename": "frame_011.jpg",
+      "index": 11,
+      "timestamp": 55995.805858416
+    },
+    {
+      "depth_filename": "frame_012.depth",
+      "filename": "frame_012.jpg",
+      "index": 12,
+      "timestamp": 55997.306349583
+    },
+    {
+      "depth_filename": "frame_013.depth",
+      "filename": "frame_013.jpg",
+      "index": 13,
+      "timestamp": 55998.089939333
+    },
+    {
+      "depth_filename": "frame_014.depth",
+      "filename": "frame_014.jpg",
+      "index": 14,
+      "timestamp": 55998.72348
+    },
+    {
+      "depth_filename": "frame_015.depth",
+      "filename": "frame_015.jpg",
+      "index": 15,
+      "timestamp": 55999.473725416
+    },
+    {
+      "depth_filename": "frame_016.depth",
+      "filename": "frame_016.jpg",
+      "index": 16,
+      "timestamp": 56001.007559958
+    },
+    {
+      "depth_filename": "frame_017.depth",
+      "filename": "frame_017.jpg",
+      "index": 17,
+      "timestamp": 56002.257968541
+    },
+    {
+      "depth_filename": "frame_018.depth",
+      "filename": "frame_018.jpg",
+      "index": 18,
+      "timestamp": 56003.258295291
+    },
+    {
+      "depth_filename": "frame_019.depth",
+      "filename": "frame_019.jpg",
+      "index": 19,
+      "timestamp": 56003.775130791
+    },
+    {
+      "depth_filename": "frame_020.depth",
+      "filename": "frame_020.jpg",
+      "index": 20,
+      "timestamp": 56004.45868725
+    },
+    {
+      "depth_filename": "frame_021.depth",
+      "filename": "frame_021.jpg",
+      "index": 21,
+      "timestamp": 56005.208932083
+    },
+    {
+      "depth_filename": "frame_022.depth",
+      "filename": "frame_022.jpg",
+      "index": 22,
+      "timestamp": 56006.542700208
+    },
+    {
+      "depth_filename": "frame_023.depth",
+      "filename": "frame_023.jpg",
+      "index": 23,
+      "timestamp": 56007.176240083
+    },
+    {
+      "depth_filename": "frame_024.depth",
+      "filename": "frame_024.jpg",
+      "index": 24,
+      "timestamp": 56008.409975333
+    },
+    {
+      "depth_filename": "frame_025.depth",
+      "filename": "frame_025.jpg",
+      "index": 25,
+      "timestamp": 56008.910138083
+    },
+    {
+      "depth_filename": "frame_026.depth",
+      "filename": "frame_026.jpg",
+      "index": 26,
+      "timestamp": 56009.46031725
+    },
+    {
+      "depth_filename": "frame_027.depth",
+      "filename": "frame_027.jpg",
+      "index": 27,
+      "timestamp": 56009.977152166
+    },
+    {
+      "depth_filename": "frame_028.depth",
+      "filename": "frame_028.jpg",
+      "index": 28,
+      "timestamp": 56010.527331166
+    },
+    {
+      "depth_filename": "frame_029.depth",
+      "filename": "frame_029.jpg",
+      "index": 29,
+      "timestamp": 56011.611017291
+    },
+    {
+      "depth_filename": "frame_030.depth",
+      "filename": "frame_030.jpg",
+      "index": 30,
+      "timestamp": 56012.111179916
+    },
+    {
+      "depth_filename": "frame_031.depth",
+      "filename": "frame_031.jpg",
+      "index": 31,
+      "timestamp": 56012.611342583
+    },
+    {
+      "filename": "frame_064.jpg",
+      "index": 64,
+      "timestamp": 56013.828404791,
+      "depth_filename": "frame_064.depth"
+    },
+    {
+      "filename": "frame_065.jpg",
+      "index": 65,
+      "timestamp": 56015.895743,
+      "depth_filename": "frame_065.depth"
+    },
+    {
+      "filename": "frame_066.jpg",
+      "index": 66,
+      "timestamp": 56016.746019041,
+      "depth_filename": "frame_066.depth"
+    },
+    {
+      "filename": "frame_067.jpg",
+      "index": 67,
+      "timestamp": 56017.329541791,
+      "depth_filename": "frame_067.depth"
+    },
+    {
+      "filename": "frame_068.jpg",
+      "index": 68,
+      "timestamp": 56017.846376291,
+      "depth_filename": "frame_068.depth"
+    },
+    {
+      "filename": "frame_069.jpg",
+      "index": 69,
+      "timestamp": 56018.496587208,
+      "depth_filename": "frame_069.depth"
+    },
+    {
+      "filename": "frame_070.jpg",
+      "index": 70,
+      "timestamp": 56019.246830583,
+      "depth_filename": "frame_070.depth"
+    },
+    {
+      "filename": "frame_073.jpg",
+      "index": 73,
+      "timestamp": 56021.097430541,
+      "depth_filename": "frame_073.depth"
+    },
+    {
+      "filename": "frame_074.jpg",
+      "index": 74,
+      "timestamp": 56021.61426475,
+      "depth_filename": "frame_074.depth"
+    },
+    {
+      "filename": "frame_075.jpg",
+      "index": 75,
+      "timestamp": 56022.697948916,
+      "depth_filename": "frame_075.depth"
+    },
+    {
+      "filename": "frame_076.jpg",
+      "index": 76,
+      "timestamp": 56023.398175625,
+      "depth_filename": "frame_076.depth"
+    },
+    {
+      "filename": "frame_077.jpg",
+      "index": 77,
+      "timestamp": 56024.198434666,
+      "depth_filename": "frame_077.depth"
+    },
+    {
+      "filename": "frame_079.jpg",
+      "index": 79,
+      "timestamp": 56025.1987585,
+      "depth_filename": "frame_079.depth"
+    },
+    {
+      "filename": "frame_081.jpg",
+      "index": 81,
+      "timestamp": 56026.199082083,
+      "depth_filename": "frame_081.depth"
+    },
+    {
+      "filename": "frame_082.jpg",
+      "index": 82,
+      "timestamp": 56026.69924375,
+      "depth_filename": "frame_082.depth"
+    },
+    {
+      "filename": "frame_084.jpg",
+      "index": 84,
+      "timestamp": 56028.0996965,
+      "depth_filename": "frame_084.depth"
+    },
+    {
+      "filename": "frame_085.jpg",
+      "index": 85,
+      "timestamp": 56029.416788666,
+      "depth_filename": "frame_085.depth"
+    },
+    {
+      "filename": "frame_086.jpg",
+      "index": 86,
+      "timestamp": 56030.283735375,
+      "depth_filename": "frame_086.depth"
+    },
+    {
+      "filename": "frame_087.jpg",
+      "index": 87,
+      "timestamp": 56031.083993541,
+      "depth_filename": "frame_087.depth"
+    },
+    {
+      "filename": "frame_088.jpg",
+      "index": 88,
+      "timestamp": 56032.050972083,
+      "depth_filename": "frame_088.depth"
+    },
+    {
+      "filename": "frame_090.jpg",
+      "index": 90,
+      "timestamp": 56033.534783791,
+      "depth_filename": "frame_090.depth"
+    },
+    {
+      "filename": "frame_091.jpg",
+      "index": 91,
+      "timestamp": 56035.368708083,
+      "depth_filename": "frame_091.depth"
+    },
+    {
+      "filename": "frame_093.jpg",
+      "index": 93,
+      "timestamp": 56037.50272825,
+      "depth_filename": "frame_093.depth"
+    },
+    {
+      "filename": "frame_095.jpg",
+      "index": 95,
+      "timestamp": 56039.886828166,
+      "depth_filename": "frame_095.depth"
+    },
+    {
+      "filename": "frame_096.jpg",
+      "index": 96,
+      "timestamp": 56040.970509875,
+      "depth_filename": "frame_096.depth"
+    },
+    {
+      "filename": "frame_097.jpg",
+      "index": 97,
+      "timestamp": 56042.104207375,
+      "depth_filename": "frame_097.depth"
+    },
+    {
+      "filename": "frame_099.jpg",
+      "index": 99,
+      "timestamp": 56043.254577375,
+      "depth_filename": "frame_099.depth"
+    },
+    {
+      "filename": "frame_100.jpg",
+      "index": 100,
+      "timestamp": 56043.938129916,
+      "depth_filename": "frame_100.depth"
+    },
+    {
+      "filename": "frame_101.jpg",
+      "index": 101,
+      "timestamp": 56044.554993875,
+      "depth_filename": "frame_101.depth"
+    },
+    {
+      "filename": "frame_102.jpg",
+      "index": 102,
+      "timestamp": 56045.121842,
+      "depth_filename": "frame_102.depth"
+    }
+  ],
+  "mesh_face_count": 312304,
+  "mesh_vertex_count": 174968,
+  "origin_x": 0.34366485,
+  "origin_y": 0.5736084,
+  "panorama_start_transform": [
+    -0.5676415,
+    -0.6910538,
+    -0.44746816,
+    0,
+    0.5839624,
+    0.045152005,
+    -0.8105241,
+    0,
+    0.5803198,
+    -0.7213917,
+    0.3779192,
+    0,
+    -0.039445817,
+    0.5502943,
+    0.59065604,
+    0.9999998
+  ],
+  "panoramic_keyframe_count": 192,
+  "panoramic_keyframes": [
+    {
+      "depth_filename": "pano_000.depth",
+      "filename": "pano_000.jpg",
+      "index": 0,
+      "timestamp": 56130.915462958
+    },
+    {
+      "depth_filename": "pano_001.depth",
+      "filename": "pano_001.jpg",
+      "index": 1,
+      "timestamp": 56132.499294958
+    },
+    {
+      "depth_filename": "pano_002.depth",
+      "filename": "pano_002.jpg",
+      "index": 2,
+      "timestamp": 56133.299547041
+    },
+    {
+      "depth_filename": "pano_003.depth",
+      "filename": "pano_003.jpg",
+      "index": 3,
+      "timestamp": 56133.933079791
+    },
+    {
+      "depth_filename": "pano_004.depth",
+      "filename": "pano_004.jpg",
+      "index": 4,
+      "timestamp": 56134.499925
+    },
+    {
+      "depth_filename": "pano_005.depth",
+      "filename": "pano_005.jpg",
+      "index": 5,
+      "timestamp": 56135.000082541
+    },
+    {
+      "depth_filename": "pano_006.depth",
+      "filename": "pano_006.jpg",
+      "index": 6,
+      "timestamp": 56135.566927666
+    },
+    {
+      "depth_filename": "pano_007.depth",
+      "filename": "pano_007.jpg",
+      "index": 7,
+      "timestamp": 56136.517226916
+    },
+    {
+      "depth_filename": "pano_008.depth",
+      "filename": "pano_008.jpg",
+      "index": 8,
+      "timestamp": 56137.50087
+    },
+    {
+      "depth_filename": "pano_009.depth",
+      "filename": "pano_009.jpg",
+      "index": 9,
+      "timestamp": 56138.001027583
+    },
+    {
+      "depth_filename": "pano_010.depth",
+      "filename": "pano_010.jpg",
+      "index": 10,
+      "timestamp": 56138.36780975
+    },
+    {
+      "depth_filename": "pano_011.depth",
+      "filename": "pano_011.jpg",
+      "index": 11,
+      "timestamp": 56138.717919833
+    },
+    {
+      "depth_filename": "pano_012.depth",
+      "filename": "pano_012.jpg",
+      "index": 12,
+      "timestamp": 56139.134717916
+    },
+    {
+      "depth_filename": "pano_013.depth",
+      "filename": "pano_013.jpg",
+      "index": 13,
+      "timestamp": 56139.718234833
+    },
+    {
+      "depth_filename": "pano_014.depth",
+      "filename": "pano_014.jpg",
+      "index": 14,
+      "timestamp": 56140.21839225
+    },
+    {
+      "depth_filename": "pano_015.depth",
+      "filename": "pano_015.jpg",
+      "index": 15,
+      "timestamp": 56140.668534083
+    },
+    {
+      "depth_filename": "pano_016.depth",
+      "filename": "pano_016.jpg",
+      "index": 16,
+      "timestamp": 56141.135347666
+    },
+    {
+      "depth_filename": "pano_017.depth",
+      "filename": "pano_017.jpg",
+      "index": 17,
+      "timestamp": 56141.568817416
+    },
+    {
+      "depth_filename": "pano_018.depth",
+      "filename": "pano_018.jpg",
+      "index": 18,
+      "timestamp": 56142.102318708
+    },
+    {
+      "depth_filename": "pano_019.depth",
+      "filename": "pano_019.jpg",
+      "index": 19,
+      "timestamp": 56142.702507625
+    },
+    {
+      "depth_filename": "pano_020.depth",
+      "filename": "pano_020.jpg",
+      "index": 20,
+      "timestamp": 56143.269352625
+    },
+    {
+      "depth_filename": "pano_021.depth",
+      "filename": "pano_021.jpg",
+      "index": 21,
+      "timestamp": 56143.936229083
+    },
+    {
+      "depth_filename": "pano_022.depth",
+      "filename": "pano_022.jpg",
+      "index": 22,
+      "timestamp": 56144.669793208
+    },
+    {
+      "depth_filename": "pano_023.depth",
+      "filename": "pano_023.jpg",
+      "index": 23,
+      "timestamp": 56145.303326
+    },
+    {
+      "depth_filename": "pano_024.depth",
+      "filename": "pano_024.jpg",
+      "index": 24,
+      "timestamp": 56145.770139541
+    },
+    {
+      "depth_filename": "pano_025.depth",
+      "filename": "pano_025.jpg",
+      "index": 25,
+      "timestamp": 56146.12024975
+    },
+    {
+      "depth_filename": "pano_026.depth",
+      "filename": "pano_026.jpg",
+      "index": 26,
+      "timestamp": 56146.503703875
+    },
+    {
+      "depth_filename": "pano_027.depth",
+      "filename": "pano_027.jpg",
+      "index": 27,
+      "timestamp": 56147.003861166
+    },
+    {
+      "depth_filename": "pano_028.depth",
+      "filename": "pano_028.jpg",
+      "index": 28,
+      "timestamp": 56147.470674875
+    },
+    {
+      "depth_filename": "pano_029.depth",
+      "filename": "pano_029.jpg",
+      "index": 29,
+      "timestamp": 56147.937488333
+    },
+    {
+      "depth_filename": "pano_030.depth",
+      "filename": "pano_030.jpg",
+      "index": 30,
+      "timestamp": 56148.370957958
+    },
+    {
+      "depth_filename": "pano_031.depth",
+      "filename": "pano_031.jpg",
+      "index": 31,
+      "timestamp": 56148.854443333
+    },
+    {
+      "depth_filename": "pano_032.depth",
+      "filename": "pano_032.jpg",
+      "index": 32,
+      "timestamp": 56149.688039
+    },
+    {
+      "depth_filename": "pano_033.depth",
+      "filename": "pano_033.jpg",
+      "index": 33,
+      "timestamp": 56150.604993916
+    },
+    {
+      "depth_filename": "pano_034.depth",
+      "filename": "pano_034.jpg",
+      "index": 34,
+      "timestamp": 56151.271870375
+    },
+    {
+      "depth_filename": "pano_035.depth",
+      "filename": "pano_035.jpg",
+      "index": 35,
+      "timestamp": 56151.855387083
+    },
+    {
+      "depth_filename": "pano_036.depth",
+      "filename": "pano_036.jpg",
+      "index": 36,
+      "timestamp": 56152.188825208
+    },
+    {
+      "depth_filename": "pano_037.depth",
+      "filename": "pano_037.jpg",
+      "index": 37,
+      "timestamp": 56152.522263375
+    },
+    {
+      "depth_filename": "pano_038.depth",
+      "filename": "pano_038.jpg",
+      "index": 38,
+      "timestamp": 56152.922389208
+    },
+    {
+      "depth_filename": "pano_039.depth",
+      "filename": "pano_039.jpg",
+      "index": 39,
+      "timestamp": 56153.322514916
+    },
+    {
+      "depth_filename": "pano_040.depth",
+      "filename": "pano_040.jpg",
+      "index": 40,
+      "timestamp": 56153.78932825
+    },
+    {
+      "depth_filename": "pano_041.depth",
+      "filename": "pano_041.jpg",
+      "index": 41,
+      "timestamp": 56154.189454083
+    },
+    {
+      "depth_filename": "pano_042.depth",
+      "filename": "pano_042.jpg",
+      "index": 42,
+      "timestamp": 56154.622923583
+    },
+    {
+      "depth_filename": "pano_043.depth",
+      "filename": "pano_043.jpg",
+      "index": 43,
+      "timestamp": 56155.273127833
+    },
+    {
+      "depth_filename": "pano_044.depth",
+      "filename": "pano_044.jpg",
+      "index": 44,
+      "timestamp": 56155.973347916
+    },
+    {
+      "depth_filename": "pano_045.depth",
+      "filename": "pano_045.jpg",
+      "index": 45,
+      "timestamp": 56156.590208208
+    },
+    {
+      "depth_filename": "pano_046.depth",
+      "filename": "pano_046.jpg",
+      "index": 46,
+      "timestamp": 56157.207068583
+    },
+    {
+      "depth_filename": "pano_047.depth",
+      "filename": "pano_047.jpg",
+      "index": 47,
+      "timestamp": 56157.507162875
+    },
+    {
+      "depth_filename": "pano_048.depth",
+      "filename": "pano_048.jpg",
+      "index": 48,
+      "timestamp": 56157.823929083
+    },
+    {
+      "depth_filename": "pano_049.depth",
+      "filename": "pano_049.jpg",
+      "index": 49,
+      "timestamp": 56158.14069525
+    },
+    {
+      "depth_filename": "pano_050.depth",
+      "filename": "pano_050.jpg",
+      "index": 50,
+      "timestamp": 56158.557492666
+    },
+    {
+      "depth_filename": "pano_051.depth",
+      "filename": "pano_051.jpg",
+      "index": 51,
+      "timestamp": 56158.990962166
+    },
+    {
+      "depth_filename": "pano_052.depth",
+      "filename": "pano_052.jpg",
+      "index": 52,
+      "timestamp": 56159.441103583
+    },
+    {
+      "depth_filename": "pano_053.depth",
+      "filename": "pano_053.jpg",
+      "index": 53,
+      "timestamp": 56159.891244916
+    },
+    {
+      "depth_filename": "pano_054.depth",
+      "filename": "pano_054.jpg",
+      "index": 54,
+      "timestamp": 56160.291370416
+    },
+    {
+      "depth_filename": "pano_055.depth",
+      "filename": "pano_055.jpg",
+      "index": 55,
+      "timestamp": 56160.991590333
+    },
+    {
+      "depth_filename": "pano_056.depth",
+      "filename": "pano_056.jpg",
+      "index": 56,
+      "timestamp": 56161.458403458
+    },
+    {
+      "depth_filename": "pano_057.depth",
+      "filename": "pano_057.jpg",
+      "index": 57,
+      "timestamp": 56161.97523225
+    },
+    {
+      "depth_filename": "pano_058.depth",
+      "filename": "pano_058.jpg",
+      "index": 58,
+      "timestamp": 56162.408701625
+    },
+    {
+      "depth_filename": "pano_059.depth",
+      "filename": "pano_059.jpg",
+      "index": 59,
+      "timestamp": 56162.7588115
+    },
+    {
+      "depth_filename": "pano_060.depth",
+      "filename": "pano_060.jpg",
+      "index": 60,
+      "timestamp": 56163.075577583
+    },
+    {
+      "depth_filename": "pano_061.depth",
+      "filename": "pano_061.jpg",
+      "index": 61,
+      "timestamp": 56163.392343833
+    },
+    {
+      "depth_filename": "pano_062.depth",
+      "filename": "pano_062.jpg",
+      "index": 62,
+      "timestamp": 56163.759125458
+    },
+    {
+      "depth_filename": "pano_063.depth",
+      "filename": "pano_063.jpg",
+      "index": 63,
+      "timestamp": 56164.142579083
+    },
+    {
+      "depth_filename": "pano_064.depth",
+      "filename": "pano_064.jpg",
+      "index": 64,
+      "timestamp": 56164.492689041
+    },
+    {
+      "depth_filename": "pano_065.depth",
+      "filename": "pano_065.jpg",
+      "index": 65,
+      "timestamp": 56164.876142625
+    },
+    {
+      "depth_filename": "pano_066.depth",
+      "filename": "pano_066.jpg",
+      "index": 66,
+      "timestamp": 56165.326283875
+    },
+    {
+      "depth_filename": "pano_067.depth",
+      "filename": "pano_067.jpg",
+      "index": 67,
+      "timestamp": 56165.92647225
+    },
+    {
+      "depth_filename": "pano_068.depth",
+      "filename": "pano_068.jpg",
+      "index": 68,
+      "timestamp": 56166.476644833
+    },
+    {
+      "depth_filename": "pano_069.depth",
+      "filename": "pano_069.jpg",
+      "index": 69,
+      "timestamp": 56167.010145458
+    },
+    {
+      "depth_filename": "pano_070.depth",
+      "filename": "pano_070.jpg",
+      "index": 70,
+      "timestamp": 56167.660349583
+    },
+    {
+      "depth_filename": "pano_071.depth",
+      "filename": "pano_071.jpg",
+      "index": 71,
+      "timestamp": 56168.143834458
+    },
+    {
+      "depth_filename": "pano_000.depth",
+      "filename": "pano_000.jpg",
+      "index": 0,
+      "timestamp": 56180.857894625
+    },
+    {
+      "depth_filename": "pano_001.depth",
+      "filename": "pano_001.jpg",
+      "index": 1,
+      "timestamp": 56181.4747555
+    },
+    {
+      "depth_filename": "pano_002.depth",
+      "filename": "pano_002.jpg",
+      "index": 2,
+      "timestamp": 56181.841537875
+    },
+    {
+      "depth_filename": "pano_003.depth",
+      "filename": "pano_003.jpg",
+      "index": 3,
+      "timestamp": 56182.091616708
+    },
+    {
+      "depth_filename": "pano_004.depth",
+      "filename": "pano_004.jpg",
+      "index": 4,
+      "timestamp": 56182.308351541
+    },
+    {
+      "depth_filename": "pano_005.depth",
+      "filename": "pano_005.jpg",
+      "index": 5,
+      "timestamp": 56182.525086541
+    },
+    {
+      "depth_filename": "pano_006.depth",
+      "filename": "pano_006.jpg",
+      "index": 6,
+      "timestamp": 56182.725149541
+    },
+    {
+      "depth_filename": "pano_007.depth",
+      "filename": "pano_007.jpg",
+      "index": 7,
+      "timestamp": 56182.925212666
+    },
+    {
+      "depth_filename": "pano_008.depth",
+      "filename": "pano_008.jpg",
+      "index": 8,
+      "timestamp": 56183.125275541
+    },
+    {
+      "depth_filename": "pano_009.depth",
+      "filename": "pano_009.jpg",
+      "index": 9,
+      "timestamp": 56183.342010458
+    },
+    {
+      "depth_filename": "pano_010.depth",
+      "filename": "pano_010.jpg",
+      "index": 10,
+      "timestamp": 56183.625433
+    },
+    {
+      "depth_filename": "pano_011.depth",
+      "filename": "pano_011.jpg",
+      "index": 11,
+      "timestamp": 56183.9088555
+    },
+    {
+      "depth_filename": "pano_012.depth",
+      "filename": "pano_012.jpg",
+      "index": 12,
+      "timestamp": 56184.1255905
+    },
+    {
+      "depth_filename": "pano_013.depth",
+      "filename": "pano_013.jpg",
+      "index": 13,
+      "timestamp": 56184.375669083
+    },
+    {
+      "depth_filename": "pano_014.depth",
+      "filename": "pano_014.jpg",
+      "index": 14,
+      "timestamp": 56184.6757635
+    },
+    {
+      "depth_filename": "pano_015.depth",
+      "filename": "pano_015.jpg",
+      "index": 15,
+      "timestamp": 56185.009201791
+    },
+    {
+      "depth_filename": "pano_016.depth",
+      "filename": "pano_016.jpg",
+      "index": 16,
+      "timestamp": 56185.309296
+    },
+    {
+      "depth_filename": "pano_017.depth",
+      "filename": "pano_017.jpg",
+      "index": 17,
+      "timestamp": 56185.642734125
+    },
+    {
+      "depth_filename": "pano_018.depth",
+      "filename": "pano_018.jpg",
+      "index": 18,
+      "timestamp": 56185.926156708
+    },
+    {
+      "depth_filename": "pano_019.depth",
+      "filename": "pano_019.jpg",
+      "index": 19,
+      "timestamp": 56186.242923041
+    },
+    {
+      "depth_filename": "pano_020.depth",
+      "filename": "pano_020.jpg",
+      "index": 20,
+      "timestamp": 56186.493001583
+    },
+    {
+      "depth_filename": "pano_021.depth",
+      "filename": "pano_021.jpg",
+      "index": 21,
+      "timestamp": 56186.726408291
+    },
+    {
+      "depth_filename": "pano_022.depth",
+      "filename": "pano_022.jpg",
+      "index": 22,
+      "timestamp": 56186.993158791
+    },
+    {
+      "depth_filename": "pano_023.depth",
+      "filename": "pano_023.jpg",
+      "index": 23,
+      "timestamp": 56187.309925083
+    },
+    {
+      "depth_filename": "pano_024.depth",
+      "filename": "pano_024.jpg",
+      "index": 24,
+      "timestamp": 56187.626691166
+    },
+    {
+      "depth_filename": "pano_025.depth",
+      "filename": "pano_025.jpg",
+      "index": 25,
+      "timestamp": 56187.893441541
+    },
+    {
+      "depth_filename": "pano_026.depth",
+      "filename": "pano_026.jpg",
+      "index": 26,
+      "timestamp": 56188.126848208
+    },
+    {
+      "depth_filename": "pano_027.depth",
+      "filename": "pano_027.jpg",
+      "index": 27,
+      "timestamp": 56188.360254666
+    },
+    {
+      "depth_filename": "pano_028.depth",
+      "filename": "pano_028.jpg",
+      "index": 28,
+      "timestamp": 56188.593661416
+    },
+    {
+      "depth_filename": "pano_029.depth",
+      "filename": "pano_029.jpg",
+      "index": 29,
+      "timestamp": 56188.910427541
+    },
+    {
+      "depth_filename": "pano_030.depth",
+      "filename": "pano_030.jpg",
+      "index": 30,
+      "timestamp": 56189.227193583
+    },
+    {
+      "depth_filename": "pano_031.depth",
+      "filename": "pano_031.jpg",
+      "index": 31,
+      "timestamp": 56189.510615958
+    },
+    {
+      "depth_filename": "pano_032.depth",
+      "filename": "pano_032.jpg",
+      "index": 32,
+      "timestamp": 56189.810710125
+    },
+    {
+      "depth_filename": "pano_033.depth",
+      "filename": "pano_033.jpg",
+      "index": 33,
+      "timestamp": 56190.144148041
+    },
+    {
+      "depth_filename": "pano_034.depth",
+      "filename": "pano_034.jpg",
+      "index": 34,
+      "timestamp": 56190.444242125
+    },
+    {
+      "depth_filename": "pano_035.depth",
+      "filename": "pano_035.jpg",
+      "index": 35,
+      "timestamp": 56190.727664291
+    },
+    {
+      "depth_filename": "pano_036.depth",
+      "filename": "pano_036.jpg",
+      "index": 36,
+      "timestamp": 56191.011086583
+    },
+    {
+      "depth_filename": "pano_037.depth",
+      "filename": "pano_037.jpg",
+      "index": 37,
+      "timestamp": 56191.411211958
+    },
+    {
+      "depth_filename": "pano_038.depth",
+      "filename": "pano_038.jpg",
+      "index": 38,
+      "timestamp": 56191.82800925
+    },
+    {
+      "depth_filename": "pano_039.depth",
+      "filename": "pano_039.jpg",
+      "index": 39,
+      "timestamp": 56192.261478416
+    },
+    {
+      "depth_filename": "pano_040.depth",
+      "filename": "pano_040.jpg",
+      "index": 40,
+      "timestamp": 56192.678275625
+    },
+    {
+      "depth_filename": "pano_041.depth",
+      "filename": "pano_041.jpg",
+      "index": 41,
+      "timestamp": 56192.961697833
+    },
+    {
+      "depth_filename": "pano_042.depth",
+      "filename": "pano_042.jpg",
+      "index": 42,
+      "timestamp": 56193.26179175
+    },
+    {
+      "depth_filename": "pano_043.depth",
+      "filename": "pano_043.jpg",
+      "index": 43,
+      "timestamp": 56193.545213791
+    },
+    {
+      "depth_filename": "pano_044.depth",
+      "filename": "pano_044.jpg",
+      "index": 44,
+      "timestamp": 56193.745276625
+    },
+    {
+      "depth_filename": "pano_045.depth",
+      "filename": "pano_045.jpg",
+      "index": 45,
+      "timestamp": 56193.94533925
+    },
+    {
+      "depth_filename": "pano_046.depth",
+      "filename": "pano_046.jpg",
+      "index": 46,
+      "timestamp": 56194.1954175
+    },
+    {
+      "depth_filename": "pano_047.depth",
+      "filename": "pano_047.jpg",
+      "index": 47,
+      "timestamp": 56194.512183291
+    },
+    {
+      "depth_filename": "pano_048.depth",
+      "filename": "pano_048.jpg",
+      "index": 48,
+      "timestamp": 56194.828949166
+    },
+    {
+      "depth_filename": "pano_049.depth",
+      "filename": "pano_049.jpg",
+      "index": 49,
+      "timestamp": 56195.279089916
+    },
+    {
+      "depth_filename": "pano_050.depth",
+      "filename": "pano_050.jpg",
+      "index": 50,
+      "timestamp": 56195.845934083
+    },
+    {
+      "depth_filename": "pano_051.depth",
+      "filename": "pano_051.jpg",
+      "index": 51,
+      "timestamp": 56196.279402958
+    },
+    {
+      "depth_filename": "pano_052.depth",
+      "filename": "pano_052.jpg",
+      "index": 52,
+      "timestamp": 56196.562824875
+    },
+    {
+      "depth_filename": "pano_053.depth",
+      "filename": "pano_053.jpg",
+      "index": 53,
+      "timestamp": 56196.812903041
+    },
+    {
+      "depth_filename": "pano_054.depth",
+      "filename": "pano_054.jpg",
+      "index": 54,
+      "timestamp": 56197.046309458
+    },
+    {
+      "depth_filename": "pano_055.depth",
+      "filename": "pano_055.jpg",
+      "index": 55,
+      "timestamp": 56197.329731333
+    },
+    {
+      "depth_filename": "pano_056.depth",
+      "filename": "pano_056.jpg",
+      "index": 56,
+      "timestamp": 56197.596481291
+    },
+    {
+      "depth_filename": "pano_057.depth",
+      "filename": "pano_057.jpg",
+      "index": 57,
+      "timestamp": 56197.913247125
+    },
+    {
+      "depth_filename": "pano_058.depth",
+      "filename": "pano_058.jpg",
+      "index": 58,
+      "timestamp": 56198.313372125
+    },
+    {
+      "depth_filename": "pano_059.depth",
+      "filename": "pano_059.jpg",
+      "index": 59,
+      "timestamp": 56198.730168833
+    },
+    {
+      "depth_filename": "pano_060.depth",
+      "filename": "pano_060.jpg",
+      "index": 60,
+      "timestamp": 56199.063606416
+    },
+    {
+      "depth_filename": "pano_061.depth",
+      "filename": "pano_061.jpg",
+      "index": 61,
+      "timestamp": 56199.347028333
+    },
+    {
+      "depth_filename": "pano_062.depth",
+      "filename": "pano_062.jpg",
+      "index": 62,
+      "timestamp": 56199.54709075
+    },
+    {
+      "depth_filename": "pano_063.depth",
+      "filename": "pano_063.jpg",
+      "index": 63,
+      "timestamp": 56199.780497
+    },
+    {
+      "depth_filename": "pano_064.depth",
+      "filename": "pano_064.jpg",
+      "index": 64,
+      "timestamp": 56199.980559375
+    },
+    {
+      "depth_filename": "pano_065.depth",
+      "filename": "pano_065.jpg",
+      "index": 65,
+      "timestamp": 56200.180621791
+    },
+    {
+      "depth_filename": "pano_066.depth",
+      "filename": "pano_066.jpg",
+      "index": 66,
+      "timestamp": 56200.380684333
+    },
+    {
+      "depth_filename": "pano_067.depth",
+      "filename": "pano_067.jpg",
+      "index": 67,
+      "timestamp": 56200.614090541
+    },
+    {
+      "depth_filename": "pano_068.depth",
+      "filename": "pano_068.jpg",
+      "index": 68,
+      "timestamp": 56200.830824833
+    },
+    {
+      "depth_filename": "pano_069.depth",
+      "filename": "pano_069.jpg",
+      "index": 69,
+      "timestamp": 56201.064230916
+    },
+    {
+      "depth_filename": "pano_070.depth",
+      "filename": "pano_070.jpg",
+      "index": 70,
+      "timestamp": 56201.26429325
+    },
+    {
+      "depth_filename": "pano_071.depth",
+      "filename": "pano_071.jpg",
+      "index": 71,
+      "timestamp": 56201.547715166
+    },
+    {
+      "depth_filename": "pano_072.depth",
+      "filename": "pano_072.jpg",
+      "index": 72,
+      "timestamp": 56201.947839916
+    },
+    {
+      "depth_filename": "pano_073.depth",
+      "filename": "pano_073.jpg",
+      "index": 73,
+      "timestamp": 56202.28127725
+    },
+    {
+      "depth_filename": "pano_074.depth",
+      "filename": "pano_074.jpg",
+      "index": 74,
+      "timestamp": 56202.514683375
+    },
+    {
+      "depth_filename": "pano_075.depth",
+      "filename": "pano_075.jpg",
+      "index": 75,
+      "timestamp": 56202.681401916
+    },
+    {
+      "depth_filename": "pano_076.depth",
+      "filename": "pano_076.jpg",
+      "index": 76,
+      "timestamp": 56202.864792541
+    },
+    {
+      "depth_filename": "pano_077.depth",
+      "filename": "pano_077.jpg",
+      "index": 77,
+      "timestamp": 56203.048182958
+    },
+    {
+      "depth_filename": "pano_078.depth",
+      "filename": "pano_078.jpg",
+      "index": 78,
+      "timestamp": 56203.198229875
+    },
+    {
+      "depth_filename": "pano_079.depth",
+      "filename": "pano_079.jpg",
+      "index": 79,
+      "timestamp": 56203.34827675
+    },
+    {
+      "depth_filename": "pano_080.depth",
+      "filename": "pano_080.jpg",
+      "index": 80,
+      "timestamp": 56203.514995291
+    },
+    {
+      "depth_filename": "pano_081.depth",
+      "filename": "pano_081.jpg",
+      "index": 81,
+      "timestamp": 56203.698385708
+    },
+    {
+      "depth_filename": "pano_082.depth",
+      "filename": "pano_082.jpg",
+      "index": 82,
+      "timestamp": 56203.865104375
+    },
+    {
+      "depth_filename": "pano_083.depth",
+      "filename": "pano_083.jpg",
+      "index": 83,
+      "timestamp": 56204.031823
+    },
+    {
+      "depth_filename": "pano_084.depth",
+      "filename": "pano_084.jpg",
+      "index": 84,
+      "timestamp": 56204.215213583
+    },
+    {
+      "depth_filename": "pano_085.depth",
+      "filename": "pano_085.jpg",
+      "index": 85,
+      "timestamp": 56204.398604041
+    },
+    {
+      "depth_filename": "pano_086.depth",
+      "filename": "pano_086.jpg",
+      "index": 86,
+      "timestamp": 56204.565322458
+    },
+    {
+      "depth_filename": "pano_087.depth",
+      "filename": "pano_087.jpg",
+      "index": 87,
+      "timestamp": 56204.715369375
+    },
+    {
+      "depth_filename": "pano_088.depth",
+      "filename": "pano_088.jpg",
+      "index": 88,
+      "timestamp": 56204.86541625
+    },
+    {
+      "depth_filename": "pano_089.depth",
+      "filename": "pano_089.jpg",
+      "index": 89,
+      "timestamp": 56205.048806625
+    },
+    {
+      "depth_filename": "pano_090.depth",
+      "filename": "pano_090.jpg",
+      "index": 90,
+      "timestamp": 56205.215525291
+    },
+    {
+      "depth_filename": "pano_091.depth",
+      "filename": "pano_091.jpg",
+      "index": 91,
+      "timestamp": 56205.365571958
+    },
+    {
+      "depth_filename": "pano_092.depth",
+      "filename": "pano_092.jpg",
+      "index": 92,
+      "timestamp": 56205.532290625
+    },
+    {
+      "depth_filename": "pano_093.depth",
+      "filename": "pano_093.jpg",
+      "index": 93,
+      "timestamp": 56205.715681125
+    },
+    {
+      "depth_filename": "pano_094.depth",
+      "filename": "pano_094.jpg",
+      "index": 94,
+      "timestamp": 56205.915743375
+    },
+    {
+      "depth_filename": "pano_095.depth",
+      "filename": "pano_095.jpg",
+      "index": 95,
+      "timestamp": 56206.082462
+    },
+    {
+      "depth_filename": "pano_096.depth",
+      "filename": "pano_096.jpg",
+      "index": 96,
+      "timestamp": 56206.23250875
+    },
+    {
+      "depth_filename": "pano_097.depth",
+      "filename": "pano_097.jpg",
+      "index": 97,
+      "timestamp": 56206.3825555
+    },
+    {
+      "depth_filename": "pano_098.depth",
+      "filename": "pano_098.jpg",
+      "index": 98,
+      "timestamp": 56206.532602208
+    },
+    {
+      "depth_filename": "pano_099.depth",
+      "filename": "pano_099.jpg",
+      "index": 99,
+      "timestamp": 56206.715992791
+    },
+    {
+      "depth_filename": "pano_100.depth",
+      "filename": "pano_100.jpg",
+      "index": 100,
+      "timestamp": 56206.866039416
+    },
+    {
+      "depth_filename": "pano_101.depth",
+      "filename": "pano_101.jpg",
+      "index": 101,
+      "timestamp": 56207.016086208
+    },
+    {
+      "depth_filename": "pano_102.depth",
+      "filename": "pano_102.jpg",
+      "index": 102,
+      "timestamp": 56207.166132833
+    },
+    {
+      "depth_filename": "pano_103.depth",
+      "filename": "pano_103.jpg",
+      "index": 103,
+      "timestamp": 56207.316179583
+    },
+    {
+      "depth_filename": "pano_104.depth",
+      "filename": "pano_104.jpg",
+      "index": 104,
+      "timestamp": 56207.46622625
+    },
+    {
+      "depth_filename": "pano_105.depth",
+      "filename": "pano_105.jpg",
+      "index": 105,
+      "timestamp": 56207.632944833
+    },
+    {
+      "depth_filename": "pano_106.depth",
+      "filename": "pano_106.jpg",
+      "index": 106,
+      "timestamp": 56207.866350791
+    },
+    {
+      "depth_filename": "pano_107.depth",
+      "filename": "pano_107.jpg",
+      "index": 107,
+      "timestamp": 56209.450177
+    },
+    {
+      "depth_filename": "pano_108.depth",
+      "filename": "pano_108.jpg",
+      "index": 108,
+      "timestamp": 56210.167066541
+    },
+    {
+      "depth_filename": "pano_109.depth",
+      "filename": "pano_109.jpg",
+      "index": 109,
+      "timestamp": 56210.417144458
+    },
+    {
+      "depth_filename": "pano_110.depth",
+      "filename": "pano_110.jpg",
+      "index": 110,
+      "timestamp": 56211.317424458
+    },
+    {
+      "depth_filename": "pano_111.depth",
+      "filename": "pano_111.jpg",
+      "index": 111,
+      "timestamp": 56211.584174
+    },
+    {
+      "depth_filename": "pano_112.depth",
+      "filename": "pano_112.jpg",
+      "index": 112,
+      "timestamp": 56211.734220583
+    },
+    {
+      "depth_filename": "pano_113.depth",
+      "filename": "pano_113.jpg",
+      "index": 113,
+      "timestamp": 56211.884267291
+    },
+    {
+      "depth_filename": "pano_114.depth",
+      "filename": "pano_114.jpg",
+      "index": 114,
+      "timestamp": 56212.034314083
+    },
+    {
+      "depth_filename": "pano_115.depth",
+      "filename": "pano_115.jpg",
+      "index": 115,
+      "timestamp": 56212.184360708
+    },
+    {
+      "depth_filename": "pano_116.depth",
+      "filename": "pano_116.jpg",
+      "index": 116,
+      "timestamp": 56212.351079166
+    },
+    {
+      "depth_filename": "pano_117.depth",
+      "filename": "pano_117.jpg",
+      "index": 117,
+      "timestamp": 56212.51779775
+    },
+    {
+      "depth_filename": "pano_118.depth",
+      "filename": "pano_118.jpg",
+      "index": 118,
+      "timestamp": 56212.667844166
+    },
+    {
+      "depth_filename": "pano_119.depth",
+      "filename": "pano_119.jpg",
+      "index": 119,
+      "timestamp": 56212.83456275
+    }
+  ],
+  "rfq_id": "d6751509-6076-439e-9d36-51c511aeb95f",
+  "room_label": "Living Room",
+  "rotation_deg": -91.251305,
+  "scan_duration_seconds": 240.3,
+  "supplemental_frame_offset": 32
+}

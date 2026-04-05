@@ -1,0 +1,12 @@
+15:06:42 [App     ] OpenMVS x64 v2.3.0
+15:06:42 [App     ] Build date: Mar 31 2026, 16:09:44
+15:06:42 [App     ] CPU:  (10 cores)
+15:06:42 [App     ] RAM: 7.65GB Physical Memory 1024.00MB Virtual Memory
+15:06:42 [App     ] OS: Linux 6.12.76-linuxkit (aarch64)
+15:06:42 [App     ] Disk: 289.14GB (926.35GB) space
+15:06:42 [App     ] Command line: TextureMesh /tests/local_scan/merged_halves_textured/openmvs_work/scene.mvs --mesh-file /tests/local_scan/merged_halves_textured/openmvs_work/preview/mesh.ply --export-type obj -w /tests/local_scan/merged_halves_textured/openmvs_work -o /tests/local_scan/merged_halves_textured/openmvs_work/preview/textured.mvs --resolution-level 1 --cost-smoothness-ratio 1.0 --global-seam-leveling 1 --local-seam-leveling 1 --max-texture-size 8192
+15:06:42 [App     ] Camera model loaded: platform 0; camera  0; f 0.744x0.744; poses 60
+15:06:42 [App     ] Scene loaded in interface format from 'scene.mvs' (0ms):
+	60 images (60 calibrated) with a total of 158.20 MPixels (2.64 MPixels/image)
+	0 points, 0 vertices, 0 faces
+15:06:42 [App     ] Mesh 'mesh.ply' loaded: 5244 vertices, 9997 faces (0ms)

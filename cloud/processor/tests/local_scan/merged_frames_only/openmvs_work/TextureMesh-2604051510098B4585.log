@@ -1,0 +1,16 @@
+15:10:09 [App     ] OpenMVS x64 v2.3.0
+15:10:09 [App     ] Build date: Mar 31 2026, 16:09:44
+15:10:09 [App     ] CPU:  (10 cores)
+15:10:09 [App     ] RAM: 7.65GB Physical Memory 1024.00MB Virtual Memory
+15:10:09 [App     ] OS: Linux 6.12.76-linuxkit (aarch64)
+15:10:09 [App     ] Disk: 289.13GB (926.35GB) space
+15:10:09 [App     ] Command line: TextureMesh /tests/local_scan/merged_frames_only/openmvs_work/scene.mvs --mesh-file /tests/local_scan/merged_frames_only/openmvs_work/preview/mesh.ply --export-type obj -w /tests/local_scan/merged_frames_only/openmvs_work -o /tests/local_scan/merged_frames_only/openmvs_work/preview/textured.mvs --resolution-level 1 --cost-smoothness-ratio 1.0 --global-seam-leveling 1 --local-seam-leveling 1 --max-texture-size 8192
+15:10:09 [App     ] Camera model loaded: platform 0; camera  0; f 0.744x0.744; poses 60
+15:10:09 [App     ] Scene loaded in interface format from 'scene.mvs' (0ms):
+	60 images (60 calibrated) with a total of 158.20 MPixels (2.64 MPixels/image)
+	0 points, 0 vertices, 0 faces
+15:10:09 [App     ] Mesh 'mesh.ply' loaded: 7180 vertices, 10000 faces (1ms)
+15:10:09 [App     ] Assigning the best view to each face completed: 10000 faces, 768 patches (602ms)
+15:10:10 [App     ] Generating texture atlas and image completed: 633 patches, 4096 image size, 1 textures (1s122ms)
+15:10:10 [App     ] Mesh texturing completed: 7180 vertices, 10000 faces (1s726ms)
+15:10:11 [App     ] Mesh 'textured.obj' saved: 7180 vertices, 10000 faces (323ms)

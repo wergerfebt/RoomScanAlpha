@@ -87,9 +87,26 @@ Cloud Run: scan-api (public)
 ### Scan Flow (current working flow)
 ```
 idle → selectingRFQ → projectOverview → scanReady → scanning
-  → STOP (no pause!) → annotatingCorners → pause → labelingRoom
-  → exporting → uploading → viewingResults
+  → STOP (no pause!) → annotatingCorners → pause + saveWorldMap → labelingRoom
+  → exporting → uploading → viewingResults → auto coverage check
+  → if <90%: Re-scan Gaps → relocalizingForRescan → rescanningGaps → viewingResults
 ```
+
+### Coverage Review Flow
+After cloud processing completes, coverage is automatically checked via `POST /coverage`:
+1. **Untextured faces** (orange): detected via degenerate UV area in OpenMVS output OBJ
+2. **Mesh holes** (red): detected via ray-casting from mesh centroid — 10K fibonacci-sphere rays, missed rays → patches at bounding box exit
+3. Coverage ratio is area-weighted (not face-count-based)
+4. If coverage < 90%, user must re-scan gaps before proceeding
+5. ARWorldMap saved after annotation enables relocalization for gap re-scan
+
+### Gap Re-scan Flow
+1. Load saved ARWorldMap → start relocalized AR session
+2. Show RelocalizationView while tracking state is `.limited`
+3. Once `.normal` → show GapRescanView with orange (untextured) + red (holes) overlays
+4. User walks to highlighted areas, supplemental frames captured
+5. On stop → return to results with action buttons unlocked
+6. **Next step**: package supplemental frames + mesh, upload, merge with original (see `docs/SUPPLEMENTAL_SCAN_MERGE.md`)
 
 ### Critical Constraint
 **NEVER pause the AR session between scan capture and mesh export.** Pausing + resuming causes ARKit to re-initialize the world coordinate system, introducing 1-2ft systematic texture misalignment. The session must stay running from scan start through annotation completion.
@@ -107,11 +124,12 @@ idle → selectingRFQ → projectOverview → scanReady → scanning
 |------|---------|
 | `ContentView.swift` | Main scan flow state machine |
 | `ScanViewModel.swift` | Scan state + frame/upload management |
-| `ARSessionManager.swift` | AR session lifecycle, frame capture |
+| `ARSessionManager.swift` | AR session lifecycle, frame capture, world map save/load |
 | `FrameCaptureManager.swift` | Keyframe selection thresholds + quality scoring |
 | `ScanPackager.swift` | Export to scan.zip (PLY + keyframes + metadata) |
 | `AuthManager.swift` | Firebase Auth (Google Sign-In, email/password) |
-| `CoverageReviewView.swift` | Text-based coverage % display (disabled pending ARWorldMap approach) |
+| `RelocalizationView.swift` | ARWorldMap relocalization overlay for gap re-scan |
+| `GapRescanView.swift` | AR overlay with orange (untextured) + red (hole) patches |
 
 ## Coordinate Conventions
 - **On-device**: meters (ARKit Y-up, right-handed: X=right, Y=up, Z=back)
@@ -144,25 +162,27 @@ gs://roomscanalpha-scans/scans/{rfq_id}/{scan_id}/
 - `PanoramaSweepView.swift` — Panoramic sweep removed; replaced by denser walk-around capture. `.capturingPanorama` state kept for backward compat but never entered.
 - `CoverageAudit.swift` — Surface-level coverage audit. Compiles but never called. Superseded by cloud-side coverage endpoint.
 - `MeshCoverageAnalyzer.swift` — On-device mesh face coverage. Works but disabled (coverage review removed to fix texture alignment).
-- `CoverageReviewView.swift` — Text-based coverage display. Disabled pending ARWorldMap-based approach.
+- `CoverageReviewView.swift` — Old text-based coverage display. Superseded by cloud-based coverage check + AR overlay.
 - `RoomViewerView.swift` — Stub (5 lines). 3D viewer opens in Safari instead.
 
 ### Dead Code (Cloud)
 - `pipeline/texture_projection.py` WTA path — Only runs as fallback when OpenMVS fails. Production uses OpenMVS.
 - `models/roomformer_finetuned.pt` + `roomformer_pretrained.pt` — 316MB of RoomFormer DNN models baked into container. Never loaded. Phase 2 placeholder.
 - `training_data/` — 500 density map images + COCO annotations. Phase 2 training data, unused.
+- `_load_cameras()` + `_check_face_coverage()` in `main.py` — Old camera-viability coverage check. Superseded by UV-area + atlas + ray-cast coverage endpoint.
 
 ### Known Issues
 - **ARFrame retention warnings** — ARSCNView delegate retains 11-13 frames during annotation. Caused by multiple ARSCNView instances sharing one session. Needs shared ARSCNView architecture (planned).
 - **"Attempting to enable an already-enabled session"** — ARSCNView auto-runs the session when `scnView.session` is set, conflicting with `startSession()`. Harmless warning.
-- **Coverage review disabled** — Pausing the AR session for coverage review breaks texture alignment. Next approach: ARWorldMap-based post-upload coverage check with relocalized re-scan.
-- **Polling shows "processing failed" briefly** — Fixed: result view now accepts "complete" status. May still flash briefly on slow networks.
+- **Supplemental rescan capture not yet uploaded** — Gap rescan captures supplemental frames but `handleStopRescan()` does not yet package/upload them. See `docs/SUPPLEMENTAL_SCAN_MERGE.md` for implementation plan.
+- **DB_PASS deployment** — Cloud Run services use plain env var for DB_PASS (not Secret Manager) after a secret reference broke during redeploy. Should be migrated back to Secret Manager.
 
 ## Remaining Docs (current)
 
 | Document | Status | Scope |
 |----------|--------|-------|
 | `CLAUDE.md` | **Current** | This file — system architecture and conventions |
+| `docs/SUPPLEMENTAL_SCAN_MERGE.md` | **Current** | Supplemental scan capture, upload & merge plan |
 | `PLATFORM_ARCHITECTURE.md` | **Current** | Marketplace expansion plan (accounts, orgs, bids, search) |
 | `cloud/processor/TEXTURE_PIPELINE.md` | **Current** | OpenMVS A/B test results, decimation findings |
 | `cloud/DNN_COMPONENT_TAXONOMY.md` | **Future** | DNN detection classes (Phase 2, not implemented) |

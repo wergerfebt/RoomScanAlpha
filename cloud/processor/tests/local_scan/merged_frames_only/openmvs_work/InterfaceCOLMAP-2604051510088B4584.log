@@ -1,0 +1,11 @@
+15:10:08 [App     ] OpenMVS x64 v2.3.0
+15:10:08 [App     ] Build date: Mar 31 2026, 16:09:44
+15:10:08 [App     ] CPU:  (10 cores)
+15:10:08 [App     ] RAM: 7.65GB Physical Memory 1024.00MB Virtual Memory
+15:10:08 [App     ] OS: Linux 6.12.76-linuxkit (aarch64)
+15:10:08 [App     ] Disk: 289.14GB (926.35GB) space
+15:10:08 [App     ] Command line: InterfaceCOLMAP -i /tests/local_scan/merged_frames_only/openmvs_work --image-folder /tests/local_scan/merged_frames_only/openmvs_work/images -o /tests/local_scan/merged_frames_only/openmvs_work/scene.mvs -w /tests/local_scan/merged_frames_only/openmvs_work
+15:10:08 [App     ] Reading cameras: /tests/local_scan/merged_frames_only/openmvs_work/sparse/cameras.txt
+15:10:08 [App     ] Reading images: /tests/local_scan/merged_frames_only/openmvs_work/sparse/images.txt
+15:10:08 [App     ] Reading points: /tests/local_scan/merged_frames_only/openmvs_work/sparse/points3D.txt
+15:10:08 [App     ] Exported data: 60 images, 0 points (6ms)

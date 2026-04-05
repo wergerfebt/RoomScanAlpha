@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Supplemental Merge — Texture Comparison</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, sans-serif; background: #1a1a1a; color: #f5f5f7; overflow: hidden; }
+  .container { display: flex; height: 100vh; }
+  .panel { flex: 1; position: relative; border-right: 2px solid #333; }
+  .panel:last-child { border-right: none; }
+  .label { position: absolute; top: 12px; left: 12px; z-index: 10; background: rgba(0,0,0,0.8);
+           padding: 8px 14px; border-radius: 6px; font-size: 13px; font-weight: 600;
+           line-height: 1.4; }
+  .label .title { font-size: 15px; }
+  .label .stat { font-size: 12px; font-weight: 400; opacity: 0.7; }
+  .label.half-a { border: 2px solid #ff6b6b; color: #ff6b6b; }
+  .label.half-b { border: 2px solid #ffd43b; color: #ffd43b; }
+  .label.merged { border: 2px solid #51cf66; color: #51cf66; }
+  canvas { display: block; width: 100%; height: 100%; }
+  .controls-hint { position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);
+                   background: rgba(0,0,0,0.8); padding: 8px 20px; border-radius: 6px;
+                   font-size: 12px; color: #888; z-index: 10; }
+  .loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+             font-size: 14px; color: #666; z-index: 5; }
+  .toggle-bar { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 20;
+                background: rgba(0,0,0,0.8); padding: 6px 12px; border-radius: 6px;
+                display: flex; gap: 12px; align-items: center; font-size: 13px; }
+  .toggle-bar label { cursor: pointer; display: flex; align-items: center; gap: 4px; }
+  .toggle-bar input { cursor: pointer; }
+</style>
+</head>
+<body>
+<div class="toggle-bar">
+  <label><input type="radio" name="res" value="preview" checked> Preview (10K)</label>
+  <label><input type="radio" name="res" value="standard"> HD (312K)</label>
+</div>
+<div class="container">
+  <div class="panel" id="panel-a">
+    <div class="label half-a">
+      <div class="title">HALF A — 30 frames</div>
+      <div class="stat">Preview: 41.1% textured</div>
+      <div class="stat">HD: 24.4% textured</div>
+    </div>
+    <div class="loading" id="loading-a">Loading mesh...</div>
+  </div>
+  <div class="panel" id="panel-b">
+    <div class="label half-b">
+      <div class="title">HALF B — 30 frames</div>
+      <div class="stat">Preview: 39.8% textured</div>
+      <div class="stat">HD: 20.4% textured</div>
+    </div>
+    <div class="loading" id="loading-b">Loading mesh...</div>
+  </div>
+  <div class="panel" id="panel-merged">
+    <div class="label merged">
+      <div class="title">MERGED — 60 frames</div>
+      <div class="stat">Preview: 61.0% textured (+20pp)</div>
+      <div class="stat">HD: 32.8% textured (+10pp)</div>
+    </div>
+    <div class="loading" id="loading-m">Loading mesh...</div>
+  </div>
+</div>
+<div class="controls-hint">Click + drag to orbit · Scroll to zoom · All views synced</div>
+
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.162.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
+
+const CONFIGS = {
+  a: {
+    preview: { dir: 'scan_half_a/openmvs_work/preview' },
+    standard: { dir: 'scan_half_a/openmvs_work/standard' },
+  },
+  b: {
+    preview: { dir: 'scan_half_b/openmvs_work/preview' },
+    standard: { dir: 'scan_half_b/openmvs_work/standard' },
+  },
+  merged: {
+    preview: { dir: 'merged_frames_only/openmvs_work/preview' },
+    standard: { dir: 'merged_frames_only/openmvs_work/standard' },
+  },
+};
+
+const views = {};
+let currentRes = 'preview';
+
+function createView(containerId, loadingId) {
+  const container = document.getElementById(containerId);
+  const loadingEl = document.getElementById(loadingId);
+  const w = container.clientWidth, h = container.clientHeight;
+
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(w, h);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  container.appendChild(renderer.domElement);
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x111111);
+
+  // Lighting
+  scene.add(new THREE.AmbientLight(0xffffff, 2.0));
+  const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
+  dirLight.position.set(0, 2, 0);
+  scene.add(dirLight);
+
+  const camera = new THREE.PerspectiveCamera(60, w / h, 0.01, 100);
+  // Start camera inside the room looking outward (mesh center ~ -0.3, 0.4, 0.7)
+  camera.position.set(-0.3, 0.8, 0.7);
+
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.target.set(-0.3, 0.8, 1.7);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.1;
+  controls.rotateSpeed = 0.5;
+  controls.update();
+
+  return { renderer, scene, camera, controls, container, loadingEl, meshGroup: null };
+}
+
+function loadMesh(view, dir) {
+  // Remove old mesh
+  if (view.meshGroup) {
+    view.scene.remove(view.meshGroup);
+    view.meshGroup.traverse(c => {
+      if (c.geometry) c.geometry.dispose();
+      if (c.material) {
+        if (c.material.map) c.material.map.dispose();
+        c.material.dispose();
+      }
+    });
+    view.meshGroup = null;
+  }
+
+  view.loadingEl.style.display = 'block';
+
+  const mtlLoader = new MTLLoader();
+  mtlLoader.setPath(dir + '/');
+  mtlLoader.load('textured.mtl', (materials) => {
+    materials.preload();
+
+    // Fix texture colorspace
+    Object.values(materials.materials).forEach(mat => {
+      if (mat.map) {
+        mat.map.colorSpace = THREE.SRGBColorSpace;
+        mat.map.needsUpdate = true;
+      }
+      // Make sure transparency is off (OpenMVS sometimes sets Tr=1)
+      mat.transparent = false;
+      mat.opacity = 1.0;
+    });
+
+    const objLoader = new OBJLoader();
+    objLoader.setMaterials(materials);
+    objLoader.setPath(dir + '/');
+    objLoader.load('textured.obj', (group) => {
+      view.meshGroup = group;
+      view.scene.add(group);
+      view.loadingEl.style.display = 'none';
+
+      // Auto-center camera on first load — position inside room
+      if (!view._centered) {
+        const box = new THREE.Box3().setFromObject(group);
+        const center = box.getCenter(new THREE.Vector3());
+        const size = box.getSize(new THREE.Vector3());
+        // Place camera at center, eye height, looking along +Z
+        view.camera.position.set(center.x, center.y, center.z);
+        view.controls.target.set(center.x, center.y, center.z + 1);
+        view.controls.update();
+        view._centered = true;
+        console.log('Mesh loaded, center:', center, 'size:', size);
+      }
+    },
+    (xhr) => {
+      if (xhr.total > 0) {
+        view.loadingEl.textContent = `Loading... ${Math.round(xhr.loaded / xhr.total * 100)}%`;
+      }
+    },
+    (err) => {
+      view.loadingEl.textContent = 'Failed to load mesh';
+      console.error('OBJ load error:', err);
+    });
+  },
+  undefined,
+  (err) => {
+    // MTL failed — load OBJ without materials
+    view.loadingEl.textContent = 'Loading OBJ (no MTL)...';
+    const objLoader = new OBJLoader();
+    objLoader.setPath(dir + '/');
+    objLoader.load('textured.obj', (group) => {
+      view.meshGroup = group;
+      view.scene.add(group);
+      view.loadingEl.style.display = 'none';
+    });
+  });
+}
+
+// Create three views
+views.a = createView('panel-a', 'loading-a');
+views.b = createView('panel-b', 'loading-b');
+views.merged = createView('panel-merged', 'loading-m');
+
+// Load initial meshes
+function loadAll(res) {
+  loadMesh(views.a, CONFIGS.a[res].dir);
+  loadMesh(views.b, CONFIGS.b[res].dir);
+  loadMesh(views.merged, CONFIGS.merged[res].dir);
+}
+loadAll(currentRes);
+
+// Resolution toggle
+document.querySelectorAll('input[name="res"]').forEach(radio => {
+  radio.addEventListener('change', (e) => {
+    currentRes = e.target.value;
+    loadAll(currentRes);
+  });
+});
+
+// Sync cameras (with guard to prevent infinite recursion)
+let syncing = false;
+function syncFrom(src, dsts) {
+  if (syncing) return;
+  syncing = true;
+  dsts.forEach(dst => {
+    dst.camera.position.copy(src.camera.position);
+    dst.camera.quaternion.copy(src.camera.quaternion);
+    dst.controls.target.copy(src.controls.target);
+    dst.controls.update();
+  });
+  syncing = false;
+}
+
+views.a.controls.addEventListener('change', () => syncFrom(views.a, [views.b, views.merged]));
+views.b.controls.addEventListener('change', () => syncFrom(views.b, [views.a, views.merged]));
+views.merged.controls.addEventListener('change', () => syncFrom(views.merged, [views.a, views.b]));
+
+// Animate
+function animate() {
+  requestAnimationFrame(animate);
+  Object.values(views).forEach(v => {
+    v.controls.update();
+    v.renderer.render(v.scene, v.camera);
+  });
+}
+animate();
+
+// Resize
+window.addEventListener('resize', () => {
+  Object.values(views).forEach(v => {
+    const w = v.container.clientWidth, h = v.container.clientHeight;
+    v.renderer.setSize(w, h);
+    v.camera.aspect = w / h;
+    v.camera.updateProjectionMatrix();
+  });
+});
+</script>
+</body>
+</html>
