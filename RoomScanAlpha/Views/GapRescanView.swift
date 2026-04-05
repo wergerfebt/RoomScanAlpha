@@ -8,6 +8,7 @@ struct GapRescanView: View {
     let sessionManager: ARSessionManager
     let viewModel: ScanViewModel
     let uncoveredFaces: [CloudUploader.UncoveredFace]
+    let holeFaces: [CloudUploader.UncoveredFace]
     let onStop: () -> Void
 
     @State private var supplementalFrameCount: Int = 0
@@ -17,6 +18,7 @@ struct GapRescanView: View {
             ARGapOverlaySceneView(
                 sessionManager: sessionManager,
                 uncoveredFaces: uncoveredFaces,
+                holeFaces: holeFaces,
                 onFrameCountUpdate: { count in
                     supplementalFrameCount = count
                 }
@@ -27,17 +29,28 @@ struct GapRescanView: View {
                 // Top status bar
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("\(uncoveredFaces.count) gap patches")
-                            .font(.headline)
-                            .foregroundStyle(.white)
+                        HStack(spacing: 12) {
+                            HStack(spacing: 4) {
+                                Circle().fill(.orange).frame(width: 8, height: 8)
+                                Text("\(uncoveredFaces.count) untextured")
+                            }
+                            if !holeFaces.isEmpty {
+                                HStack(spacing: 4) {
+                                    Circle().fill(.red).frame(width: 8, height: 8)
+                                    Text("\(holeFaces.count) holes")
+                                }
+                            }
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.white)
                         Text("\(supplementalFrameCount) supplemental frames")
                             .font(.caption)
                             .foregroundStyle(.white.opacity(0.7))
                     }
                     Spacer()
-                    Text("Walk to orange areas")
+                    Text("Walk to highlighted areas")
                         .font(.caption)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(.white.opacity(0.7))
                 }
                 .padding()
                 .background(.black.opacity(0.6))
@@ -65,7 +78,7 @@ struct GapRescanView: View {
         .onAppear {
             sessionManager.isCapturing = true
             sessionManager.frameCaptureManager.reset()
-            print("[RoomScanAlpha] Gap rescan started — \(uncoveredFaces.count) patches")
+            print("[RoomScanAlpha] Gap rescan started — \(uncoveredFaces.count) untextured, \(holeFaces.count) holes")
         }
         .onDisappear {
             sessionManager.isCapturing = false
@@ -78,6 +91,7 @@ struct GapRescanView: View {
 private struct ARGapOverlaySceneView: UIViewRepresentable {
     let sessionManager: ARSessionManager
     let uncoveredFaces: [CloudUploader.UncoveredFace]
+    let holeFaces: [CloudUploader.UncoveredFace]
     let onFrameCountUpdate: (Int) -> Void
 
     func makeUIView(context: Context) -> ARSCNView {
@@ -87,10 +101,19 @@ private struct ARGapOverlaySceneView: UIViewRepresentable {
         scnView.automaticallyUpdatesLighting = true
         scnView.rendersContinuously = true
 
-        // Add gap triangles as a single merged mesh
-        let gapMesh = buildGapMesh(faces: uncoveredFaces)
-        gapMesh.name = "gapPatches"
-        scnView.scene.rootNode.addChildNode(gapMesh)
+        // Orange: untextured faces (OpenMVS couldn't assign a camera)
+        if !uncoveredFaces.isEmpty {
+            let gapMesh = buildOverlayMesh(faces: uncoveredFaces, color: .orange)
+            gapMesh.name = "gapPatches"
+            scnView.scene.rootNode.addChildNode(gapMesh)
+        }
+
+        // Red: mesh holes (rays escape without hitting geometry)
+        if !holeFaces.isEmpty {
+            let holeMesh = buildOverlayMesh(faces: holeFaces, color: .red)
+            holeMesh.name = "holePatches"
+            scnView.scene.rootNode.addChildNode(holeMesh)
+        }
 
         return scnView
     }
@@ -101,9 +124,7 @@ private struct ARGapOverlaySceneView: UIViewRepresentable {
         Coordinator(sessionManager: sessionManager, onFrameCountUpdate: onFrameCountUpdate)
     }
 
-    /// Build a single SCNNode containing all gap triangles as one merged geometry.
-    /// Much more efficient than one node per face, and renders the actual triangle shape.
-    private func buildGapMesh(faces: [CloudUploader.UncoveredFace]) -> SCNNode {
+    private func buildOverlayMesh(faces: [CloudUploader.UncoveredFace], color: UIColor) -> SCNNode {
         var positions: [SCNVector3] = []
         var indices: [UInt32] = []
 
@@ -121,7 +142,7 @@ private struct ARGapOverlaySceneView: UIViewRepresentable {
         let geometry = SCNGeometry(sources: [vertexSource], elements: [element])
 
         let material = SCNMaterial()
-        material.diffuse.contents = UIColor.orange.withAlphaComponent(0.5)
+        material.diffuse.contents = color.withAlphaComponent(0.5)
         material.isDoubleSided = true
         material.writesToDepthBuffer = false
         geometry.materials = [material]

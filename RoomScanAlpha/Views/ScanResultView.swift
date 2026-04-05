@@ -299,9 +299,15 @@ struct ScanResultView: View {
                     Text("\(pct)% Coverage")
                         .font(.headline)
                     Spacer()
-                    Text("\(result.uncoveredCount) uncovered faces")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text("\(result.uncoveredCount) untextured")
+                            .foregroundStyle(.orange)
+                        if result.holeCount > 0 {
+                            Text("\(result.holeCount) mesh holes")
+                                .foregroundStyle(.red)
+                        }
+                    }
+                    .font(.caption)
                 }
 
                 if pct < 90, let onRescanGaps {

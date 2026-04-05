@@ -84,6 +84,7 @@ struct ContentView: View {
                     sessionManager: sessionManager,
                     viewModel: viewModel,
                     uncoveredFaces: viewModel.cloudCoverageResult?.uncoveredFaces ?? [],
+                    holeFaces: viewModel.cloudCoverageResult?.holeFaces ?? [],
                     onStop: { handleStopRescan() }
                 )
             case .annotatingCorners:

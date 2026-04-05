@@ -367,6 +367,8 @@ final class CloudUploader {
         let totalFaces: Int
         let uncoveredCount: Int
         let uncoveredFaces: [UncoveredFace]
+        let holeCount: Int
+        let holeFaces: [UncoveredFace]
     }
 
     struct UncoveredFace {
@@ -407,11 +409,24 @@ final class CloudUploader {
             return UncoveredFace(vertices: verts)
         }
 
+        let holes = (json["hole_faces"] as? [[String: Any]] ?? []).compactMap { face -> UncoveredFace? in
+            guard let rawVerts = face["vertices"] as? [Any] else { return nil }
+            let verts: [[Float]] = rawVerts.compactMap { rawV in
+                guard let arr = rawV as? [Any] else { return nil }
+                let floats = arr.compactMap { ($0 as? NSNumber)?.floatValue }
+                return floats.count == 3 ? floats : nil
+            }
+            guard verts.count == 3 else { return nil }
+            return UncoveredFace(vertices: verts)
+        }
+
         return CoverageResult(
             coverageRatio: (json["coverage_ratio"] as? Double).map { Float($0) } ?? 0,
             totalFaces: json["total_faces"] as? Int ?? 0,
             uncoveredCount: json["uncovered_count"] as? Int ?? 0,
-            uncoveredFaces: faces
+            uncoveredFaces: faces,
+            holeCount: json["hole_count"] as? Int ?? 0,
+            holeFaces: holes
         )
     }
 

@@ -947,6 +947,74 @@ async def check_coverage(request: Request) -> dict:
               f"area: {uncovered_area:.2f}/{total_area:.2f} m² "
               f"({int((1 - coverage_ratio) * 100)}% gaps)")
 
+        # --- Mesh hole detection via ray casting ---
+        import trimesh as _trimesh
+
+        hole_faces = []
+        try:
+            tri_mesh = _trimesh.Trimesh(
+                vertices=vertices,
+                faces=np.array(face_vert_indices, dtype=np.int64),
+                process=False,
+            )
+            center = vertices.mean(axis=0)
+            bbox_min = vertices.min(axis=0) - 0.1
+            bbox_max = vertices.max(axis=0) + 0.1
+
+            # 10K fibonacci-sphere rays from mesh centroid
+            n_rays = 10000
+            golden_ratio = (1 + np.sqrt(5)) / 2
+            directions = np.zeros((n_rays, 3))
+            for ri in range(n_rays):
+                theta = np.arccos(1 - 2 * (ri + 0.5) / n_rays)
+                phi = 2 * np.pi * ri / golden_ratio
+                directions[ri] = [np.sin(theta) * np.cos(phi),
+                                  np.sin(theta) * np.sin(phi),
+                                  np.cos(theta)]
+            origins = np.tile(center, (n_rays, 1))
+
+            _, ray_ids, _ = tri_mesh.ray.intersects_location(origins, directions, multiple_hits=False)
+            hit_set = set(ray_ids)
+            miss_indices = [i for i in range(n_rays) if i not in hit_set]
+
+            patch_size = 0.15
+            for mi in miss_indices:
+                d = directions[mi]
+                # Ray-AABB exit point
+                t_max = np.inf
+                for ax in range(3):
+                    if abs(d[ax]) < 1e-10:
+                        continue
+                    t1 = (bbox_min[ax] - center[ax]) / d[ax]
+                    t2 = (bbox_max[ax] - center[ax]) / d[ax]
+                    t_max = min(t_max, max(t1, t2))
+                if t_max <= 0 or t_max == np.inf:
+                    continue
+
+                hit_pt = center + d * t_max
+                up = np.array([0, 1, 0]) if abs(d[1]) < 0.9 else np.array([1, 0, 0])
+                right = np.cross(d, up)
+                right = right / (np.linalg.norm(right) + 1e-10) * patch_size * 0.5
+                up_v = np.cross(right, d)
+                up_v = up_v / (np.linalg.norm(up_v) + 1e-10) * patch_size * 0.5
+
+                p0, p1, p2, p3 = hit_pt - right - up_v, hit_pt + right - up_v, hit_pt + right + up_v, hit_pt - right + up_v
+                hole_faces.append({"vertices": [
+                    [round(float(p0[0]), 4), round(float(p0[1]), 4), round(float(p0[2]), 4)],
+                    [round(float(p1[0]), 4), round(float(p1[1]), 4), round(float(p1[2]), 4)],
+                    [round(float(p2[0]), 4), round(float(p2[1]), 4), round(float(p2[2]), 4)],
+                ]})
+                hole_faces.append({"vertices": [
+                    [round(float(p0[0]), 4), round(float(p0[1]), 4), round(float(p0[2]), 4)],
+                    [round(float(p2[0]), 4), round(float(p2[1]), 4), round(float(p2[2]), 4)],
+                    [round(float(p3[0]), 4), round(float(p3[1]), 4), round(float(p3[2]), 4)],
+                ]})
+
+            print(f"[Coverage] Ray cast: {n_rays} rays, {len(hit_set)} hits, "
+                  f"{len(miss_indices)} misses → {len(hole_faces)} hole triangles")
+        except Exception as e:
+            print(f"[Coverage] Hole detection failed: {e}")
+
         return {
             "status": "ok",
             "coverage_ratio": round(coverage_ratio, 3),
@@ -954,7 +1022,9 @@ async def check_coverage(request: Request) -> dict:
             "uncovered_count": len(uncovered),
             "uncovered_area_m2": round(uncovered_area, 2),
             "total_area_m2": round(total_area, 2),
-            "uncovered_faces": uncovered[:2000],  # Cap response size
+            "uncovered_faces": uncovered[:2000],
+            "hole_count": len(hole_faces),
+            "hole_faces": hole_faces[:2000],
         }
 
 
