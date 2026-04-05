@@ -20,7 +20,7 @@ struct ProjectOverviewView: View {
                         // Project info header
                         Section {
                             VStack(alignment: .leading, spacing: 8) {
-                                Text(rfq.title)
+                                Text(rfq.displayTitle)
                                     .font(.title3)
                                     .fontWeight(.bold)
 
@@ -38,10 +38,8 @@ struct ProjectOverviewView: View {
                                     }
                                 }
 
-                                if let desc = rfq.description,
-                                   desc.contains("\n"),
-                                   let detail = desc.components(separatedBy: "\n\n").last, !detail.isEmpty {
-                                    Text(detail)
+                                if let desc = rfq.description, !desc.isEmpty {
+                                    Text(desc)
                                         .font(.subheadline)
                                         .foregroundStyle(.secondary)
                                 }
@@ -153,13 +151,16 @@ struct ProjectOverviewView: View {
             let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
             guard let roomsArray = json["rooms"] as? [[String: Any]] else { return }
 
+            // Preserve local labels for scans uploaded before room_label was sent to cloud
+            let localLabels = Dictionary(rooms.map { ($0.id, $0.roomLabel) }, uniquingKeysWith: { _, last in last })
+
             rooms = roomsArray.compactMap { dict in
                 guard let id = dict["scan_id"] as? String ?? dict["id"] as? String else { return nil }
                 let label = dict["room_label"] as? String
                 let scope = dict["scope"] as? [String: Any]
                 return RoomSummary(
                     id: id,
-                    roomLabel: (label?.isEmpty == false) ? label! : "Untitled Room",
+                    roomLabel: (label?.isEmpty == false) ? label! : (localLabels[id] ?? "Untitled Room"),
                     status: dict["scan_status"] as? String ?? "unknown",
                     floorAreaSqft: dict["floor_area_sqft"] as? Double,
                     ceilingHeightFt: dict["ceiling_height_ft"] as? Double,

@@ -2,17 +2,19 @@ import Foundation
 
 struct RFQ: Identifiable, Codable, Equatable {
     let id: String
+    let title: String?
     let description: String?
     let status: String
     let createdAt: String?
     let address: String?
 
-    var title: String {
-        description ?? "Untitled Project"
+    var displayTitle: String {
+        if let t = title, !t.isEmpty { return t }
+        return "Untitled Project"
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, description, status, address
+        case id, title, description, status, address
         case createdAt = "created_at"
     }
 }

@@ -25,6 +25,7 @@ final class RFQService {
                   let status = dict["status"] as? String else { return nil }
             return RFQ(
                 id: id,
+                title: dict["title"] as? String,
                 description: dict["description"] as? String,
                 status: status,
                 createdAt: dict["created_at"] as? String,
@@ -51,7 +52,7 @@ final class RFQService {
         }
     }
 
-    func createRFQ(description: String, address: String? = nil) async throws -> RFQ {
+    func createRFQ(title: String, description: String = "", address: String? = nil) async throws -> RFQ {
         let token = try await AuthManager.shared.getToken()
         let url = URL(string: "\(apiBaseURL)/api/rfqs")!
         var request = URLRequest(url: url)
@@ -59,7 +60,7 @@ final class RFQService {
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        var body: [String: Any] = ["description": description]
+        var body: [String: Any] = ["title": title, "description": description]
         if let address, !address.isEmpty {
             body["address"] = address
         }
@@ -73,6 +74,7 @@ final class RFQService {
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
         return RFQ(
             id: json["id"] as? String ?? "",
+            title: json["title"] as? String,
             description: json["description"] as? String,
             status: json["status"] as? String ?? "scan_pending",
             createdAt: nil,

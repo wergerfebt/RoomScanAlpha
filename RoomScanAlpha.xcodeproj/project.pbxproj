@@ -64,6 +64,8 @@
 		A1111111000000000000002E /* ProjectOverviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000003B /* ProjectOverviewView.swift */; };
 		A1111111000000000000002F /* NewProjectSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000003C /* NewProjectSheet.swift */; };
 		A11111110000000000000030 /* CoverageReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000003D /* CoverageReviewView.swift */; };
+		A11111110000000000000035 /* RelocalizationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000042 /* RelocalizationView.swift */; };
+		A11111110000000000000036 /* GapRescanView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000043 /* GapRescanView.swift */; };
 		A11111110000000000000031 /* RoomViewerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000003E /* RoomViewerView.swift */; };
 		A11111110000000000000032 /* CoverageAudit.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000003F /* CoverageAudit.swift */; };
 		A11111110000000000000033 /* MeshCoverageAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000040 /* MeshCoverageAnalyzer.swift */; };
@@ -137,6 +139,8 @@
 		A1000000000000000000003B /* ProjectOverviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectOverviewView.swift; sourceTree = "<group>"; };
 		A1000000000000000000003C /* NewProjectSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewProjectSheet.swift; sourceTree = "<group>"; };
 		A1000000000000000000003D /* CoverageReviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoverageReviewView.swift; sourceTree = "<group>"; };
+		A10000000000000000000042 /* RelocalizationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelocalizationView.swift; sourceTree = "<group>"; };
+		A10000000000000000000043 /* GapRescanView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GapRescanView.swift; sourceTree = "<group>"; };
 		A1000000000000000000003E /* RoomViewerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoomViewerView.swift; sourceTree = "<group>"; };
 		A1000000000000000000003F /* CoverageAudit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoverageAudit.swift; sourceTree = "<group>"; };
 		A10000000000000000000040 /* MeshCoverageAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeshCoverageAnalyzer.swift; sourceTree = "<group>"; };
@@ -233,6 +237,8 @@
 				A1000000000000000000003B /* ProjectOverviewView.swift */,
 				A1000000000000000000003C /* NewProjectSheet.swift */,
 				A1000000000000000000003D /* CoverageReviewView.swift */,
+				A10000000000000000000042 /* RelocalizationView.swift */,
+				A10000000000000000000043 /* GapRescanView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -449,6 +455,8 @@
 				A1111111000000000000002F /* NewProjectSheet.swift in Sources */,
 				A11111110000000000000034 /* RoomViewerCache.swift in Sources */,
 				A11111110000000000000030 /* CoverageReviewView.swift in Sources */,
+				A11111110000000000000035 /* RelocalizationView.swift in Sources */,
+				A11111110000000000000036 /* GapRescanView.swift in Sources */,
 				A11111110000000000000032 /* CoverageAudit.swift in Sources */,
 				A11111110000000000000033 /* MeshCoverageAnalyzer.swift in Sources */,
 			);

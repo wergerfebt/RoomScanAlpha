@@ -817,11 +817,13 @@ def _compute_from_annotation(annotation: Optional[dict], ply_metrics: dict) -> d
 
 @app.post("/coverage")
 async def check_coverage(request: Request) -> dict:
-    """Check texture coverage on a decimated mesh — returns uncovered face locations.
+    """Check texture coverage by analyzing OpenMVS UV mapping.
 
-    Called by the iOS app after uploading scan.zip but before triggering full processing.
-    Decimates the mesh to 10K faces (matching OpenMVS preview resolution), then checks
-    which faces have at least one viable keyframe camera.
+    OpenMVS assigns degenerate UV coordinates (near-zero UV area) to faces
+    it cannot texture. This is the authoritative signal — not pixel colors.
+
+    Downloads the preview textured OBJ from GCS, parses per-face UV triangles,
+    and flags faces with near-zero UV area as uncovered.
 
     Returns uncovered face centroids + normals so the app can render AR overlay patches.
     """
@@ -835,64 +837,123 @@ async def check_coverage(request: Request) -> dict:
 
     print(f"[Coverage] Starting coverage check for scan {scan_id}")
 
-    import trimesh
+    from PIL import Image
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        zip_path = os.path.join(tmpdir, "scan.zip")
-        extract_dir = os.path.join(tmpdir, "scan")
+        # Download textured OBJ + atlas from GCS
+        gcs_base = blob_path.rsplit("/", 1)[0]  # scans/{rfq_id}/{scan_id}
+        obj_blob = f"{gcs_base}/textured.obj"
+        atlas_blob = f"{gcs_base}/textured_material_00_map_Kd.jpg"
+        obj_path = os.path.join(tmpdir, "textured.obj")
+        atlas_path = os.path.join(tmpdir, "atlas.jpg")
 
-        # Download and extract
         try:
-            _download_from_gcs(blob_path, zip_path)
-            _extract_zip(zip_path, extract_dir)
+            _download_from_gcs(obj_blob, obj_path)
+            _download_from_gcs(atlas_blob, atlas_path)
         except Exception as e:
-            return {"status": "error", "error": str(e)}
+            return {"status": "error", "error": f"Failed to download textured mesh: {e}"}
 
-        scan_root = _find_scan_root(extract_dir)
-        if not scan_root:
-            return {"status": "error", "error": "Could not find scan root directory"}
+        # Load atlas for black-face detection
+        atlas_img = Image.open(atlas_path).convert("RGB")
+        atlas_pixels = np.array(atlas_img)
+        atlas_h, atlas_w = atlas_pixels.shape[:2]
 
-        # Parse mesh
-        ply_path = os.path.join(scan_root, "mesh.ply")
-        if not os.path.exists(ply_path):
-            return {"status": "error", "error": "mesh.ply not found"}
+        # Parse OBJ manually — trimesh can mangle per-face UV indices
+        vertices = []
+        vt_coords = []
+        face_vert_indices = []
+        face_uv_indices = []
 
-        mesh = trimesh.load(ply_path, process=False)
-        original_faces = len(mesh.faces)
-        print(f"[Coverage] Loaded mesh: {original_faces} faces")
+        with open(obj_path) as f:
+            for line in f:
+                if line.startswith("v "):
+                    parts = line.split()
+                    vertices.append([float(parts[1]), float(parts[2]), float(parts[3])])
+                elif line.startswith("vt "):
+                    parts = line.split()
+                    vt_coords.append([float(parts[1]), float(parts[2])])
+                elif line.startswith("f "):
+                    parts = line.split()[1:]
+                    vi, ui = [], []
+                    for p in parts:
+                        segs = p.split("/")
+                        vi.append(int(segs[0]) - 1)
+                        ui.append(int(segs[1]) - 1 if len(segs) >= 2 and segs[1] else 0)
+                    face_vert_indices.append(vi)
+                    face_uv_indices.append(ui)
 
-        # Decimate to 10K faces (same as OpenMVS preview)
-        target_faces = 10000
-        if original_faces > target_faces:
-            mesh = mesh.simplify_quadric_decimation(face_count=target_faces)
-            print(f"[Coverage] Decimated: {original_faces} → {len(mesh.faces)} faces")
+        vertices = np.array(vertices, dtype=np.float64)
+        vt = np.array(vt_coords, dtype=np.float64)
+        total_faces = len(face_vert_indices)
+        print(f"[Coverage] Parsed OBJ: {len(vertices)} vertices, {len(vt)} UVs, {total_faces} faces")
 
-        # Load keyframe camera data from metadata
-        metadata_path = os.path.join(scan_root, "metadata.json")
-        if not os.path.exists(metadata_path):
-            return {"status": "error", "error": "metadata.json not found"}
+        # Compute per-face 3D area and UV area
+        uncovered = []
+        total_area = 0.0
+        uncovered_area = 0.0
+        # UV area threshold — OpenMVS assigns degenerate (near-zero) UV to untextured faces
+        UV_AREA_THRESHOLD = 1e-6
 
-        with open(metadata_path) as f:
-            metadata = json.load(f)
+        for i in range(total_faces):
+            vi = face_vert_indices[i]
+            ui = face_uv_indices[i]
 
-        cameras = _load_cameras(scan_root, metadata)
-        if not cameras:
-            return {"status": "error", "error": "No keyframe cameras found"}
+            # 3D face area
+            v0, v1, v2 = vertices[vi[0]], vertices[vi[1]], vertices[vi[2]]
+            face_area = 0.5 * np.linalg.norm(np.cross(v1 - v0, v2 - v0))
+            total_area += face_area
 
-        print(f"[Coverage] Loaded {len(cameras)} cameras")
+            # UV area (2D cross product)
+            uv0, uv1, uv2 = vt[ui[0]], vt[ui[1]], vt[ui[2]]
+            uv_area = 0.5 * abs(
+                (uv1[0] - uv0[0]) * (uv2[1] - uv0[1]) -
+                (uv2[0] - uv0[0]) * (uv1[1] - uv0[1])
+            )
 
-        # Check coverage per face
-        uncovered = _check_face_coverage(mesh, cameras)
+            is_gap = False
+            if uv_area < UV_AREA_THRESHOLD:
+                # Degenerate UV — OpenMVS couldn't assign a camera (orange in viewer)
+                is_gap = True
+            else:
+                # Valid UV — check if the sampled atlas pixel is black (dark/occluded)
+                uv_center_u = (uv0[0] + uv1[0] + uv2[0]) / 3.0
+                uv_center_v = (uv0[1] + uv1[1] + uv2[1]) / 3.0
+                px = int(np.clip(uv_center_u * atlas_w, 0, atlas_w - 1))
+                py = int(np.clip((1.0 - uv_center_v) * atlas_h, 0, atlas_h - 1))
+                color = atlas_pixels[py, px]
+                if int(color[0]) + int(color[1]) + int(color[2]) < 30:
+                    is_gap = True
 
-        coverage_ratio = 1.0 - (len(uncovered) / max(len(mesh.faces), 1))
-        print(f"[Coverage] {len(mesh.faces)} faces, {len(uncovered)} uncovered "
+            if is_gap:
+                uncovered_area += face_area
+                uncovered.append({
+                    "vertices": [
+                        [round(float(v0[0]), 4), round(float(v0[1]), 4), round(float(v0[2]), 4)],
+                        [round(float(v1[0]), 4), round(float(v1[1]), 4), round(float(v1[2]), 4)],
+                        [round(float(v2[0]), 4), round(float(v2[1]), 4), round(float(v2[2]), 4)],
+                    ],
+                })
+
+        n_degenerate = sum(1 for fi in range(total_faces)
+                          if len(face_uv_indices[fi]) >= 3 and
+                          0.5 * abs((vt[face_uv_indices[fi][1]][0] - vt[face_uv_indices[fi][0]][0]) *
+                                    (vt[face_uv_indices[fi][2]][1] - vt[face_uv_indices[fi][0]][1]) -
+                                    (vt[face_uv_indices[fi][2]][0] - vt[face_uv_indices[fi][0]][0]) *
+                                    (vt[face_uv_indices[fi][1]][1] - vt[face_uv_indices[fi][0]][1])) < UV_AREA_THRESHOLD)
+        n_black = len(uncovered) - n_degenerate
+        coverage_ratio = 1.0 - (uncovered_area / max(total_area, 1e-6))
+        print(f"[Coverage] {total_faces} faces: {n_degenerate} degenerate UV + {n_black} black = "
+              f"{len(uncovered)} uncovered, "
+              f"area: {uncovered_area:.2f}/{total_area:.2f} m² "
               f"({int((1 - coverage_ratio) * 100)}% gaps)")
 
         return {
             "status": "ok",
             "coverage_ratio": round(coverage_ratio, 3),
-            "total_faces": len(mesh.faces),
+            "total_faces": total_faces,
             "uncovered_count": len(uncovered),
+            "uncovered_area_m2": round(uncovered_area, 2),
+            "total_area_m2": round(total_area, 2),
             "uncovered_faces": uncovered[:2000],  # Cap response size
         }
 

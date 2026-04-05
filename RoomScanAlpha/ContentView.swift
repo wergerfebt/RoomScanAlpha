@@ -68,6 +68,24 @@ struct ContentView: View {
             case .capturingPanorama:
                 // Deprecated: panorama replaced by denser walk-around capture
                 EmptyView()
+            case .relocalizingForRescan:
+                RelocalizationView(
+                    sessionManager: sessionManager,
+                    onRelocalized: {
+                        viewModel.state = .rescanningGaps
+                    },
+                    onCancel: {
+                        sessionManager.pauseSession()
+                        viewModel.state = .viewingResults
+                    }
+                )
+            case .rescanningGaps:
+                GapRescanView(
+                    sessionManager: sessionManager,
+                    viewModel: viewModel,
+                    uncoveredFaces: viewModel.cloudCoverageResult?.uncoveredFaces ?? [],
+                    onStop: { handleStopRescan() }
+                )
             case .annotatingCorners:
                 CornerAnnotationView(
                     sessionManager: sessionManager,
@@ -110,6 +128,9 @@ struct ContentView: View {
                     onScanAnother: {
                         // Keep same RFQ, go to scanReady for another room
                         viewModel.prepareScan()
+                    },
+                    onRescanGaps: {
+                        handleRescanGaps()
                     }
                 )
             }
@@ -184,6 +205,7 @@ struct ContentView: View {
         sessionManager.snapshotMeshAnchors()
         // Denser walk-around capture replaces panorama — go straight to labeling
         sessionManager.pauseSession()
+        saveWorldMapInBackground()
         waitForFrameSelectionThen {
             advanceToLabelingOrWarning()
         }
@@ -193,8 +215,72 @@ struct ContentView: View {
         viewModel.cornerAnnotation = nil
         sessionManager.snapshotMeshAnchors()
         sessionManager.pauseSession()
+        saveWorldMapInBackground()
         waitForFrameSelectionThen {
             advanceToLabelingOrWarning()
+        }
+    }
+
+    private func checkCoverageAutomatically(scanId: String, rfqId: String) {
+        viewModel.isCheckingCoverage = true
+        viewModel.coverageError = nil
+
+        Task {
+            do {
+                let result = try await CloudUploader.shared.checkCoverage(scanId: scanId, rfqId: rfqId)
+                viewModel.cloudCoverageResult = result
+                viewModel.isCheckingCoverage = false
+                print("[RoomScanAlpha] Auto coverage check: \(Int(result.coverageRatio * 100))%, \(result.uncoveredCount) gaps")
+            } catch {
+                viewModel.coverageError = error.localizedDescription
+                viewModel.isCheckingCoverage = false
+                print("[RoomScanAlpha] Auto coverage check failed: \(error)")
+            }
+        }
+    }
+
+    private func handleStopRescan() {
+        sessionManager.isCapturing = false
+        let supplementalCount = sessionManager.frameCaptureManager.keyframeCount
+        sessionManager.pauseSession()
+        print("[RoomScanAlpha] Gap rescan stopped — \(supplementalCount) supplemental frames")
+
+        // Return to results — user has addressed the gaps, unlock action buttons
+        viewModel.hasCompletedRescan = true
+        viewModel.state = .viewingResults
+    }
+
+    private func handleRescanGaps() {
+        guard let rfqId = viewModel.selectedRFQ?.id else { return }
+        let worldMapURL = ARSessionManager.worldMapURL(rfqId: rfqId)
+
+        guard FileManager.default.fileExists(atPath: worldMapURL.path) else {
+            print("[RoomScanAlpha] No world map found at \(worldMapURL.path)")
+            viewModel.coverageError = "No saved world map — cannot relocalize"
+            return
+        }
+
+        do {
+            try sessionManager.startRelocalized(worldMapURL: worldMapURL)
+            viewModel.state = .relocalizingForRescan
+            print("[RoomScanAlpha] Starting relocalization from saved world map")
+        } catch {
+            print("[RoomScanAlpha] Failed to load world map: \(error)")
+            viewModel.coverageError = "Failed to load world map: \(error.localizedDescription)"
+        }
+    }
+
+    /// Save the ARWorldMap to disk after pausing the session.
+    /// Runs in background — does not block the scan flow.
+    private func saveWorldMapInBackground() {
+        guard let rfqId = viewModel.selectedRFQ?.id else { return }
+        let url = ARSessionManager.worldMapURL(rfqId: rfqId)
+        Task {
+            do {
+                try await sessionManager.saveWorldMap(to: url)
+            } catch {
+                print("[RoomScanAlpha] World map save failed: \(error.localizedDescription)")
+            }
         }
     }
 
@@ -299,6 +385,7 @@ struct ContentView: View {
                 let result = try await CloudUploader.shared.upload(
                     scanDirectoryURL: scanDirectoryURL,
                     rfqId: rfqId,
+                    roomLabel: viewModel.roomLabel,
                     onProgress: { status, fraction in
                         viewModel.uploadStatus = status
                         viewModel.uploadProgress = fraction
@@ -328,6 +415,11 @@ struct ContentView: View {
                 viewModel.scanResult = result
                 viewModel.saveToHistory(scanId: scanId, status: result.status)
                 print("[RoomScanAlpha] Scan result: \(result.status)")
+
+                // Auto-check coverage once processing completes
+                if result.status == "complete" || result.status == "scan_ready" {
+                    checkCoverageAutomatically(scanId: scanId, rfqId: rfqId)
+                }
             } catch {
                 viewModel.saveToHistory(scanId: scanId, status: "failed")
                 // Create a placeholder "failed" result so the UI can display the error state
@@ -440,7 +532,7 @@ struct ContentView: View {
                     HStack {
                         Image(systemName: "doc.text.fill")
                             .foregroundStyle(.blue)
-                        Text(rfq.description ?? "Untitled Project")
+                        Text(rfq.displayTitle)
                             .font(.subheadline)
                         Spacer()
                         Button("Change") {

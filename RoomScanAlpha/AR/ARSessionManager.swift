@@ -114,6 +114,61 @@ final class ARSessionManager: NSObject, ARSessionDelegate {
         isPanoramicCapture = false
     }
 
+    // MARK: - World Map Persistence
+
+    /// Capture the current ARWorldMap and save it to disk.
+    /// Must be called while the session is still running (before or immediately after pause).
+    func saveWorldMap(to url: URL) async throws {
+        let worldMap: ARWorldMap = try await withCheckedThrowingContinuation { continuation in
+            session.getCurrentWorldMap { map, error in
+                if let map = map {
+                    continuation.resume(returning: map)
+                } else {
+                    continuation.resume(throwing: error ?? NSError(
+                        domain: "ARSessionManager", code: 2,
+                        userInfo: [NSLocalizedDescriptionKey: "Failed to get world map"]
+                    ))
+                }
+            }
+        }
+        let data = try NSKeyedArchiver.archivedData(
+            withRootObject: worldMap, requiringSecureCoding: true
+        )
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try data.write(to: url)
+        print("[RoomScanAlpha] World map saved: \(data.count / 1024)KB → \(url.lastPathComponent)")
+    }
+
+    /// Load a saved ARWorldMap and start a relocalized session.
+    func startRelocalized(worldMapURL: URL) throws {
+        let data = try Data(contentsOf: worldMapURL)
+        guard let worldMap = try NSKeyedUnarchiver.unarchivedObject(
+            ofClass: ARWorldMap.self, from: data
+        ) else {
+            throw NSError(domain: "ARSessionManager", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "Failed to decode ARWorldMap"])
+        }
+
+        frameCaptureManager.reset()
+        let config = ARWorldTrackingConfiguration()
+        config.sceneReconstruction = .meshWithClassification
+        config.frameSemantics.insert(.sceneDepth)
+        config.initialWorldMap = worldMap
+        currentConfig = config
+        isPaused = false
+        session.run(config)
+        print("[RoomScanAlpha] AR session started with saved world map for relocalization")
+    }
+
+    /// URL for storing an ARWorldMap for a given RFQ.
+    static func worldMapURL(rfqId: String) -> URL {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        return docs.appendingPathComponent("worldmaps/\(rfqId).worldmap")
+    }
+
     // MARK: - ARSessionDelegate
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {

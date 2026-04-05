@@ -102,6 +102,7 @@ final class CloudUploader {
     func upload(
         scanDirectoryURL: URL,
         rfqId: String,
+        roomLabel: String = "",
         onProgress: @escaping (String, Double) -> Void
     ) async throws -> UploadResult {
         // 9.4: Prevent concurrent uploads
@@ -138,7 +139,7 @@ final class CloudUploader {
 
         // 5. Notify backend (with retry)
         onProgress("Finalizing...", 0.95)
-        let status = try await notifyComplete(scanId: scanId, token: token, rfqId: rfqId)
+        let status = try await notifyComplete(scanId: scanId, token: token, rfqId: rfqId, roomLabel: roomLabel)
         print("[RoomScanAlpha] Backend notified: \(status)")
 
         // 6. Persist scan ID
@@ -269,14 +270,14 @@ final class CloudUploader {
         }
     }
 
-    private func notifyComplete(scanId: String, token: String, rfqId: String) async throws -> String {
+    private func notifyComplete(scanId: String, token: String, rfqId: String, roomLabel: String = "") async throws -> String {
         let url = URL(string: "\(apiBaseURL)/api/rfqs/\(rfqId)/scans/complete")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        let body = try JSONSerialization.data(withJSONObject: ["scan_id": scanId])
+        let body = try JSONSerialization.data(withJSONObject: ["scan_id": scanId, "room_label": roomLabel])
         request.httpBody = body
 
         let (data, response) = try await executeWithRetry(request)
@@ -357,6 +358,61 @@ final class CloudUploader {
         }
 
         throw UploadError.pollTimeout
+    }
+
+    // MARK: - Coverage Check
+
+    struct CoverageResult {
+        let coverageRatio: Float
+        let totalFaces: Int
+        let uncoveredCount: Int
+        let uncoveredFaces: [UncoveredFace]
+    }
+
+    struct UncoveredFace {
+        let vertices: [[Float]]  // [[x,y,z], [x,y,z], [x,y,z]] triangle vertices in meters
+    }
+
+    /// Call the cloud coverage endpoint to check which mesh faces lack camera coverage.
+    func checkCoverage(scanId: String, rfqId: String) async throws -> CoverageResult {
+        let token = try await AuthManager.shared.getToken()
+        let url = URL(string: "\(apiBaseURL)/api/rfqs/\(rfqId)/scans/\(scanId)/coverage")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 90  // Coverage check downloads + decimates mesh
+
+        let (data, response) = try await executeWithRetry(request)
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw UploadError.apiError("Coverage check failed (HTTP \(statusCode)): \(body)")
+        }
+
+        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+        guard json["status"] as? String == "ok" else {
+            let error = json["error"] as? String ?? "Unknown error"
+            throw UploadError.apiError("Coverage check error: \(error)")
+        }
+
+        let faces = (json["uncovered_faces"] as? [[String: Any]] ?? []).compactMap { face -> UncoveredFace? in
+            guard let rawVerts = face["vertices"] as? [Any] else { return nil }
+            let verts: [[Float]] = rawVerts.compactMap { rawV in
+                guard let arr = rawV as? [Any] else { return nil }
+                let floats = arr.compactMap { ($0 as? NSNumber)?.floatValue }
+                return floats.count == 3 ? floats : nil
+            }
+            guard verts.count == 3 else { return nil }
+            return UncoveredFace(vertices: verts)
+        }
+
+        return CoverageResult(
+            coverageRatio: (json["coverage_ratio"] as? Double).map { Float($0) } ?? 0,
+            totalFaces: json["total_faces"] as? Int ?? 0,
+            uncoveredCount: json["uncovered_count"] as? Int ?? 0,
+            uncoveredFaces: faces
+        )
     }
 
     enum UploadError: LocalizedError {

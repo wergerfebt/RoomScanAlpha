@@ -66,6 +66,15 @@ final class ScanViewModel {
     /// Set to true when returning from coverage review to rescan. Cleared on new scan.
     var isResumingFromCoverage: Bool = false
 
+    // MARK: - Cloud Coverage Check
+
+    /// Uncovered face data from cloud coverage endpoint, for AR overlay rendering.
+    var cloudCoverageResult: CloudUploader.CoverageResult?
+    var isCheckingCoverage: Bool = false
+    var coverageError: String?
+    /// Set after user completes a gap re-scan — unlocks action buttons regardless of coverage.
+    var hasCompletedRescan: Bool = false
+
     // MARK: - UI Flags
 
     var showHistory = false
@@ -101,6 +110,10 @@ final class ScanViewModel {
         panoramaFrameCount = 0
         scanStartTime = nil
         isResumingFromCoverage = false
+        cloudCoverageResult = nil
+        isCheckingCoverage = false
+        coverageError = nil
+        hasCompletedRescan = false
         state = .scanReady
     }
 

@@ -6,6 +6,7 @@ struct ScanResultView: View {
     let meshAnchors: [ARMeshAnchor]
     let onDone: () -> Void
     let onScanAnother: (() -> Void)?
+    var onRescanGaps: (() -> Void)?
 
     @State private var showMeshViewer = false
     @State private var showFloorPlan = false
@@ -14,6 +15,21 @@ struct ScanResultView: View {
     @State private var selectedScopeItems: Set<String> = []
     @State private var scopeNotes: String = ""
     @State private var scopeSaved = false
+    @State private var processingMessageIndex: Int = 0
+    @State private var processingTimer: Timer?
+
+    private static let processingMessages = [
+        "Uploading mesh to processing server...",
+        "Reconstructing 3D geometry...",
+        "Selecting optimal camera views per face...",
+        "Generating texture atlas...",
+        "Applying seam leveling corrections...",
+        "Computing room dimensions...",
+        "Detecting floor and ceiling planes...",
+        "Measuring wall segments...",
+        "Analyzing room polygon...",
+        "Finalizing textured model...",
+    ]
 
     var body: some View {
         ScrollView {
@@ -30,55 +46,58 @@ struct ScanResultView: View {
                     processingView
                 }
 
-                if !meshAnchors.isEmpty {
-                    Button {
-                        showMeshViewer = true
-                    } label: {
-                        Label("View 3D Scan", systemImage: "cube")
-                            .font(.headline)
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(.blue.opacity(0.1))
-                            .foregroundStyle(.blue)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                // Action buttons — only shown after coverage is resolved
+                if canProceed {
+                    if !meshAnchors.isEmpty {
+                        Button {
+                            showMeshViewer = true
+                        } label: {
+                            Label("View 3D Scan", systemImage: "cube")
+                                .font(.headline)
+                                .frame(maxWidth: .infinity)
+                                .padding()
+                                .background(.blue.opacity(0.1))
+                                .foregroundStyle(.blue)
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                        }
+                        .padding(.horizontal, 40)
+                    }
+
+                    if floorPlanPolygon != nil {
+                        Button {
+                            showFloorPlan = true
+                        } label: {
+                            Label("View Floor Plan", systemImage: "square.split.bottomrightquarter")
+                                .font(.headline)
+                                .frame(maxWidth: .infinity)
+                                .padding()
+                                .background(.indigo.opacity(0.1))
+                                .foregroundStyle(.indigo)
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                        }
+                        .padding(.horizontal, 40)
+                    }
+
+                    if let onScanAnother {
+                        Button(action: onScanAnother) {
+                            Label("Scan Another Room", systemImage: "plus.viewfinder")
+                                .font(.headline)
+                                .frame(maxWidth: .infinity)
+                                .padding()
+                                .background(.green.opacity(0.1))
+                                .foregroundStyle(.green)
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                        }
+                        .padding(.horizontal, 40)
+                    }
+
+                    Button(action: onDone) {
+                        Label("Done", systemImage: "house")
+                            .primaryButtonStyle()
                     }
                     .padding(.horizontal, 40)
+                    .padding(.bottom, 40)
                 }
-
-                if floorPlanPolygon != nil {
-                    Button {
-                        showFloorPlan = true
-                    } label: {
-                        Label("View Floor Plan", systemImage: "square.split.bottomrightquarter")
-                            .font(.headline)
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(.indigo.opacity(0.1))
-                            .foregroundStyle(.indigo)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                    }
-                    .padding(.horizontal, 40)
-                }
-
-                if let onScanAnother {
-                    Button(action: onScanAnother) {
-                        Label("Scan Another Room", systemImage: "plus.viewfinder")
-                            .font(.headline)
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(.green.opacity(0.1))
-                            .foregroundStyle(.green)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                    }
-                    .padding(.horizontal, 40)
-                }
-
-                Button(action: onDone) {
-                    Label("Done", systemImage: "house")
-                        .primaryButtonStyle()
-                }
-                .padding(.horizontal, 40)
-                .padding(.bottom, 40)
             }
         }
         .sheet(isPresented: $showMeshViewer) {
@@ -112,6 +131,27 @@ struct ScanResultView: View {
         }
     }
 
+    /// Action buttons (Done, Scan Another, etc.) are hidden until coverage is resolved:
+    /// either coverage >= 90%, coverage check failed (let them proceed), or scan processing failed.
+    private var canProceed: Bool {
+        // User completed a gap re-scan — always let them proceed
+        if viewModel.hasCompletedRescan { return true }
+        // Failed scans — let user proceed
+        if let result = viewModel.scanResult, result.status == "failed" {
+            return true
+        }
+        // Coverage check failed — don't block the user
+        if viewModel.coverageError != nil && viewModel.cloudCoverageResult == nil {
+            return true
+        }
+        // Coverage checked and good enough
+        if let coverage = viewModel.cloudCoverageResult {
+            return coverage.coverageRatio >= 0.90
+        }
+        // Still processing or checking coverage
+        return false
+    }
+
     // MARK: - Processing
 
     private var processingView: some View {
@@ -124,9 +164,11 @@ struct ScanResultView: View {
             Text("Processing your scan...")
                 .font(.headline)
 
-            Text("This usually takes a few seconds")
+            Text(Self.processingMessages[processingMessageIndex % Self.processingMessages.count])
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .animation(.easeInOut(duration: 0.3), value: processingMessageIndex)
 
             if let scanId = viewModel.lastScanId {
                 Text("Scan ID: \(scanId.prefix(8))...")
@@ -135,6 +177,18 @@ struct ScanResultView: View {
             }
 
             Spacer().frame(height: 40)
+        }
+        .onAppear {
+            // Guard against double onAppear creating duplicate timers
+            processingTimer?.invalidate()
+            processingMessageIndex = 0
+            processingTimer = Timer.scheduledTimer(withTimeInterval: 4, repeats: true) { _ in
+                processingMessageIndex += 1
+            }
+        }
+        .onDisappear {
+            processingTimer?.invalidate()
+            processingTimer = nil
         }
     }
 
@@ -217,6 +271,9 @@ struct ScanResultView: View {
             // Scope of Work
             scopeSelectionView
 
+            // Coverage Check
+            coverageSection
+
             // Scan stats
             VStack(spacing: 4) {
                 Text("\(viewModel.keyframeCount) keyframes  •  \(viewModel.meshTriangleCount) triangles")
@@ -226,6 +283,92 @@ struct ScanResultView: View {
             }
             .font(.caption)
             .foregroundStyle(.tertiary)
+        }
+    }
+
+    // MARK: - Coverage Check
+
+    private var coverageSection: some View {
+        VStack(spacing: 12) {
+            if let result = viewModel.cloudCoverageResult {
+                // Show coverage result
+                let pct = Int(result.coverageRatio * 100)
+                HStack {
+                    Image(systemName: pct >= 90 ? "checkmark.shield.fill" : "exclamationmark.triangle.fill")
+                        .foregroundStyle(pct >= 90 ? .green : .orange)
+                    Text("\(pct)% Coverage")
+                        .font(.headline)
+                    Spacer()
+                    Text("\(result.uncoveredCount) uncovered faces")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                if pct < 90, let onRescanGaps {
+                    Button(action: onRescanGaps) {
+                        Label("Re-scan Gaps", systemImage: "camera.viewfinder")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(.orange.opacity(0.1))
+                            .foregroundStyle(.orange)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+                }
+            } else if viewModel.isCheckingCoverage {
+                HStack(spacing: 12) {
+                    ProgressView()
+                    Text("Checking coverage...")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            } else if let error = viewModel.coverageError {
+                // Coverage check failed — show retry button
+                Button {
+                    checkCoverage()
+                } label: {
+                    Label("Retry Coverage Check", systemImage: "arrow.clockwise")
+                        .font(.subheadline)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(.purple.opacity(0.1))
+                        .foregroundStyle(.purple)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+                // Error text is shown below via the separate error view
+                let _ = error  // suppress unused warning
+            }
+
+            if let error = viewModel.coverageError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+        }
+        .padding()
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal, 24)
+    }
+
+    private func checkCoverage() {
+        guard let rfqId = viewModel.selectedRFQ?.id,
+              let scanId = viewModel.lastScanId ?? viewModel.scanResult?.scanId else { return }
+
+        viewModel.isCheckingCoverage = true
+        viewModel.coverageError = nil
+
+        Task {
+            do {
+                let result = try await CloudUploader.shared.checkCoverage(scanId: scanId, rfqId: rfqId)
+                viewModel.cloudCoverageResult = result
+                viewModel.isCheckingCoverage = false
+                print("[RoomScanAlpha] Coverage check: \(Int(result.coverageRatio * 100))%, \(result.uncoveredCount) gaps")
+            } catch {
+                viewModel.coverageError = error.localizedDescription
+                viewModel.isCheckingCoverage = false
+                print("[RoomScanAlpha] Coverage check failed: \(error)")
+            }
         }
     }
 

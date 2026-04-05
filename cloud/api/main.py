@@ -130,7 +130,7 @@ def list_rfqs(authorization: str = Header(None)) -> dict:
     try:
         cursor = conn.cursor()
         cursor.execute(
-            f"""SELECT id, description, status, created_at, address
+            f"""SELECT id, title, description, status, created_at, address
                 FROM rfqs WHERE user_id = %s ORDER BY created_at DESC LIMIT {MAX_RFQS_PER_PAGE}""",
             (uid,),
         )
@@ -138,13 +138,13 @@ def list_rfqs(authorization: str = Header(None)) -> dict:
     finally:
         conn.close()
 
-    columns = ["id", "description", "status", "created_at", "address"]
+    columns = ["id", "title", "description", "status", "created_at", "address"]
     return {
         "rfqs": [
             {
                 **_row_to_dict(columns, row),
                 "id": str(row[0]),
-                "created_at": row[3].isoformat() if row[3] else None,
+                "created_at": row[4].isoformat() if row[4] else None,
             }
             for row in rows
         ]
@@ -158,6 +158,7 @@ async def create_rfq(request: Request, authorization: str = Header(None)) -> dic
     uid = decoded["uid"]
 
     body = await request.json()
+    title = body.get("title", "")
     description = body.get("description", "")
     address = body.get("address", "")
     rfq_id = str(uuid.uuid4())
@@ -166,14 +167,14 @@ async def create_rfq(request: Request, authorization: str = Header(None)) -> dic
     try:
         cursor = conn.cursor()
         cursor.execute(
-            """INSERT INTO rfqs (id, description, address, status, user_id, created_at) VALUES (%s, %s, %s, 'scan_pending', %s, NOW())""",
-            (rfq_id, description, address or None, uid),
+            """INSERT INTO rfqs (id, title, description, address, status, user_id, created_at) VALUES (%s, %s, %s, %s, 'scan_pending', %s, NOW())""",
+            (rfq_id, title, description, address or None, uid),
         )
         conn.commit()
     finally:
         conn.close()
 
-    return {"id": rfq_id, "description": description, "address": address, "status": "scan_pending"}
+    return {"id": rfq_id, "title": title, "description": description, "address": address, "status": "scan_pending"}
 
 
 @app.get("/api/rfqs/{rfq_id}/scans/upload-url")
@@ -477,14 +478,14 @@ def contractor_view(rfq_id: str) -> dict:
 
         # Fetch RFQ info
         cursor.execute(
-            """SELECT description, status, project_scope, address FROM rfqs WHERE id = %s""",
+            """SELECT title, description, status, project_scope, address FROM rfqs WHERE id = %s""",
             (rfq_id,),
         )
         rfq_row = cursor.fetchone()
         if not rfq_row:
             raise HTTPException(status_code=404, detail="RFQ not found")
 
-        description, rfq_status, project_scope, address = rfq_row
+        title, description, rfq_status, project_scope, address = rfq_row
 
         # Fetch all non-deleted scanned rooms for this RFQ
         room_columns = [
@@ -555,6 +556,7 @@ def contractor_view(rfq_id: str) -> dict:
 
     return {
         "rfq_id": rfq_id,
+        "title": title,
         "address": address,
         "job_description": description,
         "project_scope": project_scope,

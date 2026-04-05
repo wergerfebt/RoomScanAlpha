@@ -30,7 +30,7 @@ struct RFQSelectionView: View {
                         } label: {
                             HStack {
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Text(rfq.title)
+                                    Text(rfq.displayTitle)
                                         .font(.headline)
                                     if let address = rfq.address, !address.isEmpty {
                                         Text(address)
@@ -86,13 +86,11 @@ struct RFQSelectionView: View {
     }
 
     private func createRFQ(title: String, description: String, address: String) {
-        // Use title as the description if no separate description provided,
-        // since the API stores description as the primary project text
-        let desc = description.isEmpty ? title : "\(title) — \(description)"
         Task {
             do {
                 let rfq = try await RFQService.shared.createRFQ(
-                    description: desc,
+                    title: title,
+                    description: description,
                     address: address.isEmpty ? nil : address
                 )
                 rfqs.insert(rfq, at: 0)
