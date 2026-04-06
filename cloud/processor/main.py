@@ -1147,6 +1147,320 @@ def _find_scan_root(extract_dir: str) -> Optional[str]:
     return None
 
 
+@app.post("/process-supplemental")
+async def process_supplemental(request: Request) -> dict:
+    """Merge supplemental scan data with original and re-texture.
+
+    Called by Cloud Tasks after a supplemental scan is uploaded to GCS.
+    Downloads both original scan.zip and supplemental_scan.zip, merges
+    meshes (additive only) and keyframes, then re-runs OpenMVS TextureMesh.
+
+    Steps:
+      1. Download original scan.zip + supplemental_scan.zip from GCS.
+      2. Merge meshes: keep supplemental faces only in void regions (>3cm from original).
+      3. Merge keyframes: continuous numbering, unified metadata.
+      4. Re-run texture_scan() on merged data.
+      5. Upload new textured OBJ/atlas to GCS (overwrites previous).
+      6. Update scan status in DB.
+    """
+    body = await request.json()
+    scan_id = body.get("scan_id")
+    rfq_id = body.get("rfq_id")
+    original_blob = body.get("original_blob_path")
+    supplemental_blob = body.get("supplemental_blob_path")
+
+    if not all([scan_id, rfq_id, original_blob, supplemental_blob]):
+        raise HTTPException(status_code=400, detail="Missing required fields")
+
+    print(f"[Processor] Starting supplemental merge for scan {scan_id}")
+
+    # Mark as processing
+    update_scan_status(scan_id, rfq_id, "processing")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        orig_zip = os.path.join(tmpdir, "scan.zip")
+        supp_zip = os.path.join(tmpdir, "supplemental_scan.zip")
+        orig_dir = os.path.join(tmpdir, "original")
+        supp_dir = os.path.join(tmpdir, "supplemental")
+        merged_dir = os.path.join(tmpdir, "merged")
+
+        # Step 1: Download both zips
+        try:
+            _download_from_gcs(original_blob, orig_zip)
+            _download_from_gcs(supplemental_blob, supp_zip)
+        except Exception as e:
+            update_scan_status(scan_id, rfq_id, "failed", f"download failed: {str(e)}")
+            send_fcm_notification(scan_id, "failed")
+            return {"status": "failed", "error": str(e)}
+
+        # Step 2: Extract both
+        try:
+            _extract_zip(orig_zip, orig_dir)
+            _extract_zip(supp_zip, supp_dir)
+        except Exception as e:
+            update_scan_status(scan_id, rfq_id, "failed", f"unzip failed: {str(e)}")
+            send_fcm_notification(scan_id, "failed")
+            return {"status": "failed", "error": str(e)}
+
+        orig_root = _find_scan_root(orig_dir)
+        supp_root = _find_scan_root(supp_dir)
+
+        if not orig_root or not supp_root:
+            msg = "Could not find scan root in extracted packages"
+            update_scan_status(scan_id, rfq_id, "failed", msg)
+            send_fcm_notification(scan_id, "failed")
+            return {"status": "failed", "error": msg}
+
+        # Step 3: Merge meshes + frames
+        try:
+            merged_metadata = _merge_supplemental(orig_root, supp_root, merged_dir)
+        except Exception as e:
+            update_scan_status(scan_id, rfq_id, "failed", f"merge failed: {str(e)}")
+            send_fcm_notification(scan_id, "failed")
+            import traceback
+            traceback.print_exc()
+            return {"status": "failed", "error": str(e)}
+
+        # Step 4: Re-texture with merged data
+        texture_manifest = None
+        try:
+            from pipeline.openmvs_texture import texture_scan
+
+            tex_output = texture_scan(merged_dir, merged_metadata)
+
+            # Upload textured outputs to GCS (overwrite previous)
+            gcs_base = original_blob.rsplit("/", 1)[0]
+            texture_manifest = {}
+            for key, local_path in tex_output.items():
+                fname = os.path.basename(local_path)
+                if "_standard" in key:
+                    gcs_fname = f"standard_{fname}"
+                else:
+                    gcs_fname = fname
+                gcs_path = f"{gcs_base}/{gcs_fname}"
+                _upload_to_gcs(local_path, gcs_path)
+                texture_manifest[key] = gcs_fname
+
+            print(f"[Processor] Supplemental texturing complete: {list(texture_manifest.keys())}")
+        except Exception as e:
+            print(f"[Processor] Warning: supplemental texturing failed: {e}")
+            import traceback
+            traceback.print_exc()
+            update_scan_status(scan_id, rfq_id, "failed", f"texturing failed: {str(e)}")
+            send_fcm_notification(scan_id, "failed")
+            return {"status": "failed", "error": str(e)}
+
+        # Step 5: Upload merged mesh.ply
+        mesh_gcs_path = original_blob.rsplit("/", 1)[0] + "/mesh.ply"
+        try:
+            _upload_to_gcs(os.path.join(merged_dir, "mesh.ply"), mesh_gcs_path)
+        except Exception as e:
+            print(f"[Processor] Warning: merged mesh upload failed: {e}")
+
+        # Step 6: Update DB with texture_manifest (preserve existing room dimensions)
+        conn = get_db_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """UPDATE scanned_rooms
+                   SET scan_status = 'complete',
+                       texture_manifest = %s,
+                       scan_mesh_url = %s
+                   WHERE id = %s""",
+                (json.dumps(texture_manifest), mesh_gcs_path, scan_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        send_fcm_notification(scan_id, "complete")
+
+        return {
+            "status": "complete",
+            "scan_id": scan_id,
+            "merged_frames": merged_metadata["keyframe_count"],
+            "texture_manifest": texture_manifest,
+        }
+
+
+def _merge_supplemental(orig_root: str, supp_root: str, output_dir: str,
+                        proximity_threshold: float = 0.03) -> dict:
+    """Merge supplemental scan data with original.
+
+    Mesh merge: keep supplemental faces only in void regions (>proximity_threshold
+    from original surface). Frame merge: continuous numbering.
+
+    Returns merged metadata dict.
+    """
+    import trimesh
+    import shutil
+
+    os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(os.path.join(output_dir, "keyframes"), exist_ok=True)
+
+    # Load both metadata
+    with open(os.path.join(orig_root, "metadata.json")) as f:
+        orig_meta = json.load(f)
+    with open(os.path.join(supp_root, "metadata.json")) as f:
+        supp_meta = json.load(f)
+
+    # --- Mesh merge ---
+    orig_parsed = parse_and_classify(os.path.join(orig_root, "mesh.ply"))
+    supp_parsed = parse_and_classify(os.path.join(supp_root, "mesh.ply"))
+
+    orig_mesh = trimesh.Trimesh(
+        vertices=orig_parsed.positions,
+        faces=orig_parsed.faces,
+        process=False,
+    )
+
+    # Compute supplemental face centroids
+    supp_face_verts = supp_parsed.positions[supp_parsed.faces]
+    supp_centroids = supp_face_verts.mean(axis=1)
+
+    # Proximity filter: keep supplemental faces far from original surface
+    _, dists, _ = trimesh.proximity.closest_point(orig_mesh, supp_centroids)
+    kept_mask = dists > proximity_threshold
+
+    n_kept = int(kept_mask.sum())
+    n_total = len(supp_parsed.faces)
+    print(f"[Merge] Proximity filter ({proximity_threshold*100:.0f}cm): "
+          f"{n_kept}/{n_total} supplemental faces kept")
+
+    # Build merged mesh
+    if n_kept > 0:
+        supp_faces_kept = supp_parsed.faces[kept_mask]
+        supp_class_kept = supp_parsed.face_classifications[kept_mask]
+
+        # Compact supplemental vertices
+        used_verts = np.unique(supp_faces_kept)
+        old_to_new = np.full(len(supp_parsed.positions), -1, dtype=np.int64)
+        old_to_new[used_verts] = np.arange(len(used_verts))
+
+        supp_verts_compact = supp_parsed.positions[used_verts]
+        supp_normals_compact = supp_parsed.normals[used_verts]
+        supp_faces_remapped = old_to_new[supp_faces_kept] + len(orig_parsed.positions)
+
+        merged_verts = np.vstack([orig_parsed.positions, supp_verts_compact])
+        merged_normals = np.vstack([orig_parsed.normals, supp_normals_compact])
+        merged_faces = np.vstack([orig_parsed.faces, supp_faces_remapped])
+        merged_class = np.concatenate([orig_parsed.face_classifications, supp_class_kept])
+
+        print(f"[Merge] Merged mesh: {len(merged_verts)} verts, {len(merged_faces)} faces "
+              f"(+{len(supp_verts_compact)} verts, +{n_kept} faces)")
+    else:
+        merged_verts = orig_parsed.positions
+        merged_normals = orig_parsed.normals
+        merged_faces = orig_parsed.faces
+        merged_class = orig_parsed.face_classifications
+        print(f"[Merge] No supplemental faces added — using original mesh")
+
+    # Export merged PLY in binary format
+    import struct
+    merged_ply = os.path.join(output_dir, "mesh.ply")
+    vertex_count = len(merged_verts)
+    face_count = len(merged_faces)
+
+    header = (
+        "ply\n"
+        "format binary_little_endian 1.0\n"
+        f"element vertex {vertex_count}\n"
+        "property float x\nproperty float y\nproperty float z\n"
+        "property float nx\nproperty float ny\nproperty float nz\n"
+        f"element face {face_count}\n"
+        "property list uchar uint vertex_indices\n"
+        "property uchar classification\n"
+        "end_header\n"
+    )
+    with open(merged_ply, "wb") as f:
+        f.write(header.encode("ascii"))
+        vertex_data = np.empty((vertex_count, 6), dtype=np.float32)
+        vertex_data[:, :3] = merged_verts.astype(np.float32)
+        vertex_data[:, 3:] = merged_normals.astype(np.float32)
+        f.write(vertex_data.tobytes())
+        for i in range(face_count):
+            f.write(struct.pack("<B", 3))
+            f.write(struct.pack("<III", int(merged_faces[i][0]),
+                                int(merged_faces[i][1]), int(merged_faces[i][2])))
+            f.write(struct.pack("<B", int(merged_class[i])))
+
+    print(f"[Merge] Exported merged PLY: {vertex_count} verts, {face_count} faces")
+
+    # --- Frame merge ---
+    max_orig_index = max(kf["index"] for kf in orig_meta["keyframes"])
+    offset = max_orig_index + 1
+    out_keyframes = os.path.join(output_dir, "keyframes")
+    merged_kf_list = []
+
+    # Copy original keyframes
+    orig_kf_dir = os.path.join(orig_root, "keyframes")
+    for kf in orig_meta["keyframes"]:
+        for ext in [".jpg", ".json"]:
+            src = os.path.join(orig_kf_dir, kf["filename"].replace(".jpg", ext))
+            if os.path.exists(src):
+                shutil.copy2(src, os.path.join(out_keyframes, kf["filename"].replace(".jpg", ext)))
+        merged_kf_list.append(dict(kf))
+
+    # Copy supplemental keyframes with renumbering
+    supp_kf_dir = os.path.join(supp_root, "keyframes")
+    for kf in supp_meta["keyframes"]:
+        new_index = kf["index"] + offset
+        new_fname = f"frame_{new_index:03d}.jpg"
+        new_json = f"frame_{new_index:03d}.json"
+
+        src_jpg = os.path.join(supp_kf_dir, kf["filename"])
+        if os.path.exists(src_jpg):
+            shutil.copy2(src_jpg, os.path.join(out_keyframes, new_fname))
+
+        src_json = os.path.join(supp_kf_dir, kf["filename"].replace(".jpg", ".json"))
+        if os.path.exists(src_json):
+            with open(src_json) as f:
+                frame_meta = json.load(f)
+            frame_meta["index"] = new_index
+            with open(os.path.join(out_keyframes, new_json), "w") as f_out:
+                json.dump(frame_meta, f_out)
+
+        merged_kf_list.append({
+            "filename": new_fname,
+            "index": new_index,
+            "timestamp": kf.get("timestamp", 0),
+        })
+
+    # Copy depth maps if present
+    orig_depth = os.path.join(orig_root, "depth")
+    supp_depth = os.path.join(supp_root, "depth")
+    out_depth = os.path.join(output_dir, "depth")
+    if os.path.isdir(orig_depth):
+        os.makedirs(out_depth, exist_ok=True)
+        for kf in orig_meta["keyframes"]:
+            if kf.get("depth_filename"):
+                src = os.path.join(orig_depth, kf["depth_filename"])
+                if os.path.exists(src):
+                    shutil.copy2(src, os.path.join(out_depth, kf["depth_filename"]))
+    if os.path.isdir(supp_depth):
+        os.makedirs(out_depth, exist_ok=True)
+        for kf in supp_meta["keyframes"]:
+            if kf.get("depth_filename"):
+                new_depth = f"frame_{kf['index'] + offset:03d}.depth"
+                src = os.path.join(supp_depth, kf["depth_filename"])
+                if os.path.exists(src):
+                    shutil.copy2(src, os.path.join(out_depth, new_depth))
+
+    # Build merged metadata
+    merged_meta = dict(orig_meta)
+    merged_meta["keyframes"] = merged_kf_list
+    merged_meta["keyframe_count"] = len(merged_kf_list)
+    merged_meta["supplemental_frame_offset"] = offset
+
+    with open(os.path.join(output_dir, "metadata.json"), "w") as f:
+        json.dump(merged_meta, f, indent=2)
+
+    print(f"[Merge] Merged frames: {len(orig_meta['keyframes'])} original + "
+          f"{len(supp_meta['keyframes'])} supplemental = {len(merged_kf_list)} total")
+
+    return merged_meta
+
+
 @app.get("/health")
 def health() -> dict:
     """Health check endpoint for Cloud Run readiness/liveness probes."""

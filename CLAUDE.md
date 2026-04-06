@@ -105,8 +105,11 @@ After cloud processing completes, coverage is automatically checked via `POST /c
 2. Show RelocalizationView while tracking state is `.limited`
 3. Once `.normal` → show GapRescanView with orange (untextured) + red (holes) overlays
 4. User walks to highlighted areas, supplemental frames captured
-5. On stop → return to results with action buttons unlocked
-6. **Next step**: package supplemental frames + mesh, upload, merge with original (see `docs/SUPPLEMENTAL_SCAN_MERGE.md`)
+5. On stop → package supplemental frames + mesh → upload to GCS → trigger merge
+6. Cloud merges meshes (proximity filter, 3cm threshold) + frames → re-textures
+7. **Cloud endpoints**: `GET .../supplemental-upload-url`, `POST .../supplemental`
+8. **Processor endpoint**: `POST /process-supplemental` — merge + re-texture
+9. **iOS TODO**: `handleStopRescan()` does not yet package/upload supplemental data
 
 ### Critical Constraint
 **NEVER pause the AR session between scan capture and mesh export.** Pausing + resuming causes ARKit to re-initialize the world coordinate system, introducing 1-2ft systematic texture misalignment. The session must stay running from scan start through annotation completion.
@@ -174,7 +177,7 @@ gs://roomscanalpha-scans/scans/{rfq_id}/{scan_id}/
 ### Known Issues
 - **ARFrame retention warnings** — ARSCNView delegate retains 11-13 frames during annotation. Caused by multiple ARSCNView instances sharing one session. Needs shared ARSCNView architecture (planned).
 - **"Attempting to enable an already-enabled session"** — ARSCNView auto-runs the session when `scnView.session` is set, conflicting with `startSession()`. Harmless warning.
-- **Supplemental rescan capture not yet uploaded** — Gap rescan captures supplemental frames but `handleStopRescan()` does not yet package/upload them. See `docs/SUPPLEMENTAL_SCAN_MERGE.md` for implementation plan.
+- **Supplemental rescan capture not yet uploaded** — Gap rescan captures supplemental frames but `handleStopRescan()` does not yet package/upload them. Cloud endpoints (`/supplemental-upload-url`, `/supplemental`, `/process-supplemental`) are implemented. iOS packaging + upload is the remaining step.
 - **DB_PASS deployment** — Cloud Run services use plain env var for DB_PASS (not Secret Manager) after a secret reference broke during redeploy. Should be migrated back to Secret Manager.
 
 ## Remaining Docs (current)

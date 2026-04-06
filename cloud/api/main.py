@@ -431,6 +431,94 @@ async def check_coverage(rfq_id: str, scan_id: str, authorization: str = Header(
         raise HTTPException(status_code=502, detail=f"Coverage check failed: {str(e)}")
 
 
+@app.get("/api/rfqs/{rfq_id}/scans/{scan_id}/supplemental-upload-url")
+def get_supplemental_upload_url(rfq_id: str, scan_id: str, authorization: str = Header(None)) -> dict:
+    """Generate a GCS signed URL for uploading a supplemental scan zip.
+
+    Follows the same pattern as get_upload_url but writes to
+    scans/{rfq_id}/{scan_id}/supplemental_scan.zip alongside the original.
+    """
+    verify_firebase_token(authorization)
+
+    blob_path = f"scans/{rfq_id}/{scan_id}/supplemental_scan.zip"
+
+    if not _credentials.token or not _credentials.valid:
+        _credentials.refresh(_auth_request)
+
+    bucket = storage_client.bucket(BUCKET_NAME)
+    blob = bucket.blob(blob_path)
+    signed_url = blob.generate_signed_url(
+        version="v4",
+        expiration=datetime.timedelta(minutes=SIGNED_URL_EXPIRY_MINUTES),
+        method="PUT",
+        content_type="application/zip",
+        service_account_email=SIGNING_SA_EMAIL,
+        access_token=_credentials.token,
+    )
+
+    return {
+        "signed_url": signed_url,
+        "blob_path": blob_path,
+    }
+
+
+@app.post("/api/rfqs/{rfq_id}/scans/{scan_id}/supplemental")
+async def supplemental_complete(rfq_id: str, scan_id: str,
+                                request: Request, authorization: str = Header(None)) -> dict:
+    """Signal that a supplemental scan upload is complete. Enqueues merge + reprocess.
+
+    Updates scan status to 'processing' and enqueues a Cloud Task to the processor's
+    /process-supplemental endpoint, which will merge meshes, merge frames, and re-texture.
+    """
+    verify_firebase_token(authorization)
+
+    original_blob = f"scans/{rfq_id}/{scan_id}/scan.zip"
+    supplemental_blob = f"scans/{rfq_id}/{scan_id}/supplemental_scan.zip"
+
+    # Update scan status to processing
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE scanned_rooms SET scan_status = 'processing' WHERE id = %s AND rfq_id = %s",
+            (scan_id, rfq_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Enqueue supplemental processing via Cloud Tasks
+    try:
+        tasks_client = tasks_v2.CloudTasksClient()
+        queue_path = tasks_client.queue_path(PROJECT_ID, REGION, TASKS_QUEUE)
+
+        task_payload = json.dumps({
+            "scan_id": scan_id,
+            "rfq_id": rfq_id,
+            "original_blob_path": original_blob,
+            "supplemental_blob_path": supplemental_blob,
+        })
+
+        task = tasks_v2.Task(
+            http_request=tasks_v2.HttpRequest(
+                http_method=tasks_v2.HttpMethod.POST,
+                url=f"{PROCESSOR_URL}/process-supplemental",
+                headers={"Content-Type": "application/json"},
+                body=task_payload.encode(),
+                oidc_token=tasks_v2.OidcToken(
+                    service_account_email=TASKS_INVOKER_SA,
+                ),
+            ),
+        )
+
+        tasks_client.create_task(parent=queue_path, task=task)
+        print(f"[API] Enqueued supplemental processing for scan {scan_id}")
+    except Exception as e:
+        print(f"[API] Warning: Failed to enqueue supplemental task: {e}")
+
+    return {"scan_id": scan_id, "status": "processing"}
+
+
 @app.delete("/api/rfqs/{rfq_id}")
 def delete_rfq(rfq_id: str, authorization: str = Header(None)) -> dict:
     """Soft-delete an RFQ and all its scans.
