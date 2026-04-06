@@ -34,18 +34,23 @@ iPhone (ARKit + LiDAR)
   → Upload to GCS via signed URL (bypasses 32MB Cloud Run limit)
   → POST /api/rfqs/{rfq_id}/scans/complete → enqueues Cloud Tasks
 
-Cloud Run: scan-processor (OIDC-protected)
+Cloud Run: scan-processor (OIDC-protected, 8 vCPU / 16GB / concurrency=1)
   → Download scan.zip → parse PLY → compute room metrics (imperial)
-  → OpenMVS TextureMesh: decimate to 10K faces (preview) + full mesh (HD)
-    → Produces OBJ + texture atlas JPG per resolution level
+  → OpenMVS TextureMesh: decimate to 50K faces (preview) + 300K (HD)
+    → Produces OBJ + MTL + texture atlas JPG(s) per resolution level
   → WTA texture projection (fallback): per-surface JPEGs from annotation corners
   → Upload textured mesh + atlas to GCS
   → Write results to Cloud SQL → FCM notification to app
+  → Supplemental merge: POST /process-supplemental
+    → Downloads original + supplemental zips → merges meshes (voxel+proximity filter)
+    → Merges keyframes (continuous numbering) → re-textures with all frames
+    → Overwrites textured outputs in GCS
 
 Cloud Run: scan-api (public)
   → Firebase Auth JWT on all endpoints
-  → Serves contractor_view.html (Three.js OBJ viewer with HD toggle)
-  → Generates signed GCS URLs for meshes and textures
+  → Serves contractor_view.html (Three.js OBJ viewer with HD toggle, MTLLoader for multi-atlas)
+  → Generates signed GCS URLs for OBJ meshes
+  → Proxies MTL + atlas files via /api/rfqs/{rfq_id}/scans/{scan_id}/files/{path}
   → Proxies to processor for coverage checks
 ```
 
@@ -65,7 +70,8 @@ Cloud Run: scan-api (public)
 - Converts ARKit poses → COLMAP format (coordinate flip: `diag(1, -1, -1)`)
 - Decimates mesh via `trimesh.simplify_quadric_decimation`
 - Runs `InterfaceCOLMAP` + `TextureMesh` (binaries baked into container image)
-- Preview: 10K faces, Standard: full mesh
+- Preview: 50K faces, Standard: 300K faces
+- Multi-atlas: 2+ texture atlases for meshes exceeding 8192×8192 atlas capacity
 - Orange patches (RGB 255,165,0) = faces with no viable camera view
 - Black patches = zero camera data or mesh geometry gaps
 - Controlled by `USE_OPENMVS=true` env var (default)
@@ -79,7 +85,7 @@ Cloud Run: scan-api (public)
 ### Contractor Web Viewer
 
 **Two rendering paths** (contractor_view.html):
-1. **OBJ Mesh** (primary): Loads `textured.obj` + texture atlas via `OBJLoader`. "HD On" toggles to `standard_textured.obj`
+1. **OBJ Mesh** (primary): Loads `textured.obj` via signed URL + MTL/atlas via file proxy (`MTLLoader` + `OBJLoader`). "HD On" toggles to `standard_textured.obj` with multi-atlas support. File proxy: `GET /api/rfqs/{rfq_id}/scans/{scan_id}/files/{path}` — maps `standard/` prefix to `standard_` prefixed GCS blobs.
 2. **Quad Room** (fallback): Builds rectangular walls from annotation polygon, applies per-surface JPEGs
 
 ## iOS App
@@ -106,10 +112,10 @@ After cloud processing completes, coverage is automatically checked via `POST /c
 3. Once `.normal` → show GapRescanView with orange (untextured) + red (holes) overlays
 4. User walks to highlighted areas, supplemental frames captured
 5. On stop → package supplemental frames + mesh → upload to GCS → trigger merge
-6. Cloud merges meshes (proximity filter, 3cm threshold) + frames → re-textures
+6. Cloud merges meshes (voxel 5cm + proximity 1cm filter) + frames → re-textures
 7. **Cloud endpoints**: `GET .../supplemental-upload-url`, `POST .../supplemental`
 8. **Processor endpoint**: `POST /process-supplemental` — merge + re-texture
-9. **iOS TODO**: `handleStopRescan()` does not yet package/upload supplemental data
+9. **File proxy**: `GET .../files/{path}` — serves MTL/atlas for multi-material OBJ rendering
 
 ### Critical Constraint
 **NEVER pause the AR session between scan capture and mesh export.** Pausing + resuming causes ARKit to re-initialize the world coordinate system, introducing 1-2ft systematic texture misalignment. The session must stay running from scan start through annotation completion.
@@ -143,6 +149,9 @@ After cloud processing completes, coverage is automatically checked via `POST /c
 
 ## Cloud Infrastructure
 
+### Processor Resources
+The scan-processor runs with 8 vCPUs, 16GB RAM, concurrency=1, always-allocated CPU, 900s timeout. This configuration is required for merged scan texturing (418+ images, 300K+ faces, ~4 min TextureMesh).
+
 ### Container Image Pinning
 The scan-processor Dockerfile uses a **digest-pinned base image** containing OpenMVS binaries:
 ```dockerfile
@@ -154,9 +163,10 @@ This is necessary because OpenMVS binaries (`TextureMesh`, `InterfaceCOLMAP`) + 
 ```
 gs://roomscanalpha-scans/scans/{rfq_id}/{scan_id}/
   ├── scan.zip                              # Uploaded from iOS
+  ├── supplemental_scan.zip                 # Uploaded from iOS (gap re-scan)
   ├── mesh.ply                              # Uploaded by processor
-  ├── textured.obj / .mtl / _material_00_map_Kd.jpg    # OpenMVS preview (10K faces)
-  └── standard_textured.obj / .mtl / ...jpg             # OpenMVS HD (full mesh)
+  ├── textured.obj / .mtl / _material_00_map_Kd.jpg    # OpenMVS preview (50K faces)
+  └── standard_textured.obj / .mtl / ...jpg             # OpenMVS HD (300K faces, may have multiple atlases)
 ```
 
 ## Dead Code & Known Issues
@@ -177,7 +187,7 @@ gs://roomscanalpha-scans/scans/{rfq_id}/{scan_id}/
 ### Known Issues
 - **ARFrame retention warnings** — ARSCNView delegate retains 11-13 frames during annotation. Caused by multiple ARSCNView instances sharing one session. Needs shared ARSCNView architecture (planned).
 - **"Attempting to enable an already-enabled session"** — ARSCNView auto-runs the session when `scnView.session` is set, conflicting with `startSession()`. Harmless warning.
-- **Supplemental rescan capture not yet uploaded** — Gap rescan captures supplemental frames but `handleStopRescan()` does not yet package/upload them. Cloud endpoints (`/supplemental-upload-url`, `/supplemental`, `/process-supplemental`) are implemented. iOS packaging + upload is the remaining step.
+- **Supplemental merge deployed** — Full pipeline working: iOS packages/uploads supplemental data, cloud merges meshes + frames, re-textures with OpenMVS, viewer renders multi-atlas results via MTLLoader.
 - **DB_PASS deployment** — Cloud Run services use plain env var for DB_PASS (not Secret Manager) after a secret reference broke during redeploy. Should be migrated back to Secret Manager.
 
 ## Remaining Docs (current)
@@ -185,7 +195,7 @@ gs://roomscanalpha-scans/scans/{rfq_id}/{scan_id}/
 | Document | Status | Scope |
 |----------|--------|-------|
 | `CLAUDE.md` | **Current** | This file — system architecture and conventions |
-| `docs/SUPPLEMENTAL_SCAN_MERGE.md` | **Current** | Supplemental scan capture, upload & merge plan |
+| `docs/SUPPLEMENTAL_SCAN_MERGE.md` | **Archived** | Supplemental scan capture, upload & merge plan (implemented) |
 | `PLATFORM_ARCHITECTURE.md` | **Current** | Marketplace expansion plan (accounts, orgs, bids, search) |
 | `cloud/processor/TEXTURE_PIPELINE.md` | **Current** | OpenMVS A/B test results, decimation findings |
 | `cloud/DNN_COMPONENT_TAXONOMY.md` | **Future** | DNN detection classes (Phase 2, not implemented) |
