@@ -110,7 +110,7 @@ struct ContentView: View {
                     }
                     if viewModel.hasEnoughStorage {
                         startExport()
-                    } else {
+                    }  else {
                         viewModel.showLowStorageAlert = true
                     }
                 }
