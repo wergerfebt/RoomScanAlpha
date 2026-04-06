@@ -242,13 +242,91 @@ struct ContentView: View {
 
     private func handleStopRescan() {
         sessionManager.isCapturing = false
+        sessionManager.snapshotMeshAnchors()
         let supplementalCount = sessionManager.frameCaptureManager.keyframeCount
         sessionManager.pauseSession()
         print("[RoomScanAlpha] Gap rescan stopped — \(supplementalCount) supplemental frames")
 
-        // Return to results — user has addressed the gaps, unlock action buttons
-        viewModel.hasCompletedRescan = true
-        viewModel.state = .viewingResults
+        guard supplementalCount > 0 else {
+            print("[RoomScanAlpha] No supplemental frames captured — skipping upload")
+            viewModel.hasCompletedRescan = true
+            viewModel.state = .viewingResults
+            return
+        }
+
+        // Package and upload supplemental data
+        startSupplementalExport()
+    }
+
+    private func startSupplementalExport() {
+        viewModel.state = .uploading
+        viewModel.uploadStatus = "Packaging supplemental scan..."
+        viewModel.uploadProgress = 0.0
+        viewModel.uploadError = nil
+
+        let keyframes = sessionManager.frameCaptureManager.capturedFrames
+        let meshAnchors = sessionManager.lastMeshAnchors
+
+        Task.detached {
+            do {
+                let result = try ScanPackager.packageSupplemental(
+                    keyframes: keyframes,
+                    meshAnchors: meshAnchors,
+                    onProgress: { message in
+                        Task { @MainActor in
+                            viewModel.uploadStatus = message
+                        }
+                    }
+                )
+                await MainActor.run {
+                    let sizeMB = result.totalSizeBytes / 1024 / 1024
+                    print("[RoomScanAlpha] Supplemental export: \(sizeMB)MB")
+                    startSupplementalUpload(scanDirectoryURL: result.directoryURL)
+                }
+            } catch {
+                await MainActor.run {
+                    viewModel.uploadError = error.localizedDescription
+                    viewModel.uploadStatus = "Export failed"
+                    print("[RoomScanAlpha] Supplemental export error: \(error)")
+                }
+            }
+        }
+    }
+
+    private func startSupplementalUpload(scanDirectoryURL: URL) {
+        guard let rfqId = viewModel.selectedRFQ?.id,
+              let scanId = viewModel.lastScanId else {
+            viewModel.uploadError = "Missing RFQ or scan ID"
+            viewModel.uploadStatus = "Upload failed"
+            return
+        }
+
+        viewModel.uploadStatus = "Uploading supplemental scan..."
+
+        Task {
+            do {
+                _ = try await CloudUploader.shared.uploadSupplemental(
+                    scanDirectoryURL: scanDirectoryURL,
+                    rfqId: rfqId,
+                    scanId: scanId,
+                    onProgress: { status, fraction in
+                        viewModel.uploadStatus = status
+                        viewModel.uploadProgress = fraction
+                    }
+                )
+                viewModel.uploadStatus = "Reprocessing..."
+                print("[RoomScanAlpha] Supplemental upload complete — polling for results")
+
+                // Poll for reprocessing completion, then re-check coverage
+                startPolling(scanId: scanId, rfqId: rfqId)
+            } catch {
+                viewModel.uploadError = error.localizedDescription
+                viewModel.uploadStatus = "Upload failed"
+                viewModel.hasCompletedRescan = true
+                viewModel.state = .viewingResults
+                print("[RoomScanAlpha] Supplemental upload error: \(error)")
+            }
+        }
     }
 
     private func handleRescanGaps() {

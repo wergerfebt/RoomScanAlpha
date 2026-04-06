@@ -107,6 +107,23 @@ struct ScanPackager {
         return PackageResult(directoryURL: scanDir, totalSizeBytes: totalSize)
     }
 
+    /// Package supplemental scan data (mesh + keyframes from gap re-scan).
+    /// Structurally identical to a regular scan package — same PLY + keyframe format.
+    static func packageSupplemental(
+        keyframes: [CapturedFrame],
+        meshAnchors: [ARMeshAnchor],
+        onProgress: @escaping (String) -> Void
+    ) throws -> PackageResult {
+        return try package(
+            keyframes: keyframes,
+            meshAnchors: meshAnchors,
+            scanDuration: 0,
+            rfqContext: nil,
+            cornerAnnotation: nil,
+            onProgress: onProgress
+        )
+    }
+
     // MARK: - Private
 
     private static func directorySize(url: URL) -> Int {

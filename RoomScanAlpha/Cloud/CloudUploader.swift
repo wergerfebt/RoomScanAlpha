@@ -153,6 +153,55 @@ final class CloudUploader {
         return UploadResult(scanId: scanId, status: status)
     }
 
+    /// Upload a supplemental scan package for an existing scan.
+    /// Gets a signed URL for supplemental_scan.zip, uploads, then triggers merge + reprocess.
+    func uploadSupplemental(
+        scanDirectoryURL: URL,
+        rfqId: String,
+        scanId: String,
+        onProgress: @escaping (String, Double) -> Void
+    ) async throws -> UploadResult {
+        guard !isUploading else {
+            throw UploadError.concurrentUpload
+        }
+        isUploading = true
+        defer { isUploading = false }
+
+        // 1. Auth
+        onProgress("Authenticating...", 0.0)
+        _ = try await AuthManager.shared.signInAnonymously()
+        let token = try await AuthManager.shared.getToken()
+
+        // 2. Zip
+        onProgress("Compressing supplemental scan...", 0.05)
+        let zipURL = try zipDirectory(scanDirectoryURL)
+        let zipSize = try FileManager.default.attributesOfItem(atPath: zipURL.path)[.size] as? Int ?? 0
+        print("[RoomScanAlpha] Supplemental zip: \(zipSize / 1024 / 1024)MB")
+
+        // 3. Get signed URL for supplemental_scan.zip
+        onProgress("Requesting upload URL...", 0.10)
+        let signedURL = try await getSupplementalSignedURL(token: token, rfqId: rfqId, scanId: scanId)
+
+        // 4. Upload to GCS
+        onProgress("Uploading supplemental scan...", 0.15)
+        try await uploadToGCS(fileURL: zipURL, signedURL: signedURL) { fraction in
+            let mapped = 0.15 + fraction * 0.75
+            onProgress("Uploading supplemental scan...", mapped)
+        }
+        print("[RoomScanAlpha] Supplemental upload complete for scan \(scanId)")
+
+        // 5. Trigger merge + reprocess
+        onProgress("Triggering reprocessing...", 0.95)
+        let status = try await notifySupplementalComplete(scanId: scanId, token: token, rfqId: rfqId)
+        print("[RoomScanAlpha] Supplemental merge triggered: \(status)")
+
+        onProgress("Reprocessing started", 1.0)
+
+        try? FileManager.default.removeItem(at: zipURL)
+
+        return UploadResult(scanId: scanId, status: status)
+    }
+
     // MARK: - Retry with Exponential Backoff
 
     /// Execute an HTTP request with retry and exponential backoff for transient failures.
@@ -285,6 +334,45 @@ final class CloudUploader {
             let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
             let respBody = String(data: data, encoding: .utf8) ?? ""
             throw UploadError.apiError("Upload complete notification failed (HTTP \(statusCode)): \(respBody)")
+        }
+
+        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        return json?["status"] as? String ?? "unknown"
+    }
+
+    private func getSupplementalSignedURL(token: String, rfqId: String, scanId: String) async throws -> URL {
+        let url = URL(string: "\(apiBaseURL)/api/rfqs/\(rfqId)/scans/\(scanId)/supplemental-upload-url")!
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        let (data, response) = try await executeWithRetry(request)
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw UploadError.apiError("Failed to get supplemental signed URL (HTTP \(statusCode)): \(body)")
+        }
+
+        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        guard let signedURLString = json?["signed_url"] as? String,
+              let signedURL = URL(string: signedURLString) else {
+            throw UploadError.apiError("Invalid supplemental signed URL response")
+        }
+
+        return signedURL
+    }
+
+    private func notifySupplementalComplete(scanId: String, token: String, rfqId: String) async throws -> String {
+        let url = URL(string: "\(apiBaseURL)/api/rfqs/\(rfqId)/scans/\(scanId)/supplemental")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let (data, response) = try await executeWithRetry(request)
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+            let respBody = String(data: data, encoding: .utf8) ?? ""
+            throw UploadError.apiError("Supplemental notification failed (HTTP \(statusCode)): \(respBody)")
         }
 
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
