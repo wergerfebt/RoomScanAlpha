@@ -57,84 +57,52 @@ def fibonacci_sphere(n_rays: int) -> np.ndarray:
 # Void region detection + face filtering
 # ---------------------------------------------------------------------------
 
-def filter_supplemental_faces(original_parsed, supplemental_parsed, n_rays=10000,
-                              decimate_target=20000):
+def filter_supplemental_faces(original_parsed, supplemental_parsed,
+                              proximity_threshold=0.03):
     """Filter supplemental mesh faces — keep only those in void regions.
 
-    Three-phase approach for performance:
-    1. Decimate original mesh to ~20K faces for fast ray-casting
-    2. Identify void directions using fibonacci sphere rays against decimated mesh
-    3. Check full-resolution supplemental faces against void directions (angular proximity)
+    Uses closest-point distance: for each supplemental face centroid, find
+    the closest point on the original mesh surface. If closer than threshold,
+    the face overlaps existing geometry (reject). If farther, it fills a void (keep).
+
+    Args:
+        proximity_threshold: minimum distance from original surface in meters.
+            Set to ~3cm to absorb ARWorldMap relocalization offset (~1cm) +
+            mesh boundary imprecision. Faces closer than this are rejected.
 
     Returns:
         kept_mask: boolean array (len = supplemental face count)
     """
-    # Phase 1: Decimate for fast ray-casting
     t0 = time.time()
-    orig_mesh_full = trimesh.Trimesh(
+
+    orig_mesh = trimesh.Trimesh(
         vertices=original_parsed.positions,
         faces=original_parsed.faces,
         vertex_normals=original_parsed.normals,
         process=False,
     )
-    if len(orig_mesh_full.faces) > decimate_target:
-        orig_mesh = orig_mesh_full.simplify_quadric_decimation(face_count=decimate_target)
-        print(f"[Merge] Phase 1: Decimated {len(orig_mesh_full.faces)} → "
-              f"{len(orig_mesh.faces)} faces for ray-casting")
-    else:
-        orig_mesh = orig_mesh_full
-        print(f"[Merge] Phase 1: Mesh already ≤{decimate_target} faces, no decimation needed")
 
-    center = original_parsed.positions.mean(axis=0)
-
-    # Phase 2: Find void directions using fibonacci sphere against decimated mesh
-    directions = fibonacci_sphere(n_rays)
-    origins = np.tile(center, (n_rays, 1))
-    _, ray_ids, _ = orig_mesh.ray.intersects_location(origins, directions, multiple_hits=False)
-    hit_set = set(ray_ids)
-    void_mask = np.array([i not in hit_set for i in range(n_rays)])
-    void_directions = directions[void_mask]
-    n_void = len(void_directions)
-
-    dt_phase2 = time.time() - t0
-    print(f"[Merge] Phase 2: {n_rays} fibonacci rays → {n_void} void directions ({dt_phase2:.2f}s)")
-
-    supp_faces = supplemental_parsed.faces
-    if n_void == 0:
-        print(f"[Merge] No void regions found — rejecting all supplemental faces")
-        return np.zeros(len(supp_faces), dtype=bool)
-
-    # Phase 3: Check full-resolution supplemental faces against void directions
-    t1 = time.time()
+    # Compute supplemental face centroids
     supp_positions = supplemental_parsed.positions
+    supp_faces = supplemental_parsed.faces
     face_verts = supp_positions[supp_faces]  # (F, 3, 3)
     centroids = face_verts.mean(axis=1)      # (F, 3)
+    n_faces = len(centroids)
 
-    # Directions from center to each centroid
-    face_dirs = centroids - center
-    face_norms = np.linalg.norm(face_dirs, axis=1, keepdims=True)
-    face_norms = np.maximum(face_norms, 1e-10)
-    face_dirs = face_dirs / face_norms
+    # Find closest point on original mesh for each supplemental face centroid
+    _, dists, _ = trimesh.proximity.closest_point(orig_mesh, centroids)
 
-    # Cosine similarity between each face direction and each void direction
-    # face_dirs: (F, 3), void_directions: (V, 3) → dot: (F, V)
-    cos_sim = face_dirs @ void_directions.T  # (F, V)
+    kept_mask = dists > proximity_threshold
 
-    # A face is near a void if max cosine similarity > threshold
-    # cos(15°) ≈ 0.966 — conservative angular threshold
-    void_threshold = np.cos(np.radians(15))
-    max_cos = cos_sim.max(axis=1)  # (F,)
-    kept_mask = max_cos > void_threshold
-
-    dt_phase3 = time.time() - t1
-    n_total = len(supp_faces)
+    dt = time.time() - t0
     n_kept = int(kept_mask.sum())
-    n_rejected = n_total - n_kept
+    n_rejected = n_faces - n_kept
 
-    print(f"[Merge] Phase 3: {n_total} full-res faces checked, "
-          f"{n_kept} kept (void), {n_rejected} rejected (overlap)")
-    print(f"[Merge] Angular proximity took {dt_phase3:.2f}s")
-    print(f"[Merge] Total filter time: {time.time() - t0:.2f}s")
+    print(f"[Merge] Proximity filter ({proximity_threshold*100:.0f}cm threshold): "
+          f"{n_faces} faces, {n_kept} kept (void), {n_rejected} rejected (overlap)")
+    print(f"[Merge] Distance stats: min={dists.min():.4f}m, max={dists.max():.4f}m, "
+          f"mean={dists.mean():.4f}m")
+    print(f"[Merge] Filter time: {dt:.2f}s")
 
     return kept_mask
 
@@ -441,8 +409,8 @@ def main():
                         help="Output directory for merged scan (default: merged_scan)")
     parser.add_argument("--skip-texture", action="store_true",
                         help="Skip OpenMVS texturing step")
-    parser.add_argument("--ray-count", type=int, default=5000,
-                        help="Number of fibonacci sphere rays (default: 5000)")
+    parser.add_argument("--proximity-threshold", type=float, default=0.03,
+                        help="Min distance from original surface in meters (default: 0.03)")
     args = parser.parse_args()
 
     if args.supplemental is None:
@@ -471,7 +439,7 @@ def main():
     print(f"  Original:     {os.path.abspath(args.original)}")
     print(f"  Supplemental: {os.path.abspath(args.supplemental)}")
     print(f"  Output:       {os.path.abspath(args.output)}")
-    print(f"  Ray count:    {args.ray_count}")
+    print(f"  Proximity:    {args.proximity_threshold}m threshold")
     print(f"  Texture:      {'skip' if args.skip_texture else 'enabled'}")
     print()
 
@@ -502,7 +470,10 @@ def main():
 
     # Step 2: Filter supplemental faces
     print("--- Step 2: Filter supplemental faces to void regions ---")
-    kept_mask = filter_supplemental_faces(orig_parsed, supp_parsed, args.ray_count)
+    kept_mask = filter_supplemental_faces(
+        orig_parsed, supp_parsed,
+        proximity_threshold=args.proximity_threshold,
+    )
     print()
 
     # Step 3: Merge meshes
@@ -526,7 +497,7 @@ def main():
 
     # Step 6: Coverage comparison
     print("--- Step 6: Coverage comparison ---")
-    compare_coverage(orig_parsed, merged_verts, merged_faces, args.ray_count)
+    compare_coverage(orig_parsed, merged_verts, merged_faces)
     print()
 
     # Step 7: Texture (optional)
