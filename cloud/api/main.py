@@ -20,7 +20,7 @@ from typing import Optional
 from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException, Request, UploadFile, File, Form
-from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
+from fastapi.responses import JSONResponse, HTMLResponse, FileResponse, Response
 from google.cloud import storage, tasks_v2
 from google.cloud.sql.connector import Connector
 from google.auth import default as default_credentials, compute_engine
@@ -517,6 +517,51 @@ async def supplemental_complete(rfq_id: str, scan_id: str,
         print(f"[API] Warning: Failed to enqueue supplemental task: {e}")
 
     return {"scan_id": scan_id, "status": "processing"}
+
+
+@app.get("/api/rfqs/{rfq_id}/scans/{scan_id}/files/{filepath:path}")
+def get_scan_file(rfq_id: str, scan_id: str, filepath: str):
+    """Proxy GCS scan files by path. Used by the viewer for OBJ/MTL/atlas loading.
+
+    Supports paths like:
+      textured.obj              → scans/{rfq_id}/{scan_id}/textured.obj
+      standard/textured.obj     → scans/{rfq_id}/{scan_id}/standard_textured.obj
+      standard/textured.mtl     → scans/{rfq_id}/{scan_id}/standard_textured.mtl
+      standard/textured_material_00_map_Kd.jpg → standard_textured_material_00_map_Kd.jpg
+    """
+    ALLOWED_EXTENSIONS = {".obj", ".mtl", ".jpg", ".jpeg", ".png", ".ply"}
+    CONTENT_TYPES = {
+        ".obj": "text/plain",
+        ".mtl": "text/plain",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".ply": "application/octet-stream",
+    }
+
+    ext = os.path.splitext(filepath)[1].lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="File type not allowed")
+
+    # Map viewer path to GCS blob path
+    # "standard/textured.obj" → "standard_textured.obj" in GCS (legacy naming)
+    if filepath.startswith("standard/"):
+        gcs_filename = "standard_" + filepath[len("standard/"):]
+    else:
+        gcs_filename = filepath
+
+    gcs_path = f"scans/{rfq_id}/{scan_id}/{gcs_filename}"
+
+    try:
+        bucket = storage_client.bucket(BUCKET_NAME)
+        blob = bucket.blob(gcs_path)
+        data = blob.download_as_bytes()
+        content_type = CONTENT_TYPES.get(ext, "application/octet-stream")
+        return Response(content=data, media_type=content_type, headers={
+            "Cache-Control": "public, max-age=86400",
+        })
+    except Exception:
+        raise HTTPException(status_code=404, detail=f"File not found: {filepath}")
 
 
 @app.delete("/api/rfqs/{rfq_id}")

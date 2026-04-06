@@ -1226,9 +1226,8 @@ async def process_supplemental(request: Request) -> dict:
         try:
             from pipeline.openmvs_texture import texture_scan
 
-            # Scale preview target proportionally to merged face count
-            preview_target = min(int(10000 * face_count / orig_parsed.face_count), 20000)
-            tex_output = texture_scan(merged_dir, merged_metadata, preview_faces=preview_target)
+            # Merged scans have more geometry; use default 50K preview
+            tex_output = texture_scan(merged_dir, merged_metadata)
 
             # Upload textured outputs to GCS (overwrite previous)
             gcs_base = original_blob.rsplit("/", 1)[0]
@@ -1286,7 +1285,7 @@ async def process_supplemental(request: Request) -> dict:
 
 
 def _merge_supplemental(orig_root: str, supp_root: str, output_dir: str,
-                        proximity_threshold: float = 0.03) -> dict:
+                        proximity_threshold: float = 0.01) -> dict:
     """Merge supplemental scan data with original.
 
     Mesh merge: keep supplemental faces only in void regions (>proximity_threshold

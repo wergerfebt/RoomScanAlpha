@@ -304,6 +304,7 @@ let currentData = null;
 let activeRoomIndex = -1;
 let isHD = false;
 let currentTextureUrls = null;
+let currentScanId = null;
 let loadedMeshGroup = null;
 
 // Room cache: { contentGroup, measureGroup, camPos, camTarget, isHD, hdGroup } per room index
@@ -1098,6 +1099,7 @@ async function loadRoom(index) {
 
   const textureUrls = room.texture_urls || {};
   currentTextureUrls = textureUrls;
+  currentScanId = room.scan_id;
   const hasOBJ = textureUrls.obj && textureUrls.mtl;
 
   const hdBtn = document.getElementById('btn-hd');
@@ -1151,7 +1153,7 @@ async function loadRoom(index) {
   activeContentGroup = contentGroup;
 
   if (hasOBJ) {
-    loadOBJMesh(textureUrls.obj, textureUrls.atlas, true, contentGroup);
+    loadOBJMesh(textureUrls.obj, textureUrls.atlas, true, contentGroup, false);
   } else {
     buildQuadRoom(contentGroup);
   }
@@ -1435,31 +1437,64 @@ window.toggleMeasurements = function() {
 
 // --- OBJ Loading ---
 
-function loadOBJMesh(objUrl, atlasUrl, showSpinner, targetGroup) {
+function scanFilesBase(prefix) {
+  const rfqId = getRfqId();
+  const base = `${API_BASE}/api/rfqs/${rfqId}/scans/${currentScanId}/files/`;
+  return prefix ? base + prefix + '/' : base;
+}
+
+function loadOBJMesh(objUrl, atlasUrl, showSpinner, targetGroup, isStandard) {
   const spinner = document.getElementById('viewer-spinner');
   if (showSpinner) { spinner.textContent = 'Loading...'; spinner.style.display = 'block'; }
 
   const parent = targetGroup || scene;
-  const texLoader = new THREE.TextureLoader();
-  texLoader.crossOrigin = 'anonymous';
-  const objLoader = new OBJLoader();
 
-  objLoader.load(objUrl, (obj) => {
-    let atlasMat;
-    if (atlasUrl) {
-      const tex = texLoader.load(atlasUrl, () => { spinner.style.display = 'none'; });
-      tex.colorSpace = THREE.SRGBColorSpace;
-      atlasMat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide });
-    } else {
-      atlasMat = new THREE.MeshBasicMaterial({ color: 0xd8d0c8, side: THREE.DoubleSide });
+  // Use proxy for MTL + atlas so relative texture filenames resolve correctly
+  const resourcePath = scanFilesBase(isStandard ? 'standard' : null);
+  const mtlUrl = resourcePath + 'textured.mtl';
+
+  const mtlLoader = new MTLLoader();
+  mtlLoader.setResourcePath(resourcePath);
+  mtlLoader.setCrossOrigin('anonymous');
+  mtlLoader.load(mtlUrl, (materials) => {
+    materials.preload();
+    Object.values(materials.materials).forEach(mat => {
+      if (mat.map) {
+        mat.map.colorSpace = THREE.SRGBColorSpace;
+        mat.map.needsUpdate = true;
+      }
+      mat.transparent = false;
+      mat.opacity = 1.0;
+      mat.side = THREE.DoubleSide;
+    });
+
+    const objLoader = new OBJLoader();
+    objLoader.setMaterials(materials);
+    objLoader.load(objUrl, (obj) => {
+      parent.add(obj);
       spinner.style.display = 'none';
-    }
-    obj.traverse(child => { if (child.isMesh) child.material = atlasMat; });
-    parent.add(obj);
-    console.log('OBJ loaded');
+      console.log('OBJ loaded with materials');
+    }, undefined, (err) => {
+      console.error('OBJ load failed:', err);
+      spinner.style.display = 'none';
+    });
   }, undefined, (err) => {
-    console.error('OBJ load failed:', err);
-    spinner.style.display = 'none';
+    // Fallback: load OBJ with single atlas if MTL fails
+    console.warn('MTL load failed, falling back to single atlas:', err);
+    const texLoader = new THREE.TextureLoader();
+    texLoader.crossOrigin = 'anonymous';
+    const objLoader = new OBJLoader();
+    objLoader.load(objUrl, (obj) => {
+      if (atlasUrl) {
+        const tex = texLoader.load(atlasUrl, () => { spinner.style.display = 'none'; });
+        tex.colorSpace = THREE.SRGBColorSpace;
+        const mat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide });
+        obj.traverse(child => { if (child.isMesh) child.material = mat; });
+      } else {
+        spinner.style.display = 'none';
+      }
+      parent.add(obj);
+    }, undefined, () => { spinner.style.display = 'none'; });
   });
 }
 
@@ -1483,7 +1518,7 @@ window.toggleHD = function() {
       const hdGroup = new THREE.Group();
       scene.add(hdGroup);
       activeContentGroup = hdGroup;
-      loadOBJMesh(currentTextureUrls.obj_standard, currentTextureUrls.atlas_standard, true, hdGroup);
+      loadOBJMesh(currentTextureUrls.obj_standard, currentTextureUrls.atlas_standard, true, hdGroup, true);
       if (cached) { cached.hdGroup = hdGroup; cached.isHD = true; }
     }
   } else {

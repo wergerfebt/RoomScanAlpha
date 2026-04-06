@@ -250,8 +250,8 @@ def _run_texture_mesh(
 
 # Resolution levels: name → target face count (0 = full mesh, no decimation)
 RESOLUTION_LEVELS = {
-    "preview": 10000,
-    "standard": 0,
+    "preview": 50000,
+    "standard": 300000,
 }
 
 
@@ -312,9 +312,11 @@ def texture_scan(scan_root: str, metadata: dict, preview_faces: int = 0) -> dict
             print(f"[OpenMVS] [{level_name}] Full mesh: {original_faces} faces")
 
         atlas_size = 8192
+        level_timeout = 600 if level_name == "standard" else 180
         level_result = _run_texture_mesh(
             scene_mvs, mesh_ply, level_dir, prefix="textured",
             max_texture_size=atlas_size,
+            timeout=level_timeout,
         )
 
         if level_name == "preview":
