@@ -33,6 +33,8 @@ def main():
     parser.add_argument("scan_dir", help="Scan directory with mesh.ply + metadata.json + keyframes/")
     parser.add_argument("--decimate", type=int, default=0,
                         help="Pre-decimate mesh to N faces before texturing (0 = no pre-decimation)")
+    parser.add_argument("--preview-faces", type=int, default=0,
+                        help="Override preview decimation target (0 = default 10K)")
     args = parser.parse_args()
 
     scan_root = os.path.abspath(args.scan_dir)
@@ -61,7 +63,7 @@ def main():
     print(f"[Texture] Running texture_scan()...")
 
     t0 = time.time()
-    result = texture_scan(scan_root, metadata)
+    result = texture_scan(scan_root, metadata, preview_faces=args.preview_faces)
     dt = time.time() - t0
 
     print(f"\n[Texture] Completed in {dt:.1f}s")

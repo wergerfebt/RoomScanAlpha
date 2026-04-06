@@ -58,17 +58,18 @@ def fibonacci_sphere(n_rays: int) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 def filter_supplemental_faces(original_parsed, supplemental_parsed,
-                              proximity_threshold=0.03):
+                              proximity_threshold=0.03, decimate_target=50000,
+                              voxel_pitch=0.05):
     """Filter supplemental mesh faces — keep only those in void regions.
 
-    Uses closest-point distance: for each supplemental face centroid, find
-    the closest point on the original mesh surface. If closer than threshold,
-    the face overlaps existing geometry (reject). If farther, it fills a void (keep).
+    Two-stage filter for performance:
+    1. Voxel occupancy (fast): faces in empty voxels are definitely void — keep.
+    2. Closest-point proximity (precise): only on faces in occupied voxels.
 
     Args:
         proximity_threshold: minimum distance from original surface in meters.
-            Set to ~3cm to absorb ARWorldMap relocalization offset (~1cm) +
-            mesh boundary imprecision. Faces closer than this are rejected.
+        decimate_target: decimate original mesh for faster closest_point queries.
+        voxel_pitch: voxel grid resolution in meters for pre-filter.
 
     Returns:
         kept_mask: boolean array (len = supplemental face count)
@@ -89,20 +90,46 @@ def filter_supplemental_faces(original_parsed, supplemental_parsed,
     centroids = face_verts.mean(axis=1)      # (F, 3)
     n_faces = len(centroids)
 
-    # Find closest point on original mesh for each supplemental face centroid
-    _, dists, _ = trimesh.proximity.closest_point(orig_mesh, centroids)
+    # --- Stage 1: Voxel pre-filter (fast, coarse) ---
+    t1 = time.time()
+    vox = orig_mesh.voxelized(pitch=voxel_pitch)
+    occupied = vox.is_filled(centroids)
+    n_skip = int((~occupied).sum())
+    n_check = int(occupied.sum())
+    dt1 = time.time() - t1
+    print(f"[Merge] Stage 1 (voxel {voxel_pitch*100:.0f}cm): "
+          f"{n_skip} void ({100*n_skip/n_faces:.0f}%), "
+          f"{n_check} need check ({100*n_check/n_faces:.0f}%) — {dt1:.2f}s")
 
-    kept_mask = dists > proximity_threshold
+    # Faces in empty voxels are definitely void — keep
+    kept_mask = ~occupied
+
+    # --- Stage 2: Proximity check on occupied-voxel faces only ---
+    check_indices = np.where(occupied)[0]
+    if len(check_indices) > 0:
+        t2 = time.time()
+        # Decimate for faster closest_point
+        if decimate_target > 0 and len(orig_mesh.faces) > decimate_target:
+            orig_mesh_dec = orig_mesh.simplify_quadric_decimation(face_count=decimate_target)
+        else:
+            orig_mesh_dec = orig_mesh
+
+        _, dists, _ = trimesh.proximity.closest_point(orig_mesh_dec, centroids[check_indices])
+        void_in_occupied = dists > proximity_threshold
+        kept_mask[check_indices] = void_in_occupied
+        dt2 = time.time() - t2
+
+        n_kept_stage2 = int(void_in_occupied.sum())
+        print(f"[Merge] Stage 2 (proximity {proximity_threshold*100:.0f}cm): "
+              f"{n_check} checked, {n_kept_stage2} kept, "
+              f"{n_check - n_kept_stage2} rejected — {dt2:.2f}s")
 
     dt = time.time() - t0
     n_kept = int(kept_mask.sum())
     n_rejected = n_faces - n_kept
 
-    print(f"[Merge] Proximity filter ({proximity_threshold*100:.0f}cm threshold): "
-          f"{n_faces} faces, {n_kept} kept (void), {n_rejected} rejected (overlap)")
-    print(f"[Merge] Distance stats: min={dists.min():.4f}m, max={dists.max():.4f}m, "
-          f"mean={dists.mean():.4f}m")
-    print(f"[Merge] Filter time: {dt:.2f}s")
+    print(f"[Merge] Total: {n_faces} faces, {n_kept} kept (void), "
+          f"{n_rejected} rejected (overlap) — {dt:.2f}s")
 
     return kept_mask
 

@@ -1226,7 +1226,9 @@ async def process_supplemental(request: Request) -> dict:
         try:
             from pipeline.openmvs_texture import texture_scan
 
-            tex_output = texture_scan(merged_dir, merged_metadata)
+            # Scale preview target proportionally to merged face count
+            preview_target = min(int(10000 * face_count / orig_parsed.face_count), 20000)
+            tex_output = texture_scan(merged_dir, merged_metadata, preview_faces=preview_target)
 
             # Upload textured outputs to GCS (overwrite previous)
             gcs_base = original_blob.rsplit("/", 1)[0]
@@ -1317,15 +1319,27 @@ def _merge_supplemental(orig_root: str, supp_root: str, output_dir: str,
     # Compute supplemental face centroids
     supp_face_verts = supp_parsed.positions[supp_parsed.faces]
     supp_centroids = supp_face_verts.mean(axis=1)
+    n_total = len(supp_parsed.faces)
 
-    # Proximity filter: keep supplemental faces far from original surface
-    _, dists, _ = trimesh.proximity.closest_point(orig_mesh, supp_centroids)
-    kept_mask = dists > proximity_threshold
+    # Stage 1: Voxel pre-filter (fast) — faces in empty voxels are void
+    vox = orig_mesh.voxelized(pitch=0.05)
+    occupied = vox.is_filled(supp_centroids)
+    kept_mask = ~occupied
+    n_skip = int((~occupied).sum())
+    print(f"[Merge] Stage 1 (voxel 5cm): {n_skip}/{n_total} void, "
+          f"{int(occupied.sum())} need proximity check")
+
+    # Stage 2: Proximity check on occupied-voxel faces only
+    check_indices = np.where(occupied)[0]
+    if len(check_indices) > 0:
+        orig_mesh_dec = orig_mesh
+        if len(orig_mesh.faces) > 50000:
+            orig_mesh_dec = orig_mesh.simplify_quadric_decimation(face_count=50000)
+        _, dists, _ = trimesh.proximity.closest_point(orig_mesh_dec, supp_centroids[check_indices])
+        kept_mask[check_indices] = dists > proximity_threshold
 
     n_kept = int(kept_mask.sum())
-    n_total = len(supp_parsed.faces)
-    print(f"[Merge] Proximity filter ({proximity_threshold*100:.0f}cm): "
-          f"{n_kept}/{n_total} supplemental faces kept")
+    print(f"[Merge] Filter complete: {n_kept}/{n_total} supplemental faces kept")
 
     # Build merged mesh
     if n_kept > 0:

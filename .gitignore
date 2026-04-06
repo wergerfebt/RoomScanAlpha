@@ -47,3 +47,7 @@ cloud/processor/tests/local_scan/merged_*
 cloud/processor/tests/local_scan/scan_half_*
 cloud/processor/tests/local_scan/merged_frames_only
 
+
+# Real test data (downloaded from GCS + merge outputs)
+cloud/processor/tests/local_scan/real_test/
+
