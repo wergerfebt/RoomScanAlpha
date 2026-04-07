@@ -121,6 +121,15 @@
   /* Top bar */
   .top-bar { display: flex; align-items: center; gap: 8px; padding: 8px 16px; background: #fff; border-bottom: 1px solid #e0e4ea; }
   .top-bar .room-name { font-size: 16px; font-weight: 600; flex: 1; }
+  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; border: none; transition: background 0.15s; }
+  .btn-toggle { background: #e8f0fe; color: #0055cc; }
+  .btn-toggle:hover { background: #d0e2fc; }
+  .btn-toggle.active { background: #0055cc; color: #fff; }
+
+  /* Measurement labels (CSS2D) */
+  .measure-label { background: rgba(0,85,204,0.85); color: #fff; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600; font-family: -apple-system, monospace; white-space: nowrap; pointer-events: none; }
+  .measure-label.area { background: rgba(52,168,83,0.9); font-size: 13px; }
+  .measure-label.height { background: rgba(234,134,0,0.9); }
 
   /* Loading / spinners */
   .loading { display: flex; align-items: center; justify-content: center; height: 100%; color: #8e8e93; font-size: 16px; }
@@ -185,6 +194,9 @@
   <div class="main-panel">
     <div class="top-bar" id="top-bar">
       <span class="room-name" id="room-name">Select a room</span>
+      <button class="btn btn-toggle active" id="btn-measures" onclick="toggleMeasurements()">Hide Measurements</button>
+      <button class="btn btn-toggle" id="btn-view-mode" onclick="toggleViewMode()" style="display:none">Birds Eye View</button>
+      <button class="btn btn-toggle" id="btn-hd" onclick="toggleHD()" style="display:none">HD</button>
     </div>
     <div class="viewer-container" id="viewer-container">
       <div class="loading" id="viewer-loading">Sign in to continue</div>
@@ -223,6 +235,7 @@
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
 
@@ -293,11 +306,18 @@ let currentScanId = null;
 let currentData = null;
 let activeRoomIndex = -1;
 
-let scene, camera, renderer, controls;
+let scene, camera, renderer, cssRenderer, controls;
 let mode = 'orbit';
 let meshGroup = null;
 let meshChildren = [];
 let brushCm = 5;
+let measurementGroup = null;
+let measurementsVisible = true;
+let isBirdsEye = false;
+let savedInteriorCamPos = null, savedInteriorCamTarget = null, savedInteriorFov = 60;
+let isHD = false;
+let currentTextureUrls = null;
+let hdGroup = null;
 
 const anns = new Map();
 let activeKey = null;
@@ -339,6 +359,13 @@ function initThree() {
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   container.appendChild(renderer.domElement);
 
+  cssRenderer = new CSS2DRenderer();
+  cssRenderer.setSize(container.clientWidth, container.clientHeight);
+  cssRenderer.domElement.style.position = 'absolute';
+  cssRenderer.domElement.style.top = '0';
+  cssRenderer.domElement.style.pointerEvents = 'none';
+  container.appendChild(cssRenderer.domElement);
+
   controls = new OrbitControls(camera, renderer.domElement);
   controls.target.set(0, 0.8, 1);
   controls.enableDamping = true;
@@ -375,6 +402,7 @@ function onResize() {
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
   renderer.setSize(w, h);
+  cssRenderer.setSize(w, h);
 }
 
 function animate() {
@@ -382,6 +410,7 @@ function animate() {
   applyMovement();
   controls.update();
   renderer.render(scene, camera);
+  cssRenderer.render(scene, camera);
 }
 
 function applyMovement() {
@@ -404,6 +433,163 @@ function applyMovement() {
     const el = document.getElementById('key-' + k);
     if (el) el.classList.toggle('active', !!keys[k]);
   }
+}
+
+// ============================================================
+// MEASUREMENTS, BIRDS EYE, HD
+// ============================================================
+window.toggleMeasurements = function() {
+  measurementsVisible = !measurementsVisible;
+  if (measurementGroup) measurementGroup.visible = measurementsVisible;
+  const btn = document.getElementById('btn-measures');
+  btn.classList.toggle('active', measurementsVisible);
+  btn.textContent = measurementsVisible ? 'Hide Measurements' : 'Show Measurements';
+};
+
+window.toggleViewMode = function() {
+  isBirdsEye = !isBirdsEye;
+  const btn = document.getElementById('btn-view-mode');
+  if (isBirdsEye) {
+    savedInteriorCamPos = camera.position.clone();
+    savedInteriorCamTarget = controls.target.clone();
+    savedInteriorFov = camera.fov;
+
+    const box = new THREE.Box3();
+    if (meshGroup) box.expandByObject(meshGroup);
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const maxSpan = Math.max(size.x, size.z, 2);
+    const camHeight = box.max.y + maxSpan * 1.5;
+    camera.position.set(center.x, camHeight, center.z);
+    controls.target.set(center.x, box.min.y, center.z);
+    const dist = camHeight - box.min.y;
+    const fovFromV = 2 * Math.atan2(size.z/2, dist);
+    const fovFromH = 2 * Math.atan2(size.x/2/camera.aspect, dist);
+    camera.fov = Math.min(Math.max(THREE.MathUtils.radToDeg(Math.max(fovFromV, fovFromH)/0.5), 30), 120);
+    camera.updateProjectionMatrix();
+
+    // Switch to FrontSide so backface culling hides nearest surfaces
+    function setSide(side) {
+      [meshGroup, hdGroup].forEach(g => { if (g) g.traverse(c => { if (c.isMesh) { const ms = Array.isArray(c.material)?c.material:[c.material]; ms.forEach(m => m.side = side); } }); });
+    }
+    setSide(THREE.FrontSide);
+
+    controls.enableZoom = true; controls.enablePan = true; controls.rotateSpeed = 0.5;
+    controls.update();
+    btn.classList.add('active'); btn.textContent = '360 Tour';
+  } else {
+    if (savedInteriorCamPos) { camera.position.copy(savedInteriorCamPos); controls.target.copy(savedInteriorCamTarget); camera.fov = savedInteriorFov; camera.updateProjectionMatrix(); }
+
+    // Restore DoubleSide for interior viewing
+    function setSideRestore(side) {
+      [meshGroup, hdGroup].forEach(g => { if (g) g.traverse(c => { if (c.isMesh) { const ms = Array.isArray(c.material)?c.material:[c.material]; ms.forEach(m => m.side = side); } }); });
+    }
+    setSideRestore(THREE.DoubleSide);
+
+    controls.enableZoom = true; controls.enablePan = false; controls.rotateSpeed = 0.5;
+    controls.update();
+    btn.classList.remove('active'); btn.textContent = 'Birds Eye View';
+  }
+};
+
+let restoreCamAfterLoad = null; // { pos, target } — set before HD toggle reload
+
+window.toggleHD = function() {
+  if (!currentTextureUrls) return;
+  const btn = document.getElementById('btn-hd');
+  isHD = !isHD;
+  btn.classList.toggle('active', isHD);
+  btn.textContent = isHD ? 'HD On' : 'HD';
+
+  // Save camera to restore after reload
+  restoreCamAfterLoad = { pos: camera.position.clone(), target: controls.target.clone() };
+
+  clearMesh();
+  clearAnnotationsState();
+
+  const objUrl = isHD ? currentTextureUrls.obj_standard : currentTextureUrls.obj;
+  if (!objUrl) return;
+
+  const spinner = document.getElementById('viewer-spinner');
+  spinner.textContent = isHD ? 'Loading HD...' : 'Loading...';
+  spinner.style.display = 'block';
+
+  loadMesh({ ...currentTextureUrls, obj: objUrl }, isHD);
+};
+
+function buildMeasurements(room) {
+  if (measurementGroup) { scene.remove(measurementGroup); }
+  measurementGroup = new THREE.Group();
+  measurementGroup.visible = measurementsVisible;
+
+  if (!room.room_polygon_ft || room.room_polygon_ft.length < 3) { scene.add(measurementGroup); return; }
+
+  const FT_TO_M = 1/3.28084;
+  const cornersM = room.room_polygon_ft.map(([x,z]) => [x*FT_TO_M, z*FT_TO_M]);
+  const ceilingHeightM = (room.ceiling_height_ft || 8) * FT_TO_M;
+  const cornersYM = (room.wall_heights_ft || []).map(h => h*FT_TO_M);
+  const avgCeilingY = cornersYM.length > 0 ? cornersYM.reduce((s,v)=>s+v,0)/cornersYM.length : ceilingHeightM;
+  const floorY = avgCeilingY - ceilingHeightM;
+  const cx = cornersM.reduce((s,p)=>s+p[0],0)/cornersM.length;
+  const cz = cornersM.reduce((s,p)=>s+p[1],0)/cornersM.length;
+  const NUDGE = 0.005;
+
+  function nudge(x,z) { const dx=cx-x, dz=cz-z, d=Math.sqrt(dx*dx+dz*dz)||1; return [x+dx/d*NUDGE, z+dz/d*NUDGE]; }
+
+  // Edge lines + wall length labels
+  const lineMat = new THREE.LineBasicMaterial({ color: 0x0055cc, depthTest: false });
+  for (let i=0; i<cornersM.length; i++) {
+    const j = (i+1)%cornersM.length;
+    const [x0,z0] = nudge(cornersM[i][0], cornersM[i][1]);
+    const [x1,z1] = nudge(cornersM[j][0], cornersM[j][1]);
+    const h0 = cornersYM[i] || avgCeilingY;
+    const h1 = cornersYM[j] || avgCeilingY;
+
+    // Ceiling edge
+    const ceilGeom = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(x0,h0,z0), new THREE.Vector3(x1,h1,z1)]);
+    const ceilLine = new THREE.Line(ceilGeom, lineMat); ceilLine.renderOrder = 999;
+    measurementGroup.add(ceilLine);
+
+    // Floor edge
+    const floorGeom = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(x0,floorY,z0), new THREE.Vector3(x1,floorY,z1)]);
+    const floorLine = new THREE.Line(floorGeom, lineMat); floorLine.renderOrder = 999;
+    measurementGroup.add(floorLine);
+
+    // Vertical corner line
+    const vertGeom = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(x0,floorY,z0), new THREE.Vector3(x0,h0,z0)]);
+    const vertLine = new THREE.Line(vertGeom, lineMat); vertLine.renderOrder = 999;
+    measurementGroup.add(vertLine);
+
+    // Wall length label at ceiling midpoint
+    const wallLen = Math.sqrt((cornersM[j][0]-cornersM[i][0])**2 + (cornersM[j][1]-cornersM[i][1])**2) / FT_TO_M;
+    const mx = (x0+x1)/2, mz = (z0+z1)/2, my = ((h0+h1)/2);
+    addLabel(formatFtIn(wallLen), new THREE.Vector3(mx,my,mz));
+  }
+
+  // Height label at first corner
+  addLabel(formatFtIn(room.ceiling_height_ft || 8), new THREE.Vector3(nudge(cornersM[0][0],cornersM[0][1])[0], (floorY+avgCeilingY)/2, nudge(cornersM[0][0],cornersM[0][1])[1]), 'height');
+
+  // Floor area label
+  if (room.floor_area_sqft) {
+    addLabel(`${Math.round(room.floor_area_sqft)} SF`, new THREE.Vector3(cx, floorY + 0.05, cz), 'area');
+  }
+
+  scene.add(measurementGroup);
+}
+
+function addLabel(text, position, cls) {
+  const div = document.createElement('div');
+  div.className = 'measure-label' + (cls ? ' ' + cls : '');
+  div.textContent = text;
+  const label = new CSS2DObject(div);
+  label.position.copy(position);
+  measurementGroup.add(label);
+}
+
+function formatFtIn(totalFt) {
+  const ft = Math.floor(totalFt);
+  const inches = Math.round((totalFt - ft) * 12);
+  return inches === 0 ? `${ft}'` : `${ft}' ${inches}"`;
 }
 
 // ============================================================
@@ -535,16 +721,38 @@ window.selectRoom = async function(index) {
 
   const room = currentData.rooms[index];
   currentScanId = room.scan_id;
+  currentTextureUrls = room.texture_urls || {};
   document.getElementById('room-name').textContent = room.room_label || `Room ${index + 1}`;
   renderMetrics(room);
 
-  // Load mesh
-  const textureUrls = room.texture_urls || {};
-  if (textureUrls.obj) {
+  // Reset HD state — default to standard (HD) if available
+  isHD = !!currentTextureUrls.obj_standard;
+  if (hdGroup) { scene.remove(hdGroup); hdGroup = null; }
+  const hdBtn = document.getElementById('btn-hd');
+  hdBtn.style.display = currentTextureUrls.obj_standard ? '' : 'none';
+  hdBtn.classList.toggle('active', isHD);
+  hdBtn.textContent = isHD ? 'HD On' : 'HD';
+
+  // Show view mode button
+  document.getElementById('btn-view-mode').style.display = room.room_polygon_ft ? '' : 'none';
+  isBirdsEye = false;
+  document.getElementById('btn-view-mode').classList.remove('active');
+  document.getElementById('btn-view-mode').textContent = 'Birds Eye View';
+
+  // Load mesh — prefer standard (HD) by default
+  const textureUrls = currentTextureUrls;
+  const objUrl = isHD ? textureUrls.obj_standard : textureUrls.obj;
+  if (objUrl) {
     const spinner = document.getElementById('viewer-spinner');
     spinner.textContent = 'Loading...';
     spinner.style.display = 'block';
-    loadMesh(textureUrls);
+    loadMesh({ ...textureUrls, obj: objUrl }, isHD);
+  } else if (textureUrls.obj) {
+    isHD = false; hdBtn.classList.remove('active'); hdBtn.textContent = 'HD';
+    const spinner = document.getElementById('viewer-spinner');
+    spinner.textContent = 'Loading...';
+    spinner.style.display = 'block';
+    loadMesh(textureUrls, false);
   } else {
     document.getElementById('viewer-loading').textContent = 'No OBJ mesh available.';
     document.getElementById('viewer-loading').style.display = 'flex';
@@ -565,8 +773,8 @@ function scanFilesBase(prefix) {
   return prefix ? base + prefix + '/' : base;
 }
 
-function loadMesh(textureUrls) {
-  const resourcePath = scanFilesBase(null);
+function loadMesh(textureUrls, useStandard) {
+  const resourcePath = scanFilesBase(useStandard ? 'standard' : null);
   const mtlUrl = resourcePath + 'textured.mtl';
 
   const mtlLoader = new MTLLoader();
@@ -605,17 +813,28 @@ function onMeshLoaded(group) {
   meshChildren = [];
   group.traverse(c => { if (c.isMesh) meshChildren.push(c); });
 
-  // Center camera inside mesh
-  const box = new THREE.Box3().setFromObject(group);
-  const center = box.getCenter(new THREE.Vector3());
-  camera.position.set(center.x, center.y, center.z);
-  controls.target.set(center.x, center.y, center.z + 1);
+  // Position camera
+  if (restoreCamAfterLoad) {
+    camera.position.copy(restoreCamAfterLoad.pos);
+    controls.target.copy(restoreCamAfterLoad.target);
+    restoreCamAfterLoad = null;
+  } else {
+    const box = new THREE.Box3().setFromObject(group);
+    const center = box.getCenter(new THREE.Vector3());
+    camera.position.set(center.x, center.y, center.z);
+    controls.target.set(center.x, center.y, center.z + 1);
+  }
   controls.update();
 
   document.getElementById('viewer-spinner').style.display = 'none';
 
   const totalFaces = meshChildren.reduce((s, m) => s + faceCount(m), 0);
   console.log(`Loaded: ${meshChildren.length} sub-meshes, ${totalFaces} faces`);
+
+  // Build measurements
+  if (activeRoomIndex >= 0 && currentData?.rooms?.[activeRoomIndex]) {
+    buildMeasurements(currentData.rooms[activeRoomIndex]);
+  }
 
   // Build spatial indexes then load annotations
   setTimeout(() => {
@@ -630,6 +849,8 @@ function clearMesh() {
     meshGroup.traverse(c => { if (c.isMesh) { c.geometry?.dispose(); if (Array.isArray(c.material)) c.material.forEach(m=>m.dispose()); else c.material?.dispose(); }});
     meshGroup = null; meshChildren = []; spatialIndexes.length = 0;
   }
+  if (hdGroup) { scene.remove(hdGroup); hdGroup = null; }
+  if (measurementGroup) { scene.remove(measurementGroup); measurementGroup = null; }
   if (hoverMesh) { scene.remove(hoverMesh); hoverMesh.geometry.dispose(); hoverMesh.material.dispose(); hoverMesh = null; }
 }
 
