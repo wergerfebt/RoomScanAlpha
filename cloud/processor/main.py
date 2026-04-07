@@ -1538,8 +1538,11 @@ async def process_supplemental(request: Request) -> dict:
         try:
             from pipeline.openmvs_texture import texture_scan
 
-            # Merged scans need both preview (for coverage) and standard (for web viewer)
-            tex_output = texture_scan(merged_dir, merged_metadata, levels=["preview", "standard"])
+            # Merged scans need both preview (for coverage) and standard (for web viewer).
+            # Use higher preview target (100K) to avoid decimation artifacts on merged geometry.
+            tex_output = texture_scan(merged_dir, merged_metadata,
+                                      preview_faces=100000,
+                                      levels=["preview", "standard"])
 
             # Upload textured outputs to GCS (overwrite previous)
             gcs_base = original_blob.rsplit("/", 1)[0]
