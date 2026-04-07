@@ -186,7 +186,7 @@ struct ScanResultView: View {
             // Guard against double onAppear creating duplicate timers
             processingTimer?.invalidate()
             processingMessageIndex = 0
-            processingTimer = Timer.scheduledTimer(withTimeInterval: 4, repeats: true) { _ in
+            processingTimer = Timer.scheduledTimer(withTimeInterval: 2.5, repeats: true) { _ in
                 processingMessageIndex += 1
             }
         }
@@ -207,6 +207,9 @@ struct ScanResultView: View {
             Text("Scan Complete")
                 .font(.title2)
                 .fontWeight(.bold)
+
+            // Coverage (shown first — primary actionable info)
+            coverageSection
 
             // Room Dimensions
             VStack(alignment: .leading, spacing: 12) {
@@ -274,9 +277,6 @@ struct ScanResultView: View {
 
             // Scope of Work
             scopeSelectionView
-
-            // Coverage Check
-            coverageSection
 
             // Scan stats
             VStack(spacing: 4) {

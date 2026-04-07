@@ -142,7 +142,7 @@ private struct ARGapOverlaySceneView: UIViewRepresentable {
         let geometry = SCNGeometry(sources: [vertexSource], elements: [element])
 
         let material = SCNMaterial()
-        material.diffuse.contents = color.withAlphaComponent(0.5)
+        material.diffuse.contents = color.withAlphaComponent(0.8)
         material.isDoubleSided = true
         material.writesToDepthBuffer = false
         geometry.materials = [material]
