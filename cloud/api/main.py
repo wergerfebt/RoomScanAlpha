@@ -965,16 +965,72 @@ def get_annotations(rfq_id: str, scan_id: str, authorization: str = Header(None)
 
 @app.put("/api/admin/rfqs/{rfq_id}/scans/{scan_id}/annotations")
 async def save_annotations(rfq_id: str, scan_id: str, request: Request, authorization: str = Header(None)) -> dict:
-    """Save annotations for a room to GCS."""
+    """Save annotations to GCS and update detected_components in the DB."""
     _verify_admin(authorization)
     body = await request.json()
+
+    # Save raw annotations to GCS
     try:
         bucket = storage_client.bucket(BUCKET_NAME)
         blob = bucket.blob(f"scans/{rfq_id}/{scan_id}/annotations.json")
         blob.upload_from_string(json.dumps(body), content_type="application/json")
-        return {"status": "saved", "scan_id": scan_id}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to save to GCS: {e}")
+
+    # Build detected_components from annotations and update the DB
+    # Format: { "detected": ["floor_hardwood", ...], "details": { "floor_hardwood": { "qty": 120, "unit": "SF" }, ... } }
+    try:
+        detected = []
+        details = {}
+        for ann in body:
+            label_key = ann.get('k', '')
+            if not label_key:
+                continue
+            detected.append(label_key)
+            qty = ann.get('qty', 0)
+            # Look up unit from taxonomy-like info (stored in the annotation color/faces structure)
+            # The admin tool stores: { k, color, faces, qty, visible }
+            # We need the unit — derive from the label key prefix
+            unit = _unit_for_label(label_key)
+            details[label_key] = {"qty": qty, "unit": unit}
+
+        detected_components = {"detected": detected, "details": details}
+
+        conn = get_db_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """UPDATE scanned_rooms
+                   SET detected_components = %s
+                   WHERE id = %s AND rfq_id = %s""",
+                (json.dumps(detected_components), scan_id, rfq_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        return {"status": "saved", "scan_id": scan_id, "components": len(detected)}
+    except Exception as e:
+        print(f"[Admin] DB update failed (GCS saved ok): {e}")
+        return {"status": "saved_gcs_only", "scan_id": scan_id, "error": str(e)}
+
+
+def _unit_for_label(label_key: str) -> str:
+    """Derive unit type from label key based on taxonomy conventions."""
+    units = {
+        'sink': 'EA', 'fridge': 'EA', 'range': 'EA', 'tub': 'EA', 'toilet': 'EA',
+        'shower': 'EA', 'washer': 'EA', 'dryer': 'EA',
+        'door_interior': 'EA', 'door_exterior': 'EA',
+        'light_recessed': 'EA', 'light_fixture': 'EA', 'light_fluorescent': 'EA',
+        'baseboard': 'LF', 'toe_kick': 'LF', 'shoe_molding': 'LF',
+        'cabinet_upper_skinny': 'LF', 'cabinet_upper_wide': 'LF',
+        'cabinet_lower_skinny': 'LF', 'cabinet_lower_wide': 'LF',
+        'cabinet_full_skinny': 'LF', 'cabinet_full_wide': 'LF',
+    }
+    if label_key in units:
+        return units[label_key]
+    # Default: surface-area labels (floor_*, ceiling_*, clutter, rug, furniture)
+    return 'SF'
 
 
 @app.get("/health")

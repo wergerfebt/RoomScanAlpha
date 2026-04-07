@@ -2,143 +2,208 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>RoomScan Admin — Component Annotator</title>
+<link rel="icon" type="image/x-icon" href="/favicon.ico">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, sans-serif; background: #111; color: #e0e0e0; overflow: hidden; height: 100vh; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f2f4f8; color: #1d1d1f; overflow: hidden; height: 100vh; }
 
-  .app { display: flex; height: 100vh; }
+  /* Layout */
+  .app { position: relative; height: 100vh; }
+  .main-panel { width: 100%; height: 100%; display: flex; flex-direction: column; }
+  .viewer-container { flex: 1; position: relative; background: #1a1a1a; }
+  .viewer-container canvas { display: block; }
 
-  /* ---- Sidebar ---- */
-  .sidebar { width: 320px; min-width: 320px; background: #1a1a2e; border-right: 1px solid #2a2a4a;
-             display: flex; flex-direction: column; overflow: hidden; z-index: 10; }
+  /* Sidebar drawer — matches contractor view */
+  .sidebar { position: absolute; top: 0; left: 0; z-index: 50; width: 320px; height: 100%;
+             background: #fff; border-right: 1px solid #e0e4ea; display: flex; flex-direction: column;
+             overflow-y: auto; box-shadow: 2px 0 12px rgba(0,0,0,0.1);
+             transition: transform 0.3s ease; transform: translateX(0);
+             padding-top: env(safe-area-inset-top, 0px); }
+  .sidebar.collapsed { transform: translateX(-100%); box-shadow: none; }
+  .sidebar-tab { position: absolute; top: 50%; left: 0; z-index: 49; transform: translateY(-50%);
+                 background: #fff; border: 1px solid #e0e4ea; border-left: none;
+                 border-radius: 0 8px 8px 0; padding: 12px 6px; cursor: pointer;
+                 box-shadow: 2px 0 8px rgba(0,0,0,0.08); opacity: 0; pointer-events: none;
+                 transition: opacity 0.3s; }
+  .sidebar-tab svg { display: block; width: 20px; height: 20px; fill: #0055cc; }
+  .sidebar.collapsed ~ .sidebar-tab { opacity: 1; pointer-events: auto; }
+  .sidebar-close { position: absolute; top: 12px; right: 12px; z-index: 51; background: none; border: none;
+                   cursor: pointer; padding: 4px; border-radius: 4px; color: #8e8e93; }
+  .sidebar-close:hover { background: #f0f3f8; color: #1d1d1f; }
+  .sidebar-close svg { width: 18px; height: 18px; fill: currentColor; }
 
-  .sidebar-header { padding: 12px 16px; border-bottom: 1px solid #2a2a4a; display: flex; align-items: center; gap: 8px; }
-  .sidebar-header h1 { font-size: 15px; font-weight: 700; color: #e94560; flex: 1; }
-  .sidebar-header .badge { font-size: 10px; background: #e94560; color: #fff; padding: 2px 8px; border-radius: 10px; font-weight: 600; }
+  /* Sidebar sections — same as contractor view */
+  .sidebar-header { padding: 16px; border-bottom: 1px solid #e0e4ea; }
+  .sidebar-header h1 { font-size: 18px; font-weight: 700; color: #0055cc; }
+  .sidebar-header .subtitle { color: #8e8e93; font-size: 12px; margin-top: 2px; }
+  .sidebar-header .badge { display: inline-block; font-size: 10px; background: #e94560; color: #fff; padding: 2px 8px; border-radius: 10px; font-weight: 600; margin-left: 8px; vertical-align: middle; }
+  .job-info { padding: 12px 16px; border-bottom: 1px solid #e0e4ea; }
+  .job-info .project-title { font-size: 16px; font-weight: 700; }
+  .job-info .address { color: #6e6e73; font-size: 12px; margin-top: 3px; }
+  .job-info .description { color: #8e8e93; font-size: 12px; margin-top: 6px; line-height: 1.4; }
+  .job-info .description.truncated { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .job-info .desc-toggle { color: #0055cc; font-size: 11px; font-weight: 600; cursor: pointer; margin-top: 2px; display: inline-block; }
+
+  /* Room list */
+  .room-list { padding: 8px; border-bottom: 1px solid #e0e4ea; }
+  .room-list h3 { font-size: 12px; font-weight: 600; color: #8e8e93; text-transform: uppercase; letter-spacing: 0.5px; padding: 4px 8px; }
+  .room-item { padding: 10px 12px; border-radius: 8px; cursor: pointer; margin: 2px 0; transition: background 0.15s; border: 1px solid transparent; }
+  .room-item:hover { background: #f0f3f8; }
+  .room-item.active { background: #e8f0fe; border-color: #0055cc; }
+  .room-item .name { font-size: 14px; font-weight: 500; }
+  .room-item .detail { font-size: 11px; color: #8e8e93; margin-top: 2px; }
+
+  /* Metrics panel */
+  .metrics-section { padding: 12px 16px; border-bottom: 1px solid #e0e4ea; }
+  .metrics-section h3 { font-size: 12px; font-weight: 600; color: #8e8e93; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+  .metric-row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 13px; }
+  .metric-row .label { color: #6e6e73; }
+  .metric-row .value { font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  /* ---- Annotation controls (admin-only section) ---- */
+  .admin-section { border-top: 2px solid #e94560; }
+  .admin-section h3 { font-size: 12px; font-weight: 600; color: #e94560; text-transform: uppercase; letter-spacing: 0.5px; padding: 8px 16px 4px; }
 
   /* Mode bar */
-  .mode-bar { padding: 8px 12px; border-bottom: 1px solid #2a2a4a; display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
-  .mode-btn { padding: 5px 12px; border-radius: 5px; border: 1px solid #2a2a4a; background: transparent;
-              color: #888; font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.15s; }
+  .mode-bar { padding: 6px 12px; display: flex; gap: 4px; flex-wrap: wrap; align-items: center; border-bottom: 1px solid #e0e4ea; }
+  .mode-btn { padding: 5px 10px; border-radius: 5px; border: 1px solid #e0e4ea; background: #fff;
+              color: #8e8e93; font-size: 11px; font-weight: 600; cursor: pointer; transition: all 0.15s; }
   .mode-btn.active { background: #e94560; color: #fff; border-color: #e94560; }
-  .mode-btn:hover:not(.active) { background: #222240; color: #ccc; }
-  .brush-ctrl { margin-left: auto; display: flex; align-items: center; gap: 4px; font-size: 11px; color: #666; }
-  .brush-ctrl input[type=range] { width: 60px; }
+  .mode-btn:hover:not(.active) { background: #f0f3f8; color: #1d1d1f; }
+  .brush-ctrl { margin-left: auto; display: flex; align-items: center; gap: 4px; font-size: 11px; color: #8e8e93; }
+  .brush-ctrl input[type=range] { width: 50px; }
 
-  /* Picker */
-  .picker { padding: 8px 12px; border-bottom: 1px solid #2a2a4a; }
-  .picker label { font-size: 10px; font-weight: 600; color: #666; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; display: block; }
-  .picker-search { width: 100%; padding: 5px 8px; border-radius: 5px; border: 1px solid #2a2a4a; background: #111; color: #e0e0e0; font-size: 12px; }
-  .picker-search::placeholder { color: #444; }
-  .picker-list { max-height: 180px; overflow-y: auto; background: #111; border: 1px solid #2a2a4a; border-radius: 5px; margin-top: 4px; display: none; }
+  /* Component picker */
+  .picker { padding: 6px 12px; border-bottom: 1px solid #e0e4ea; }
+  .picker label { font-size: 10px; font-weight: 600; color: #8e8e93; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 3px; display: block; }
+  .picker-search { width: 100%; padding: 5px 8px; border-radius: 5px; border: 1px solid #e0e4ea; background: #fff; color: #1d1d1f; font-size: 12px; }
+  .picker-search::placeholder { color: #b0b3ba; }
+  .picker-list { max-height: 180px; overflow-y: auto; background: #fff; border: 1px solid #e0e4ea; border-radius: 5px; margin-top: 4px; display: none; }
   .picker-list.open { display: block; }
-  .pg-label { font-size: 10px; font-weight: 700; color: #e94560; padding: 4px 8px; text-transform: uppercase; }
+  .pg-label { font-size: 10px; font-weight: 700; color: #e94560; text-transform: uppercase; letter-spacing: 0.5px; padding: 4px 8px; }
   .pi { padding: 4px 8px; font-size: 12px; cursor: pointer; display: flex; justify-content: space-between; }
-  .pi:hover { background: #1a1a2e; }
-  .pi .u { color: #666; font-size: 11px; }
+  .pi:hover { background: #f0f3f8; }
+  .pi .u { color: #8e8e93; font-size: 11px; }
 
-  /* Annotations */
+  /* Annotation rows */
   .ann-section { flex: 1; overflow-y: auto; }
-  .ann-section .hdr { font-size: 10px; font-weight: 600; color: #666; text-transform: uppercase; padding: 6px 12px; }
-  .ann-empty { color: #444; font-size: 12px; padding: 20px 12px; text-align: center; }
+  .ann-empty { color: #b0b3ba; font-size: 12px; padding: 16px; text-align: center; }
   .ann-row { padding: 6px 12px; cursor: pointer; border-left: 3px solid transparent; display: flex; align-items: center; gap: 8px; transition: background 0.1s; }
-  .ann-row:hover { background: rgba(42,42,74,0.5); }
-  .ann-row.active { background: rgba(233,69,96,0.1); border-left-color: #e94560; }
+  .ann-row:hover { background: #f0f3f8; }
+  .ann-row.active { background: #fef0f2; border-left-color: #e94560; }
   .swatch { width: 12px; height: 12px; border-radius: 2px; flex-shrink: 0; }
   .ann-info { flex: 1; min-width: 0; }
   .ann-name { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .ann-meta { display: flex; align-items: center; gap: 5px; margin-top: 1px; }
-  .ann-qty { width: 55px; padding: 1px 4px; border-radius: 3px; border: 1px solid #2a2a4a; background: #111; color: #e0e0e0; font-size: 11px; text-align: right; }
-  .ann-unit { font-size: 10px; color: #666; }
-  .ann-faces { font-size: 10px; color: #444; }
+  .ann-qty { width: 55px; padding: 2px 4px; border-radius: 3px; border: 1px solid #e0e4ea; background: #fff; color: #1d1d1f; font-size: 11px; text-align: right; }
+  .ann-unit { font-size: 10px; color: #8e8e93; }
+  .ann-faces { font-size: 10px; color: #b0b3ba; }
   .ann-btns { display: flex; gap: 1px; flex-shrink: 0; }
-  .abtn { background: none; border: none; color: #666; cursor: pointer; padding: 3px; border-radius: 3px; font-size: 13px; line-height: 1; }
-  .abtn:hover { background: #2a2a4a; color: #e0e0e0; }
-  .abtn.off { color: #333; }
+  .abtn { background: none; border: none; color: #8e8e93; cursor: pointer; padding: 3px; border-radius: 3px; font-size: 13px; line-height: 1; }
+  .abtn:hover { background: #f0f3f8; color: #1d1d1f; }
+  .abtn.off { color: #d0d0d0; }
 
   /* Footer */
-  .sidebar-foot { padding: 8px 12px; border-top: 1px solid #2a2a4a; display: flex; gap: 6px; }
+  .admin-footer { padding: 8px 12px; border-top: 1px solid #e0e4ea; display: flex; gap: 6px; margin-top: auto; }
   .btn-save { flex: 1; padding: 7px; border-radius: 5px; border: none; background: #e94560; color: #fff; font-size: 12px; font-weight: 600; cursor: pointer; }
   .btn-save:hover { background: #d63851; }
-  .btn-save.ok { background: #2ecc71; }
-  .btn-clr { padding: 7px 10px; border-radius: 5px; border: 1px solid #2a2a4a; background: transparent; color: #666; font-size: 12px; cursor: pointer; }
+  .btn-save.ok { background: #34a853; }
+  .btn-export { padding: 7px 10px; border-radius: 5px; border: 1px solid #e0e4ea; background: #fff; color: #8e8e93; font-size: 12px; cursor: pointer; }
+  .btn-export:hover { color: #0055cc; }
+  .btn-clr { padding: 7px 10px; border-radius: 5px; border: 1px solid #e0e4ea; background: #fff; color: #8e8e93; font-size: 12px; cursor: pointer; }
   .btn-clr:hover { color: #e94560; }
 
-  /* ---- Viewer ---- */
-  .viewer { flex: 1; position: relative; }
-  .viewer canvas { display: block; }
-  .loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); color: #555; font-size: 14px; }
-  .hint { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.7);
-          padding: 5px 14px; border-radius: 5px; font-size: 11px; color: #666; pointer-events: none; z-index: 5; }
-  .status { position: absolute; top: 8px; right: 8px; background: rgba(0,0,0,0.7); padding: 5px 12px;
-            border-radius: 5px; font-size: 11px; z-index: 5; display: flex; gap: 12px; }
-  .status .dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; margin-right: 4px; }
-  .dot-orbit { background: #2ecc71; }
+  /* RFQ ID */
+  .rfq-id-section { padding: 8px 16px; border-top: 1px solid #e0e4ea; color: #b0b3ba; font-size: 10px; font-family: monospace; word-break: break-all; }
+
+  /* Top bar */
+  .top-bar { display: flex; align-items: center; gap: 8px; padding: 8px 16px; background: #fff; border-bottom: 1px solid #e0e4ea; }
+  .top-bar .room-name { font-size: 16px; font-weight: 600; flex: 1; }
+
+  /* Loading / spinners */
+  .loading { display: flex; align-items: center; justify-content: center; height: 100%; color: #8e8e93; font-size: 16px; }
+  .viewer-spinner { display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+                    z-index: 25; background: rgba(0,0,0,0.55); color: #fff; padding: 12px 20px;
+                    border-radius: 8px; font-size: 13px; font-weight: 600; pointer-events: none; }
+
+  /* Status bar */
+  .status-bar { position: absolute; bottom: 0; left: 0; right: 0; background: rgba(0,0,0,0.6); padding: 5px 16px; font-size: 11px; color: #ccc; display: flex; gap: 16px; z-index: 5; }
+  .status-bar .dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; margin-right: 4px; }
+  .dot-orbit { background: #34a853; }
   .dot-paint { background: #e94560; }
 
+  /* WASD keys */
+  .wasd-keys { position: absolute; bottom: 30px; left: 16px; z-index: 15; display: grid;
+               grid-template-columns: repeat(3, 28px); grid-template-rows: repeat(2, 28px); gap: 3px; pointer-events: none; }
+  .wasd-key { width: 28px; height: 28px; border-radius: 4px; display: flex; align-items: center; justify-content: center;
+              font-size: 11px; font-weight: 700; font-family: monospace; background: rgba(0,0,0,0.25); color: rgba(255,255,255,0.4); border: 1px solid rgba(255,255,255,0.15); }
+  .wasd-key.active { background: rgba(0,85,204,0.7); color: #fff; border-color: rgba(0,85,204,0.9); }
+  .wasd-key.blank { visibility: hidden; }
+
+  /* Modal overlay */
+  .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+                   z-index: 100; background: rgba(0,0,0,0.5); align-items: center; justify-content: center; }
+  .modal-content { background: #fff; border-radius: 12px; padding: 32px; max-width: 400px; width: 90%; position: relative; }
+  .modal-content h2 { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+  .modal-content .auth-subtitle { color: #8e8e93; font-size: 13px; margin-bottom: 20px; }
+  .modal-content input[type="email"],
+  .modal-content input[type="password"] { width: 100%; padding: 12px; border: 1px solid #e0e4ea; border-radius: 8px; font-size: 14px; margin-bottom: 12px; }
+  .modal-content input:focus { outline: none; border-color: #0055cc; }
+  .auth-error { color: #ff3b30; font-size: 13px; min-height: 20px; margin-bottom: 8px; }
+  .btn-full { width: 100%; padding: 12px; font-size: 15px; border-radius: 6px; border: none; cursor: pointer; font-weight: 600; }
+  .btn-primary { background: #0055cc; color: #fff; }
+  .btn-link { background: none; border: none; color: #0055cc; font-size: 13px; cursor: pointer; display: block; margin-top: 8px; text-align: center; width: 100%; }
+
+  @media (max-width: 768px) {
+    .sidebar { width: 280px; }
+    .wasd-keys { display: none; }
+  }
+
   ::-webkit-scrollbar { width: 5px; }
-  ::-webkit-scrollbar-track { background: #1a1a2e; }
-  ::-webkit-scrollbar-thumb { background: #2a2a4a; border-radius: 3px; }
+  ::-webkit-scrollbar-track { background: #f2f4f8; }
+  ::-webkit-scrollbar-thumb { background: #d0d3da; border-radius: 3px; }
 </style>
 </head>
 <body>
 
 <div class="app">
-  <div class="sidebar">
+  <div class="sidebar" id="sidebar">
+    <button class="sidebar-close" onclick="toggleSidebar()" title="Close panel">
+      <svg viewBox="0 0 24 24"><path d="M15.41 16.59L10.83 12l4.58-4.59L14 6l-6 6 6 6z"/></svg>
+    </button>
     <div class="sidebar-header">
-      <h1>Component Annotator</h1>
-      <span class="badge">ADMIN</span>
+      <h1>RoomScan<span class="badge">ADMIN</span></h1>
+      <div class="subtitle">Component Annotator</div>
     </div>
-
-    <div style="padding:6px 12px;border-bottom:1px solid #2a2a4a;">
-      <select id="room-select" onchange="selectRoom(this.value)" style="width:100%;padding:5px 8px;border-radius:5px;border:1px solid #2a2a4a;background:#111;color:#e0e0e0;font-size:12px;">
-        <option value="">Loading rooms...</option>
-      </select>
-    </div>
-
-    <div class="mode-bar">
-      <button class="mode-btn active" id="btn-orbit" onclick="setMode('orbit')">Navigate</button>
-      <button class="mode-btn" id="btn-paint" onclick="setMode('paint')">Paint</button>
-      <button class="mode-btn" id="btn-erase" onclick="setMode('erase')">Erase</button>
-      <button class="mode-btn" id="btn-undo" onclick="doUndo()" title="Undo (Ctrl+Z)">&#x21A9; Undo</button>
-      <div class="brush-ctrl">
-        <span>R:</span>
-        <input type="range" id="brush-r" min="5" max="25" value="5" oninput="setBrush(this.value)">
-        <span id="brush-lbl">5cm</span>
-      </div>
-    </div>
-
-    <div class="picker">
-      <label>Add Component</label>
-      <input class="picker-search" id="psearch" placeholder="Search..." onfocus="openPicker()" oninput="filterPicker(this.value)">
-      <div class="picker-list" id="plist"></div>
-    </div>
-
-    <div class="ann-section">
-      <div class="hdr">Annotations</div>
-      <div id="ann-rows"><div class="ann-empty">Paint components onto the mesh</div></div>
-    </div>
-
-    <div class="sidebar-foot">
-      <button class="btn-save" id="btn-save" onclick="doSave()">Save</button>
-      <button class="btn-clr" onclick="doExport()" title="Export annotations JSON for training pipeline">Export</button>
-      <button class="btn-clr" onclick="doClear()">Clear</button>
-    </div>
+    <div id="sidebar-content"><div class="loading">Loading...</div></div>
   </div>
-
-  <div class="viewer" id="viewer">
-    <div class="loading" id="loading">Loading mesh...</div>
-    <div class="hint" id="hint">WASD move &middot; Mouse look &middot; Q/Space up &middot; Shift down &middot; Hold P=paint &middot; Hold E=erase &middot; Ctrl+N/P/E=latch</div>
-    <div class="status" id="statusbar">
-      <span><span class="dot dot-orbit" id="sdot"></span><span id="smode">Navigate</span></span>
-      <span id="slabel" style="display:none"></span>
-      <span id="sfaces">0 faces</span>
+  <button class="sidebar-tab" onclick="toggleSidebar()" title="Show panel">
+    <svg viewBox="0 0 24 24"><path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6z"/></svg>
+  </button>
+  <div class="main-panel">
+    <div class="top-bar" id="top-bar">
+      <span class="room-name" id="room-name">Select a room</span>
+    </div>
+    <div class="viewer-container" id="viewer-container">
+      <div class="loading" id="viewer-loading">Sign in to continue</div>
+      <div class="viewer-spinner" id="viewer-spinner">Loading...</div>
+      <div class="wasd-keys" id="wasd-keys">
+        <div class="wasd-key blank"></div><div class="wasd-key" id="key-arrowup">&#x25B2;</div><div class="wasd-key blank"></div>
+        <div class="wasd-key" id="key-arrowleft">&#x25C0;</div><div class="wasd-key" id="key-arrowdown">&#x25BC;</div><div class="wasd-key" id="key-arrowright">&#x25B6;</div>
+      </div>
+      <div class="status-bar">
+        <span><span class="dot dot-orbit" id="sdot"></span><span id="smode">Navigate</span></span>
+        <span id="slabel" style="display:none"></span>
+        <span id="sfaces">0 faces</span>
+      </div>
     </div>
   </div>
 </div>
 
-<!-- Firebase Auth -->
+<!-- Auth modal (created dynamically) -->
+
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
 <script>
@@ -222,59 +287,57 @@ let colorIdx = 0;
 // STATE
 // ============================================================
 const API_BASE = window.location.origin;
-let authToken = null; // Firebase JWT
+let authToken = null;
 let currentRfqId = null;
 let currentScanId = null;
-let currentData = null; // from contractor-view endpoint
+let currentData = null;
+let activeRoomIndex = -1;
 
 let scene, camera, renderer, controls;
-let mode = 'orbit'; // orbit | paint | erase
+let mode = 'orbit';
 let meshGroup = null;
-let meshChildren = []; // all Mesh objects from OBJ
+let meshChildren = [];
 let brushCm = 5;
 
-// Annotation map: labelKey -> { name, unit, cat, color, faces: Set<'ci:fi'>, qty, visible, overlay }
 const anns = new Map();
 let activeKey = null;
 
-// Painting
 let painting = false;
 let strokeDirty = false;
-
-// Undo stack — each entry is a snapshot of all annotation face sets before a stroke
 const undoStack = [];
 const MAX_UNDO = 50;
-
-// Hover overlay
 let hoverMesh = null;
 
-// WASD keys
 const keys = {};
 const MOVE_SPEED = 0.04;
 
+// Spatial index
+const spatialIndexes = [];
+
+// Paint throttle
+const dirtyOverlays = new Set();
+let rebuildTimer = null;
+const REBUILD_INTERVAL = 120;
+
 // ============================================================
-// THREE.JS SETUP — interior camera like comparison.html
+// THREE.JS SETUP
 // ============================================================
 function initThree() {
-  const el = document.getElementById('viewer');
-  const w = el.clientWidth, h = el.clientHeight;
-
-  renderer = new THREE.WebGLRenderer({ antialias: true });
-  renderer.setSize(w, h);
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.outputColorSpace = THREE.SRGBColorSpace;
-  el.appendChild(renderer.domElement);
+  const container = document.getElementById('viewer-container');
+  const loading = document.getElementById('viewer-loading');
+  if (loading) loading.style.display = 'none';
 
   scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x111111);
+  scene.background = new THREE.Color(0x1a1a1a);
 
-  scene.add(new THREE.AmbientLight(0xffffff, 2.0));
-  const dl = new THREE.DirectionalLight(0xffffff, 1.0);
-  dl.position.set(0, 2, 0);
-  scene.add(dl);
-
-  camera = new THREE.PerspectiveCamera(60, w / h, 0.01, 100);
+  camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.01, 100);
   camera.position.set(0, 0.8, 0);
+
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(container.clientWidth, container.clientHeight);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  container.appendChild(renderer.domElement);
 
   controls = new OrbitControls(camera, renderer.domElement);
   controls.target.set(0, 0.8, 1);
@@ -285,10 +348,14 @@ function initThree() {
   controls.enablePan = false;
   controls.update();
 
-  window.addEventListener('resize', onResize);
-  new ResizeObserver(onResize).observe(el);
+  scene.add(new THREE.AmbientLight(0xffffff, 2.0));
+  const dl = new THREE.DirectionalLight(0xffffff, 1.0);
+  dl.position.set(0, 2, 0);
+  scene.add(dl);
 
-  // Pointer events on the canvas for painting
+  window.addEventListener('resize', onResize);
+  new ResizeObserver(onResize).observe(container);
+
   renderer.domElement.addEventListener('pointerdown', onDown);
   renderer.domElement.addEventListener('pointermove', onMove);
   renderer.domElement.addEventListener('pointerup', onUp);
@@ -301,9 +368,9 @@ function initThree() {
 }
 
 function onResize() {
-  const el = document.getElementById('viewer');
-  if (!el || !camera) return;
-  const w = el.clientWidth, h = el.clientHeight;
+  const c = document.getElementById('viewer-container');
+  if (!c || !camera) return;
+  const w = c.clientWidth, h = c.clientHeight;
   if (!w || !h) return;
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
@@ -324,127 +391,174 @@ function applyMovement() {
   const right = new THREE.Vector3().crossVectors(dir, camera.up).normalize();
   const fwd = new THREE.Vector3(dir.x, 0, dir.z).normalize();
   const strafe = new THREE.Vector3(right.x, 0, right.z).normalize();
-
   const d = new THREE.Vector3();
-  if (keys['w']) d.add(fwd.clone().multiplyScalar(MOVE_SPEED));
-  if (keys['s']) d.add(fwd.clone().multiplyScalar(-MOVE_SPEED));
-  if (keys['a']) d.add(strafe.clone().multiplyScalar(-MOVE_SPEED));
-  if (keys['d']) d.add(strafe.clone().multiplyScalar(MOVE_SPEED));
+  if (keys['arrowup']) d.add(fwd.clone().multiplyScalar(MOVE_SPEED));
+  if (keys['arrowdown']) d.add(fwd.clone().multiplyScalar(-MOVE_SPEED));
+  if (keys['arrowleft']) d.add(strafe.clone().multiplyScalar(-MOVE_SPEED));
+  if (keys['arrowright']) d.add(strafe.clone().multiplyScalar(MOVE_SPEED));
   if (keys['q'] || keys[' ']) d.y += MOVE_SPEED;
   if (keys['shift']) d.y -= MOVE_SPEED;
+  if (d.lengthSq() > 0) { camera.position.add(d); controls.target.add(d); }
 
-  if (d.lengthSq() > 0) {
-    camera.position.add(d);
-    controls.target.add(d);
+  for (const k of ['arrowup','arrowleft','arrowdown','arrowright']) {
+    const el = document.getElementById('key-' + k);
+    if (el) el.classList.toggle('active', !!keys[k]);
   }
 }
 
 // ============================================================
-// KEYBOARD SHORTCUTS
-// Hold P = momentary paint, hold N = momentary navigate, hold E = momentary erase
-// Ctrl+P = latch paint, Ctrl+N = latch navigate, Ctrl+E = latch erase
+// SIDEBAR — matches contractor view layout
 // ============================================================
-let modeBeforeHold = null; // stashed mode for momentary hold
+function renderSidebar(data) {
+  let html = '';
 
-function onKeyDown(e) {
-  // Skip if typing in an input
-  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
-    keys[e.key.toLowerCase()] = true;
-    return;
+  // Project info
+  const title = data.title || data.project_scope || 'Project';
+  html += '<div class="job-info">';
+  html += `<div class="project-title">${esc(title)}</div>`;
+  if (data.address) html += `<div class="address">${esc(data.address)}</div>`;
+  if (data.job_description) {
+    html += `<div class="description truncated" id="job-desc">${esc(data.job_description)}</div>`;
+    if (data.job_description.length > 60) html += `<span class="desc-toggle" onclick="toggleDesc()">Show more</span>`;
   }
+  html += '</div>';
 
-  const k = e.key.toLowerCase();
+  // Room list
+  html += '<div class="room-list"><h3>Rooms</h3>';
+  (data.rooms || []).forEach((room, i) => {
+    const area = room.floor_area_sqft ? `${Math.round(room.floor_area_sqft)} sq ft` : '';
+    html += `<div class="room-item" id="room-${i}" onclick="selectRoom(${i})">
+      <div class="name">${esc(room.room_label || `Room ${i + 1}`)}</div>
+      <div class="detail">${area}${area && room.ceiling_height_ft ? ' · ' : ''}${room.ceiling_height_ft ? room.ceiling_height_ft + ' ft ceiling' : ''}</div>
+    </div>`;
+  });
+  html += '</div>';
 
-  // Ctrl/Cmd+key shortcuts
-  if (e.ctrlKey || e.metaKey) {
-    if (k === 'z') { e.preventDefault(); doUndo(); return; }
-    if (k === 'n') { e.preventDefault(); setMode('orbit'); return; }
-    if (k === 'p') { e.preventDefault(); setMode('paint'); return; }
-    if (k === 'e') { e.preventDefault(); setMode('erase'); return; }
-  }
+  // Metrics (filled on room select)
+  html += '<div class="metrics-section" id="metrics-panel"></div>';
 
-  // Bare P/N/E (not WASD) = momentary hold
-  if (k === 'p' && mode !== 'paint') {
-    modeBeforeHold = mode;
-    setMode('paint');
-    return;
-  }
-  if (k === 'n' && mode !== 'orbit') {
-    modeBeforeHold = mode;
-    setMode('orbit');
-    return;
-  }
-  if (k === 'e' && mode !== 'erase' && !e.ctrlKey && !e.metaKey) {
-    modeBeforeHold = mode;
-    setMode('erase');
-    return;
-  }
+  // ---- Admin annotation controls ----
+  html += '<div class="admin-section">';
+  html += '<h3>Annotation Tools</h3>';
 
-  keys[k] = true;
+  // Mode bar
+  html += `<div class="mode-bar">
+    <button class="mode-btn active" id="btn-orbit" onclick="setMode('orbit')">Navigate</button>
+    <button class="mode-btn" id="btn-paint" onclick="setMode('paint')">Paint</button>
+    <button class="mode-btn" id="btn-erase" onclick="setMode('erase')">Erase</button>
+    <button class="mode-btn" id="btn-undo" onclick="doUndo()" title="Undo (Ctrl+Z)">&#x21A9;</button>
+    <div class="brush-ctrl"><span>R:</span><input type="range" id="brush-r" min="5" max="25" value="5" oninput="setBrush(this.value)"><span id="brush-lbl">5cm</span></div>
+  </div>`;
+
+  // Component picker
+  html += `<div class="picker">
+    <label>Add Component</label>
+    <input class="picker-search" id="psearch" placeholder="Search..." onfocus="openPicker()" oninput="filterPicker(this.value)">
+    <div class="picker-list" id="plist"></div>
+  </div>`;
+
+  // Annotations list
+  html += '<div class="ann-section" id="ann-section"><div id="ann-rows"><div class="ann-empty">Paint components onto the mesh</div></div></div>';
+
+  html += '</div>'; // end admin-section
+
+  // Footer
+  html += `<div class="admin-footer">
+    <button class="btn-save" id="btn-save" onclick="doSave()">Save</button>
+    <button class="btn-export" onclick="doExport()">Export</button>
+    <button class="btn-clr" onclick="doClear()">Clear</button>
+  </div>`;
+
+  // RFQ ID
+  html += `<div class="rfq-id-section">RFQ: ${esc(data.rfq_id || '')}</div>`;
+
+  document.getElementById('sidebar-content').innerHTML = html;
+  buildPicker();
 }
 
-function onKeyUp(e) {
-  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
-    keys[e.key.toLowerCase()] = false;
-    return;
+function renderMetrics(room) {
+  const panel = document.getElementById('metrics-panel');
+  if (!panel) return;
+  let html = '<h3>Dimensions</h3>';
+  if (room.floor_area_sqft) html += metricRow('Floor Area', `${room.floor_area_sqft} sq ft`);
+  if (room.wall_area_sqft) html += metricRow('Wall Area', `${room.wall_area_sqft} sq ft`);
+  if (room.ceiling_height_ft) html += metricRow('Ceiling Height', `${room.ceiling_height_ft} ft`);
+  if (room.perimeter_linear_ft) html += metricRow('Perimeter', `${room.perimeter_linear_ft} ft`);
+
+  // Detected materials — show with unit and quantity from annotations
+  const annList = [];
+  for (const [k, a] of anns) {
+    annList.push({ label: a.name, qty: a.qty, unit: a.unit });
+  }
+  if (annList.length > 0) {
+    html += '<h3 style="margin-top:12px">Detected Materials</h3>';
+    annList.forEach(item => {
+      const val = item.qty ? `${item.qty} ${item.unit}` : item.unit;
+      html += metricRow(item.label, val);
+    });
   }
 
-  const k = e.key.toLowerCase();
-  keys[k] = false;
-
-  // Release momentary hold — return to previous mode
-  if (modeBeforeHold !== null) {
-    if ((k === 'p' && mode === 'paint') ||
-        (k === 'n' && mode === 'orbit') ||
-        (k === 'e' && mode === 'erase')) {
-      setMode(modeBeforeHold);
-      modeBeforeHold = null;
+  if (room.scope) {
+    const scopeItems = room.scope?.items || [];
+    const scopeNotes = room.scope?.notes || '';
+    if (scopeItems.length > 0 || scopeNotes) {
+      html += '<h3 style="margin-top:12px">Scope of Work</h3>';
+      scopeItems.forEach(item => {
+        const label = item.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+        html += `<div class="metric-row"><span class="label">${esc(label)}</span></div>`;
+      });
+      if (scopeNotes) html += `<div style="color:#6e6e73;font-size:12px;margin-top:6px;line-height:1.4;font-style:italic">${esc(scopeNotes)}</div>`;
     }
   }
+  panel.innerHTML = html;
+}
+
+function metricRow(label, value) {
+  return `<div class="metric-row"><span class="label">${label}</span><span class="value">${value}</span></div>`;
 }
 
 // ============================================================
-// UNDO
+// ROOM SELECTION
 // ============================================================
-function pushUndo() {
-  // Snapshot face sets for all annotations
-  const snap = [];
-  for (const [k, a] of anns) {
-    snap.push({ k, faces: new Set(a.faces) });
-  }
-  undoStack.push(snap);
-  if (undoStack.length > MAX_UNDO) undoStack.shift();
-}
+window.selectRoom = async function(index) {
+  if (!currentData || !currentData.rooms[index]) return;
 
-window.doUndo = doUndo;
-function doUndo() {
-  if (undoStack.length === 0) return;
-  const snap = undoStack.pop();
+  // Save current before switching
+  if (currentScanId && anns.size > 0) await window.doSave();
 
-  // Restore face sets from snapshot
-  // First, gather keys present in the snapshot
-  const snapKeys = new Set(snap.map(s => s.k));
+  // Clear state
+  clearMesh();
+  clearAnnotationsState();
+  activeRoomIndex = index;
 
-  // For annotations in the snapshot, restore their faces
-  for (const s of snap) {
-    const a = anns.get(s.k);
-    if (a) {
-      a.faces = s.faces;
-      rebuildOverlay(a);
-    }
-  }
+  document.querySelectorAll('.room-item').forEach((el, i) => el.classList.toggle('active', i === index));
 
-  // For annotations NOT in the snapshot (added during this stroke — shouldn't happen but be safe)
-  for (const [k, a] of anns) {
-    if (!snapKeys.has(k)) continue; // already handled above
+  const room = currentData.rooms[index];
+  currentScanId = room.scan_id;
+  document.getElementById('room-name').textContent = room.room_label || `Room ${index + 1}`;
+  renderMetrics(room);
+
+  // Load mesh
+  const textureUrls = room.texture_urls || {};
+  if (textureUrls.obj) {
+    const spinner = document.getElementById('viewer-spinner');
+    spinner.textContent = 'Loading...';
+    spinner.style.display = 'block';
+    loadMesh(textureUrls);
+  } else {
+    document.getElementById('viewer-loading').textContent = 'No OBJ mesh available.';
+    document.getElementById('viewer-loading').style.display = 'flex';
   }
 
-  renderList();
-  updateFaces();
-}
+  // Auto-collapse on mobile
+  if (window.innerWidth <= 768) {
+    document.getElementById('sidebar').classList.add('collapsed');
+    setTimeout(onResize, 350);
+  }
+};
 
 // ============================================================
-// LOAD MESH — from API (same pattern as contractor_view.html)
+// MESH LOADING — from API (same as contractor view)
 // ============================================================
 function scanFilesBase(prefix) {
   const base = `${API_BASE}/api/rfqs/${currentRfqId}/scans/${currentScanId}/files/`;
@@ -452,13 +566,6 @@ function scanFilesBase(prefix) {
 }
 
 function loadMesh(textureUrls) {
-  const hasOBJ = textureUrls.obj && textureUrls.mtl;
-  if (!hasOBJ) {
-    document.getElementById('loading').textContent = 'No OBJ mesh available for this room.';
-    return;
-  }
-
-  // Use proxy for MTL + atlas so relative texture filenames resolve correctly
   const resourcePath = scanFilesBase(null);
   const mtlUrl = resourcePath + 'textured.mtl';
 
@@ -469,20 +576,16 @@ function loadMesh(textureUrls) {
     materials.preload();
     Object.values(materials.materials).forEach(mat => {
       if (mat.map) { mat.map.colorSpace = THREE.SRGBColorSpace; mat.map.needsUpdate = true; }
-      mat.transparent = false;
-      mat.opacity = 1.0;
-      mat.side = THREE.DoubleSide;
+      mat.transparent = false; mat.opacity = 1.0; mat.side = THREE.DoubleSide;
     });
-
     const objLoader = new OBJLoader();
     objLoader.setMaterials(materials);
-    objLoader.load(textureUrls.obj, onLoaded,
-      (xhr) => { if (xhr.total > 0) document.getElementById('loading').textContent = `Loading... ${Math.round(xhr.loaded/xhr.total*100)}%`; },
-      (err) => { document.getElementById('loading').textContent = 'Mesh load failed'; console.error(err); }
-    );
+    objLoader.load(textureUrls.obj, onMeshLoaded, undefined, (err) => {
+      console.error('OBJ load failed:', err);
+      document.getElementById('viewer-spinner').style.display = 'none';
+    });
   }, undefined, (err) => {
-    // Fallback: load OBJ with single atlas if MTL fails
-    console.warn('MTL failed, falling back to single atlas:', err);
+    console.warn('MTL failed, loading OBJ with atlas:', err);
     const objLoader = new OBJLoader();
     objLoader.load(textureUrls.obj, (obj) => {
       if (textureUrls.atlas) {
@@ -491,36 +594,43 @@ function loadMesh(textureUrls) {
         const mat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide });
         obj.traverse(child => { if (child.isMesh) child.material = mat; });
       }
-      onLoaded(obj);
+      onMeshLoaded(obj);
     });
   });
 }
 
-function onLoaded(group) {
+function onMeshLoaded(group) {
   meshGroup = group;
   scene.add(group);
-
   meshChildren = [];
   group.traverse(c => { if (c.isMesh) meshChildren.push(c); });
 
-  // Center camera inside the mesh
+  // Center camera inside mesh
   const box = new THREE.Box3().setFromObject(group);
   const center = box.getCenter(new THREE.Vector3());
   camera.position.set(center.x, center.y, center.z);
   controls.target.set(center.x, center.y, center.z + 1);
   controls.update();
 
-  document.getElementById('loading').textContent = 'Building spatial index...';
+  document.getElementById('viewer-spinner').style.display = 'none';
 
   const totalFaces = meshChildren.reduce((s, m) => s + faceCount(m), 0);
   console.log(`Loaded: ${meshChildren.length} sub-meshes, ${totalFaces} faces`);
 
-  // Build spatial indexes for brush queries (defer to allow UI update)
+  // Build spatial indexes then load annotations
   setTimeout(() => {
     for (let ci = 0; ci < meshChildren.length; ci++) buildSpatialIndex(ci);
-    document.getElementById('loading').style.display = 'none';
     loadAnnotations();
   }, 50);
+}
+
+function clearMesh() {
+  if (meshGroup) {
+    scene.remove(meshGroup);
+    meshGroup.traverse(c => { if (c.isMesh) { c.geometry?.dispose(); if (Array.isArray(c.material)) c.material.forEach(m=>m.dispose()); else c.material?.dispose(); }});
+    meshGroup = null; meshChildren = []; spatialIndexes.length = 0;
+  }
+  if (hoverMesh) { scene.remove(hoverMesh); hoverMesh.geometry.dispose(); hoverMesh.material.dispose(); hoverMesh = null; }
 }
 
 // ============================================================
@@ -535,112 +645,58 @@ function triVerts(mesh, fi) {
   const g = mesh.geometry, pos = g.attributes.position;
   const v0 = new THREE.Vector3(), v1 = new THREE.Vector3(), v2 = new THREE.Vector3();
   if (g.index) {
-    v0.fromBufferAttribute(pos, g.index.getX(fi*3));
-    v1.fromBufferAttribute(pos, g.index.getX(fi*3+1));
-    v2.fromBufferAttribute(pos, g.index.getX(fi*3+2));
+    v0.fromBufferAttribute(pos, g.index.getX(fi*3)); v1.fromBufferAttribute(pos, g.index.getX(fi*3+1)); v2.fromBufferAttribute(pos, g.index.getX(fi*3+2));
   } else {
-    v0.fromBufferAttribute(pos, fi*3);
-    v1.fromBufferAttribute(pos, fi*3+1);
-    v2.fromBufferAttribute(pos, fi*3+2);
+    v0.fromBufferAttribute(pos, fi*3); v1.fromBufferAttribute(pos, fi*3+1); v2.fromBufferAttribute(pos, fi*3+2);
   }
-  v0.applyMatrix4(mesh.matrixWorld);
-  v1.applyMatrix4(mesh.matrixWorld);
-  v2.applyMatrix4(mesh.matrixWorld);
+  v0.applyMatrix4(mesh.matrixWorld); v1.applyMatrix4(mesh.matrixWorld); v2.applyMatrix4(mesh.matrixWorld);
   return [v0, v1, v2];
 }
 
-function triArea(v0, v1, v2) {
-  return v1.clone().sub(v0).cross(v2.clone().sub(v0)).length() * 0.5;
-}
+function triArea(v0, v1, v2) { return v1.clone().sub(v0).cross(v2.clone().sub(v0)).length() * 0.5; }
 
 // ============================================================
-// SPATIAL INDEX — precompute face centers for fast brush queries
+// SPATIAL INDEX
 // ============================================================
-// Per child mesh: Float32Array of face centers (flat xyz), grid for spatial lookup
-const spatialIndexes = []; // one per meshChildren entry
-
 function buildSpatialIndex(ci) {
   const mesh = meshChildren[ci];
   const n = faceCount(mesh);
   const g = mesh.geometry, pos = g.attributes.position;
   const mat4 = mesh.matrixWorld;
-
-  // Precompute all face centers into a flat Float32Array
   const centers = new Float32Array(n * 3);
   const v0 = new THREE.Vector3(), v1 = new THREE.Vector3(), v2 = new THREE.Vector3();
-
   for (let fi = 0; fi < n; fi++) {
-    if (g.index) {
-      v0.fromBufferAttribute(pos, g.index.getX(fi*3));
-      v1.fromBufferAttribute(pos, g.index.getX(fi*3+1));
-      v2.fromBufferAttribute(pos, g.index.getX(fi*3+2));
-    } else {
-      v0.fromBufferAttribute(pos, fi*3);
-      v1.fromBufferAttribute(pos, fi*3+1);
-      v2.fromBufferAttribute(pos, fi*3+2);
-    }
-    v0.applyMatrix4(mat4);
-    v1.applyMatrix4(mat4);
-    v2.applyMatrix4(mat4);
+    if (g.index) { v0.fromBufferAttribute(pos, g.index.getX(fi*3)); v1.fromBufferAttribute(pos, g.index.getX(fi*3+1)); v2.fromBufferAttribute(pos, g.index.getX(fi*3+2)); }
+    else { v0.fromBufferAttribute(pos, fi*3); v1.fromBufferAttribute(pos, fi*3+1); v2.fromBufferAttribute(pos, fi*3+2); }
+    v0.applyMatrix4(mat4); v1.applyMatrix4(mat4); v2.applyMatrix4(mat4);
     const off = fi * 3;
-    centers[off]     = (v0.x + v1.x + v2.x) / 3;
-    centers[off + 1] = (v0.y + v1.y + v2.y) / 3;
-    centers[off + 2] = (v0.z + v1.z + v2.z) / 3;
+    centers[off] = (v0.x+v1.x+v2.x)/3; centers[off+1] = (v0.y+v1.y+v2.y)/3; centers[off+2] = (v0.z+v1.z+v2.z)/3;
   }
-
-  // Build a grid of cell size = max brush radius (25cm)
   const CELL = 0.25;
-  const grid = new Map(); // 'ix,iy,iz' -> [faceIndex, ...]
-
+  const grid = new Map();
   for (let fi = 0; fi < n; fi++) {
-    const off = fi * 3;
-    const ix = Math.floor(centers[off] / CELL);
-    const iy = Math.floor(centers[off+1] / CELL);
-    const iz = Math.floor(centers[off+2] / CELL);
-    const key = `${ix},${iy},${iz}`;
+    const off = fi*3;
+    const key = `${Math.floor(centers[off]/CELL)},${Math.floor(centers[off+1]/CELL)},${Math.floor(centers[off+2]/CELL)}`;
     if (!grid.has(key)) grid.set(key, []);
     grid.get(key).push(fi);
   }
-
   spatialIndexes[ci] = { centers, grid, CELL, count: n };
-  console.log(`Spatial index child[${ci}]: ${n} faces, ${grid.size} grid cells`);
 }
 
 function nearbyFaces(mesh, ci, seedFi, rWorld) {
   if (rWorld <= 0) return [{ ci, fi: seedFi }];
-
   const idx = spatialIndexes[ci];
   if (!idx) return [{ ci, fi: seedFi }];
-
-  const off = seedFi * 3;
-  const sx = idx.centers[off], sy = idx.centers[off+1], sz = idx.centers[off+2];
-  const r2 = rWorld * rWorld;
-  const CELL = idx.CELL;
-
-  // Check grid cells within brush radius
-  const cMin = Math.floor((sx - rWorld) / CELL);
-  const cMax = Math.floor((sx + rWorld) / CELL);
-  const rMin = Math.floor((sy - rWorld) / CELL);
-  const rMax = Math.floor((sy + rWorld) / CELL);
-  const dMin = Math.floor((sz - rWorld) / CELL);
-  const dMax = Math.floor((sz + rWorld) / CELL);
-
+  const off = seedFi*3, sx = idx.centers[off], sy = idx.centers[off+1], sz = idx.centers[off+2];
+  const r2 = rWorld*rWorld, CELL = idx.CELL;
   const out = [];
-  for (let ix = cMin; ix <= cMax; ix++) {
-    for (let iy = rMin; iy <= rMax; iy++) {
-      for (let iz = dMin; iz <= dMax; iz++) {
+  for (let ix = Math.floor((sx-rWorld)/CELL); ix <= Math.floor((sx+rWorld)/CELL); ix++)
+    for (let iy = Math.floor((sy-rWorld)/CELL); iy <= Math.floor((sy+rWorld)/CELL); iy++)
+      for (let iz = Math.floor((sz-rWorld)/CELL); iz <= Math.floor((sz+rWorld)/CELL); iz++) {
         const cell = idx.grid.get(`${ix},${iy},${iz}`);
         if (!cell) continue;
-        for (const fi of cell) {
-          const fo = fi * 3;
-          const dx = idx.centers[fo] - sx;
-          const dy = idx.centers[fo+1] - sy;
-          const dz = idx.centers[fo+2] - sz;
-          if (dx*dx + dy*dy + dz*dz <= r2) out.push({ ci, fi });
-        }
+        for (const fi of cell) { const fo=fi*3, dx=idx.centers[fo]-sx, dy=idx.centers[fo+1]-sy, dz=idx.centers[fo+2]-sz; if (dx*dx+dy*dy+dz*dz<=r2) out.push({ci,fi}); }
       }
-    }
-  }
   return out;
 }
 
@@ -649,18 +705,50 @@ function nearbyFaces(mesh, ci, seedFi, rWorld) {
 // ============================================================
 const ray = new THREE.Raycaster();
 const ndc = new THREE.Vector2();
-
 function castFace(e) {
   const rect = renderer.domElement.getBoundingClientRect();
-  ndc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-  ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+  ndc.x = ((e.clientX-rect.left)/rect.width)*2-1;
+  ndc.y = -((e.clientY-rect.top)/rect.height)*2+1;
   ray.setFromCamera(ndc, camera);
   const hits = ray.intersectObjects(meshChildren, false);
-  if (hits.length > 0) {
-    const h = hits[0];
-    return { ci: meshChildren.indexOf(h.object), fi: h.faceIndex, pt: h.point, mesh: h.object };
-  }
+  if (hits.length > 0) { const h = hits[0]; return { ci: meshChildren.indexOf(h.object), fi: h.faceIndex, pt: h.point, mesh: h.object }; }
   return null;
+}
+
+// ============================================================
+// KEYBOARD SHORTCUTS
+// ============================================================
+let modeBeforeHold = null;
+function onKeyDown(e) {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') { keys[e.key.toLowerCase()] = true; return; }
+  const k = e.key.toLowerCase();
+  if (e.ctrlKey || e.metaKey) {
+    if (k === 'z') { e.preventDefault(); doUndo(); return; }
+    if (k === 'n') { e.preventDefault(); setMode('orbit'); return; }
+    if (k === 'p') { e.preventDefault(); setMode('paint'); return; }
+    if (k === 'e') { e.preventDefault(); setMode('erase'); return; }
+  }
+  if (k === 'p' && mode !== 'paint') { modeBeforeHold = mode; setMode('paint'); return; }
+  if (k === 'n' && mode !== 'orbit') { modeBeforeHold = mode; setMode('orbit'); return; }
+  if (k === 'e' && mode !== 'erase' && !e.ctrlKey && !e.metaKey) { modeBeforeHold = mode; setMode('erase'); return; }
+  keys[k] = true;
+}
+function onKeyUp(e) {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') { keys[e.key.toLowerCase()] = false; return; }
+  const k = e.key.toLowerCase(); keys[k] = false;
+  if (modeBeforeHold !== null && ((k==='p'&&mode==='paint')||(k==='n'&&mode==='orbit')||(k==='e'&&mode==='erase'))) { setMode(modeBeforeHold); modeBeforeHold = null; }
+}
+
+// ============================================================
+// UNDO
+// ============================================================
+function pushUndo() { const snap = []; for (const [k,a] of anns) snap.push({k, faces: new Set(a.faces)}); undoStack.push(snap); if (undoStack.length > MAX_UNDO) undoStack.shift(); }
+window.doUndo = doUndo;
+function doUndo() {
+  if (undoStack.length === 0) return;
+  const snap = undoStack.pop();
+  for (const s of snap) { const a = anns.get(s.k); if (a) { a.faces = s.faces; rebuildOverlay(a); } }
+  renderList(); updateFaces(); updateMetrics();
 }
 
 // ============================================================
@@ -668,120 +756,61 @@ function castFace(e) {
 // ============================================================
 function onDown(e) {
   if (mode === 'orbit') return;
-  if (!activeKey) {
-    document.getElementById('hint').textContent = '⚠ Select a component from the picker first!';
-    document.getElementById('hint').style.color = '#e94560';
-    setTimeout(() => { document.getElementById('hint').style.color = ''; }, 2000);
-    return;
-  }
-  e.preventDefault();
-  e.stopPropagation();
-  // Snapshot state before stroke for undo
-  pushUndo();
-  painting = true;
-  strokeDirty = false;
+  if (!activeKey) return;
+  e.preventDefault(); e.stopPropagation();
+  pushUndo(); painting = true; strokeDirty = false;
   paintAt(e);
 }
-
 function onMove(e) {
   if (mode === 'orbit') return;
-  if (painting) {
-    e.preventDefault();
-    paintAt(e);
-  } else {
-    showHover(e);
-  }
+  if (painting) { e.preventDefault(); paintAt(e); } else { showHover(e); }
 }
-
 function onUp() {
   if (!painting) return;
   painting = false;
-
-  // Flush any pending throttled rebuilds
   if (rebuildTimer) { clearTimeout(rebuildTimer); rebuildTimer = null; }
-  for (const k of dirtyOverlays) {
-    const a = anns.get(k);
-    if (a) rebuildOverlay(a);
-  }
+  for (const k of dirtyOverlays) { const a = anns.get(k); if (a) rebuildOverlay(a); }
   dirtyOverlays.clear();
-
-  if (strokeDirty) {
-    renderList();
-  } else {
-    undoStack.pop();
-  }
+  if (strokeDirty) { renderList(); updateMetrics(); } else { undoStack.pop(); }
   if (hoverMesh) hoverMesh.visible = false;
 }
 
-// Track which annotations need overlay rebuilds during a stroke
-const dirtyOverlays = new Set();
-let rebuildTimer = null;
-const REBUILD_INTERVAL = 120; // ms — throttle overlay rebuilds during painting
-
 function scheduleRebuild() {
   if (rebuildTimer) return;
-  rebuildTimer = setTimeout(() => {
-    rebuildTimer = null;
-    for (const k of dirtyOverlays) {
-      const a = anns.get(k);
-      if (a) rebuildOverlay(a);
-    }
-    dirtyOverlays.clear();
-    updateFaces();
-  }, REBUILD_INTERVAL);
+  rebuildTimer = setTimeout(() => { rebuildTimer = null; for (const k of dirtyOverlays) { const a = anns.get(k); if (a) rebuildOverlay(a); } dirtyOverlays.clear(); updateFaces(); }, REBUILD_INTERVAL);
 }
 
 function paintAt(e) {
   const hit = castFace(e);
-  if (!hit) return;
-  if (!activeKey) return;
+  if (!hit || !activeKey) return;
   const a = anns.get(activeKey);
   if (!a) return;
-
-  const erase = (mode === 'erase');
-  const rWorld = brushCm * 0.01;
+  const erase = (mode === 'erase'), rWorld = brushCm * 0.01;
   const faces = nearbyFaces(hit.mesh, hit.ci, hit.fi, rWorld);
-
   let changed = false;
-  for (const { ci, fi } of faces) {
+  for (const {ci,fi} of faces) {
     const fk = `${ci}:${fi}`;
-    if (erase) {
-      if (a.faces.has(fk)) { a.faces.delete(fk); changed = true; }
-    } else {
-      // Remove from other annotations — just update the Set, don't rebuild yet
-      for (const [k, o] of anns) {
-        if (k !== activeKey && o.faces.has(fk)) {
-          o.faces.delete(fk);
-          dirtyOverlays.add(k);
-        }
-      }
+    if (erase) { if (a.faces.has(fk)) { a.faces.delete(fk); changed = true; } }
+    else {
+      for (const [k,o] of anns) { if (k !== activeKey && o.faces.has(fk)) { o.faces.delete(fk); dirtyOverlays.add(k); } }
       if (!a.faces.has(fk)) { a.faces.add(fk); changed = true; }
     }
   }
-  if (changed) {
-    strokeDirty = true;
-    dirtyOverlays.add(activeKey);
-    scheduleRebuild();
-  }
+  if (changed) { strokeDirty = true; dirtyOverlays.add(activeKey); scheduleRebuild(); }
 }
 
 function showHover(e) {
   const hit = castFace(e);
   if (!hit) { if (hoverMesh) hoverMesh.visible = false; return; }
-
-  const [v0, v1, v2] = triVerts(hit.mesh, hit.fi);
+  const [v0,v1,v2] = triVerts(hit.mesh, hit.fi);
   if (!hoverMesh) {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(9), 3));
-    hoverMesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({
-      color: 0xffffff, transparent: true, opacity: 0.5, side: THREE.DoubleSide,
-      depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
-    }));
-    hoverMesh.renderOrder = 3;
-    scene.add(hoverMesh);
+    hoverMesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }));
+    hoverMesh.renderOrder = 3; scene.add(hoverMesh);
   }
   const p = hoverMesh.geometry.attributes.position.array;
-  p[0]=v0.x; p[1]=v0.y; p[2]=v0.z; p[3]=v1.x; p[4]=v1.y; p[5]=v1.z; p[6]=v2.x; p[7]=v2.y; p[8]=v2.z;
+  p[0]=v0.x;p[1]=v0.y;p[2]=v0.z;p[3]=v1.x;p[4]=v1.y;p[5]=v1.z;p[6]=v2.x;p[7]=v2.y;p[8]=v2.z;
   hoverMesh.geometry.attributes.position.needsUpdate = true;
   hoverMesh.visible = true;
 }
@@ -790,36 +819,16 @@ function showHover(e) {
 // OVERLAY RENDERING
 // ============================================================
 function rebuildOverlay(a) {
-  if (a.overlay) {
-    scene.remove(a.overlay);
-    a.overlay.geometry.dispose();
-    a.overlay.material.dispose();
-    a.overlay = null;
-  }
+  if (a.overlay) { scene.remove(a.overlay); a.overlay.geometry.dispose(); a.overlay.material.dispose(); a.overlay = null; }
   if (a.faces.size === 0) return;
-
   const positions = [];
-  for (const fk of a.faces) {
-    const [ci, fi] = fk.split(':').map(Number);
-    const m = meshChildren[ci];
-    if (!m) continue;
-    const [v0, v1, v2] = triVerts(m, fi);
-    positions.push(v0.x,v0.y,v0.z, v1.x,v1.y,v1.z, v2.x,v2.y,v2.z);
-  }
+  for (const fk of a.faces) { const [ci,fi] = fk.split(':').map(Number); const m = meshChildren[ci]; if (!m) continue; const [v0,v1,v2] = triVerts(m,fi); positions.push(v0.x,v0.y,v0.z,v1.x,v1.y,v1.z,v2.x,v2.y,v2.z); }
   if (!positions.length) return;
-
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
   g.computeVertexNormals();
-
-  a.overlay = new THREE.Mesh(g, new THREE.MeshBasicMaterial({
-    color: new THREE.Color(a.color), transparent: true, opacity: 0.45,
-    side: THREE.DoubleSide, depthWrite: false,
-    polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
-  }));
-  a.overlay.renderOrder = 1;
-  a.overlay.visible = a.visible;
-  scene.add(a.overlay);
+  a.overlay = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: new THREE.Color(a.color), transparent: true, opacity: 0.45, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }));
+  a.overlay.renderOrder = 1; a.overlay.visible = a.visible; scene.add(a.overlay);
 }
 
 // ============================================================
@@ -827,43 +836,31 @@ function rebuildOverlay(a) {
 // ============================================================
 function addAnn(labelKey) {
   if (anns.has(labelKey)) { setActive(labelKey); return; }
-  const info = FLAT[labelKey];
-  if (!info) return;
+  const info = FLAT[labelKey]; if (!info) return;
   const color = COLORS[colorIdx++ % COLORS.length];
-  anns.set(labelKey, {
-    name: info.name, unit: info.unit, cat: info.cat, color,
-    faces: new Set(), qty: info.unit === 'EA' ? 1 : 0, visible: true, overlay: null,
-  });
-  setActive(labelKey);
-  renderList();
+  anns.set(labelKey, { name: info.name, unit: info.unit, cat: info.cat, color, faces: new Set(), qty: info.unit === 'EA' ? 1 : 0, visible: true, overlay: null });
+  setActive(labelKey); renderList(); updateMetrics();
 }
 
 function removeAnn(k) {
-  const a = anns.get(k);
-  if (!a) return;
+  const a = anns.get(k); if (!a) return;
   if (a.overlay) { scene.remove(a.overlay); a.overlay.geometry.dispose(); a.overlay.material.dispose(); }
-  anns.delete(k);
-  if (activeKey === k) { activeKey = null; updateStatus(); }
-  renderList();
+  anns.delete(k); if (activeKey === k) { activeKey = null; updateStatus(); }
+  renderList(); updateMetrics();
 }
 
-function setActive(k) {
-  activeKey = k;
-  updateStatus();
-  renderList();
-  if (mode === 'orbit') setMode('paint');
+function setActive(k) { activeKey = k; updateStatus(); renderList(); if (mode === 'orbit') setMode('paint'); }
+
+function clearAnnotationsState() {
+  for (const a of anns.values()) { if (a.overlay) { scene.remove(a.overlay); a.overlay.geometry.dispose(); a.overlay.material.dispose(); } }
+  anns.clear(); activeKey = null; colorIdx = 0; undoStack.length = 0;
+  renderList(); updateStatus();
 }
 
 function computeArea(a) {
   let total = 0;
-  for (const fk of a.faces) {
-    const [ci, fi] = fk.split(':').map(Number);
-    const m = meshChildren[ci];
-    if (!m) continue;
-    const [v0, v1, v2] = triVerts(m, fi);
-    total += triArea(v0, v1, v2);
-  }
-  return total * 10.7639; // m² → ft²
+  for (const fk of a.faces) { const [ci,fi] = fk.split(':').map(Number); const m = meshChildren[ci]; if (!m) continue; const [v0,v1,v2] = triVerts(m,fi); total += triArea(v0,v1,v2); }
+  return total * 10.7639;
 }
 
 // ============================================================
@@ -871,69 +868,45 @@ function computeArea(a) {
 // ============================================================
 window.setMode = function(m) {
   mode = m;
-  document.getElementById('btn-orbit').classList.toggle('active', m === 'orbit');
-  document.getElementById('btn-paint').classList.toggle('active', m === 'paint');
-  document.getElementById('btn-erase').classList.toggle('active', m === 'erase');
-
-  // Fully enable/disable OrbitControls — when disabled it won't intercept pointer events
+  document.getElementById('btn-orbit')?.classList.toggle('active', m === 'orbit');
+  document.getElementById('btn-paint')?.classList.toggle('active', m === 'paint');
+  document.getElementById('btn-erase')?.classList.toggle('active', m === 'erase');
   controls.enabled = (m === 'orbit');
-
   renderer.domElement.style.cursor = m === 'orbit' ? 'grab' : m === 'paint' ? 'crosshair' : 'not-allowed';
   if (hoverMesh) hoverMesh.visible = false;
-
-  const hint = document.getElementById('hint');
-  hint.style.color = '';
-  if (m === 'orbit') hint.textContent = 'WASD move · Mouse look · Q/Space up · Shift down · Hold P=paint · Hold E=erase · Ctrl+P/N/E=latch';
-  else if (m === 'paint') hint.textContent = (activeKey ? 'Click & drag to paint' : '⚠ Pick a component first') + ' · Hold N=navigate · Ctrl+N/P/E=latch';
-  else hint.textContent = (activeKey ? 'Click & drag to erase' : '⚠ Pick a component first') + ' · Hold N=navigate · Ctrl+N/P/E=latch';
   updateStatus();
 };
 
-window.setBrush = function(v) {
-  brushCm = parseInt(v);
-  document.getElementById('brush-lbl').textContent = brushCm === 0 ? '1px' : `${brushCm}cm`;
-};
+window.setBrush = function(v) { brushCm = parseInt(v); document.getElementById('brush-lbl').textContent = brushCm === 0 ? '1px' : `${brushCm}cm`; };
 
 // ============================================================
 // PICKER UI
 // ============================================================
 function buildPicker() {
-  const list = document.getElementById('plist');
+  const list = document.getElementById('plist'); if (!list) return;
   let h = '';
   TAXONOMY.forEach(c => {
     h += `<div class="pg"><div class="pg-label">${c.cat}</div>`;
-    c.items.forEach(i => {
-      h += `<div class="pi" data-k="${i.key}" onclick="pick('${i.key}')"><span>${i.name}</span><span class="u">${i.unit}</span></div>`;
-    });
+    c.items.forEach(i => { h += `<div class="pi" data-k="${i.key}" onclick="pick('${i.key}')"><span>${i.name}</span><span class="u">${i.unit}</span></div>`; });
     h += '</div>';
   });
   list.innerHTML = h;
 }
-window.openPicker = () => document.getElementById('plist').classList.add('open');
+window.openPicker = () => document.getElementById('plist')?.classList.add('open');
 window.filterPicker = function(q) {
   q = q.toLowerCase();
-  document.querySelectorAll('.pi').forEach(el => {
-    el.style.display = el.textContent.toLowerCase().includes(q) ? '' : 'none';
-  });
-  document.querySelectorAll('.pg').forEach(g => {
-    g.style.display = [...g.querySelectorAll('.pi')].some(el => el.style.display !== 'none') ? '' : 'none';
-  });
+  document.querySelectorAll('.pi').forEach(el => { el.style.display = el.textContent.toLowerCase().includes(q) ? '' : 'none'; });
+  document.querySelectorAll('.pg').forEach(g => { g.style.display = [...g.querySelectorAll('.pi')].some(el => el.style.display !== 'none') ? '' : 'none'; });
 };
-window.pick = function(k) {
-  addAnn(k);
-  document.getElementById('plist').classList.remove('open');
-  document.getElementById('psearch').value = '';
-  filterPicker('');
-};
-document.addEventListener('click', e => { if (!e.target.closest('.picker')) document.getElementById('plist').classList.remove('open'); });
+window.pick = function(k) { addAnn(k); document.getElementById('plist')?.classList.remove('open'); const s = document.getElementById('psearch'); if (s) { s.value = ''; filterPicker(''); } };
+document.addEventListener('click', e => { if (!e.target.closest('.picker')) document.getElementById('plist')?.classList.remove('open'); });
 
 // ============================================================
 // ANNOTATION LIST UI
 // ============================================================
 function renderList() {
-  const el = document.getElementById('ann-rows');
+  const el = document.getElementById('ann-rows'); if (!el) return;
   if (anns.size === 0) { el.innerHTML = '<div class="ann-empty">Paint components onto the mesh</div>'; return; }
-
   let h = '';
   for (const [k, a] of anns) {
     const act = k === activeKey ? ' active' : '';
@@ -948,9 +921,9 @@ function renderList() {
         </div>
       </div>
       <div class="ann-btns">
-        ${(a.unit==='SF'||a.unit==='LF') ? `<button class="abtn" onclick="event.stopPropagation();autoCalc('${k}')" title="Auto-compute">&#x1F4D0;</button>` : ''}
-        <button class="abtn${a.visible?'':' off'}" onclick="event.stopPropagation();togVis('${k}')" title="Toggle visibility">${a.visible?'\u25C9':'\u25CB'}</button>
-        <button class="abtn" onclick="event.stopPropagation();removeAnn('${k}')" title="Delete">&times;</button>
+        ${(a.unit==='SF'||a.unit==='LF') ? `<button class="abtn" onclick="event.stopPropagation();autoCalc('${k}')" title="Auto-compute area">&#x1F4D0;</button>` : ''}
+        <button class="abtn${a.visible?'':' off'}" onclick="event.stopPropagation();togVis('${k}')">${a.visible?'\u25C9':'\u25CB'}</button>
+        <button class="abtn" onclick="event.stopPropagation();removeAnn('${k}')">&times;</button>
       </div>
     </div>`;
   }
@@ -958,190 +931,73 @@ function renderList() {
 }
 
 window.clickAnn = k => setActive(k);
-window.chgQty = (k, v) => { const a = anns.get(k); if (a) a.qty = parseFloat(v) || 0; };
-window.togVis = function(k) {
-  const a = anns.get(k); if (!a) return;
-  a.visible = !a.visible;
-  if (a.overlay) a.overlay.visible = a.visible;
-  renderList();
-};
+window.chgQty = (k, v) => { const a = anns.get(k); if (a) { a.qty = parseFloat(v) || 0; updateMetrics(); } };
+window.togVis = function(k) { const a = anns.get(k); if (!a) return; a.visible = !a.visible; if (a.overlay) a.overlay.visible = a.visible; renderList(); };
 window.removeAnn = removeAnn;
-window.autoCalc = function(k) {
-  const a = anns.get(k); if (!a) return;
-  a.qty = Math.round(computeArea(a) * 10) / 10;
-  renderList();
-};
-window.doClear = function() {
-  if (anns.size && !confirm('Clear all annotations?')) return;
-  for (const a of anns.values()) {
-    if (a.overlay) { scene.remove(a.overlay); a.overlay.geometry.dispose(); a.overlay.material.dispose(); }
-  }
-  anns.clear(); activeKey = null; colorIdx = 0;
-  renderList(); updateStatus();
-};
+window.autoCalc = function(k) { const a = anns.get(k); if (!a) return; a.qty = Math.round(computeArea(a)*10)/10; renderList(); updateMetrics(); };
+window.doClear = function() { if (anns.size && !confirm('Clear all annotations?')) return; clearAnnotationsState(); updateMetrics(); };
+window.toggleSidebar = function() { document.getElementById('sidebar').classList.toggle('collapsed'); setTimeout(onResize, 350); };
+window.toggleDesc = function() { const d = document.getElementById('job-desc'); if (d) d.classList.toggle('truncated'); };
 
-function updateFaces() {
-  const a = activeKey ? anns.get(activeKey) : null;
-  document.getElementById('sfaces').textContent = a ? `${a.faces.size} faces` : '0 faces';
-}
-
+function updateFaces() { const a = activeKey ? anns.get(activeKey) : null; document.getElementById('sfaces').textContent = a ? `${a.faces.size} faces` : '0 faces'; }
 function updateStatus() {
   const names = { orbit: 'Navigate', paint: 'Paint', erase: 'Erase' };
   document.getElementById('smode').textContent = names[mode] || '';
   document.getElementById('sdot').className = `dot ${mode === 'orbit' ? 'dot-orbit' : 'dot-paint'}`;
   const lbl = document.getElementById('slabel');
-  if (activeKey) {
-    const a = anns.get(activeKey);
-    lbl.style.display = ''; lbl.textContent = a ? `Active: ${a.name}` : '';
-  } else { lbl.style.display = 'none'; }
+  if (activeKey) { const a = anns.get(activeKey); lbl.style.display = ''; lbl.textContent = a ? `Active: ${a.name}` : ''; } else { lbl.style.display = 'none'; }
   updateFaces();
 }
-
+function updateMetrics() { if (activeRoomIndex >= 0 && currentData?.rooms?.[activeRoomIndex]) renderMetrics(currentData.rooms[activeRoomIndex]); }
 function esc(s) { const el = document.createElement('span'); el.textContent = s || ''; return el.innerHTML; }
 
 // ============================================================
-// SAVE/LOAD — API with localStorage fallback
+// SAVE/LOAD — API + localStorage fallback
 // ============================================================
-function serializeAnnotations() {
-  const data = [];
-  for (const [k, a] of anns) data.push({ k, color: a.color, faces: [...a.faces], qty: a.qty, visible: a.visible });
-  return data;
-}
+function serializeAnnotations() { const data = []; for (const [k,a] of anns) data.push({ k, color: a.color, faces: [...a.faces], qty: a.qty, visible: a.visible }); return data; }
 
 function deserializeAnnotations(data) {
-  for (const a of anns.values()) {
-    if (a.overlay) { scene.remove(a.overlay); a.overlay.geometry.dispose(); a.overlay.material.dispose(); }
-  }
-  anns.clear(); activeKey = null; colorIdx = 0;
-
-  for (const item of data) {
-    const info = FLAT[item.k];
-    if (!info) continue;
-    const a = {
-      name: info.name, unit: info.unit, cat: info.cat,
-      color: item.color || COLORS[colorIdx++ % COLORS.length],
-      faces: new Set(item.faces || []), qty: item.qty || 0, visible: item.visible !== false, overlay: null,
-    };
-    anns.set(item.k, a);
-    rebuildOverlay(a);
-  }
-  renderList();
-  console.log(`Loaded ${data.length} annotations`);
+  clearAnnotationsState();
+  for (const item of data) { const info = FLAT[item.k]; if (!info) continue; const a = { name:info.name, unit:info.unit, cat:info.cat, color:item.color||COLORS[colorIdx++%COLORS.length], faces:new Set(item.faces||[]), qty:item.qty||0, visible:item.visible!==false, overlay:null }; anns.set(item.k, a); rebuildOverlay(a); }
+  renderList(); updateMetrics();
 }
 
 window.doExport = function() {
   if (anns.size === 0) { alert('No annotations to export.'); return; }
-  const payload = {
-    rfq_id: currentRfqId,
-    scan_id: currentScanId,
-    annotations: [],
-  };
-  for (const [k, a] of anns) {
-    payload.annotations.push({
-      label_key: k, display_name: a.name, unit: a.unit, category: a.cat,
-      color: a.color, faces: [...a.faces], quantity: a.qty,
-    });
-  }
+  const payload = { rfq_id: currentRfqId, scan_id: currentScanId, annotations: [] };
+  for (const [k,a] of anns) payload.annotations.push({ label_key:k, display_name:a.name, unit:a.unit, category:a.cat, color:a.color, faces:[...a.faces], quantity:a.qty });
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url; link.download = `annotations_${currentScanId || 'export'}.json`;
-  link.click(); URL.revokeObjectURL(url);
+  const url = URL.createObjectURL(blob); const link = document.createElement('a');
+  link.href = url; link.download = `annotations_${currentScanId || 'export'}.json`; link.click(); URL.revokeObjectURL(url);
 };
 
 window.doSave = async function() {
   const data = serializeAnnotations();
   const btn = document.getElementById('btn-save');
-
-  // Save to localStorage as fallback
   const storeKey = `admin_ann_${currentRfqId}_${currentScanId}`;
   localStorage.setItem(storeKey, JSON.stringify(data));
-
-  // Save to API if authenticated
   if (authToken && currentRfqId && currentScanId) {
     try {
-      btn.textContent = 'Saving...';
-      const resp = await fetch(`${API_BASE}/api/admin/rfqs/${currentRfqId}/scans/${currentScanId}/annotations`, {
-        method: 'PUT',
-        headers: { 'Authorization': `Bearer ${authToken}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-      });
+      if (btn) btn.textContent = 'Saving...';
+      const resp = await fetch(`${API_BASE}/api/admin/rfqs/${currentRfqId}/scans/${currentScanId}/annotations`, { method: 'PUT', headers: { 'Authorization': `Bearer ${authToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      btn.textContent = 'Saved!'; btn.classList.add('ok');
-    } catch (e) {
-      console.error('API save failed (localStorage saved):', e);
-      btn.textContent = 'Saved (local)'; btn.classList.add('ok');
-    }
-  } else {
-    btn.textContent = 'Saved (local)'; btn.classList.add('ok');
-  }
-  setTimeout(() => { btn.textContent = 'Save'; btn.classList.remove('ok'); }, 1500);
+      if (btn) { btn.textContent = 'Saved!'; btn.classList.add('ok'); }
+    } catch (e) { console.error('API save failed:', e); if (btn) { btn.textContent = 'Saved (local)'; btn.classList.add('ok'); } }
+  } else { if (btn) { btn.textContent = 'Saved (local)'; btn.classList.add('ok'); } }
+  setTimeout(() => { if (btn) { btn.textContent = 'Save'; btn.classList.remove('ok'); } }, 1500);
 };
 
 async function loadAnnotations() {
-  // Try API first
   if (authToken && currentRfqId && currentScanId) {
     try {
-      const resp = await fetch(`${API_BASE}/api/admin/rfqs/${currentRfqId}/scans/${currentScanId}/annotations`, {
-        headers: { 'Authorization': `Bearer ${authToken}` },
-      });
-      if (resp.ok) {
-        const data = await resp.json();
-        if (data && data.length > 0) {
-          deserializeAnnotations(data);
-          return;
-        }
-      }
-    } catch (e) { console.warn('API load failed, trying localStorage:', e); }
+      const resp = await fetch(`${API_BASE}/api/admin/rfqs/${currentRfqId}/scans/${currentScanId}/annotations`, { headers: { 'Authorization': `Bearer ${authToken}` } });
+      if (resp.ok) { const data = await resp.json(); if (data?.length > 0) { deserializeAnnotations(data); return; } }
+    } catch (e) { console.warn('API load failed:', e); }
   }
-
-  // Fallback to localStorage
   const storeKey = `admin_ann_${currentRfqId}_${currentScanId}`;
   const raw = localStorage.getItem(storeKey);
-  if (raw) {
-    try { deserializeAnnotations(JSON.parse(raw)); } catch (e) { console.error('localStorage load failed:', e); }
-  }
+  if (raw) { try { deserializeAnnotations(JSON.parse(raw)); } catch (e) {} }
 }
-
-// ============================================================
-// ROOM SELECTION
-// ============================================================
-function populateRoomSelector(data) {
-  const sel = document.getElementById('room-select');
-  if (!sel) return;
-  sel.innerHTML = '';
-  data.rooms.forEach((room, i) => {
-    const opt = document.createElement('option');
-    opt.value = i;
-    opt.textContent = room.room_label || `Room ${i + 1}`;
-    sel.appendChild(opt);
-  });
-}
-
-window.selectRoom = async function(index) {
-  if (index === '' || !currentData) return;
-  // Save current room before switching
-  if (currentScanId) await window.doSave();
-
-  // Clear current annotations and mesh
-  for (const a of anns.values()) {
-    if (a.overlay) { scene.remove(a.overlay); a.overlay.geometry.dispose(); a.overlay.material.dispose(); }
-  }
-  anns.clear(); activeKey = null; colorIdx = 0;
-  renderList(); updateStatus();
-
-  if (meshGroup) {
-    scene.remove(meshGroup);
-    meshGroup.traverse(c => { if (c.isMesh) { c.geometry?.dispose(); if (Array.isArray(c.material)) c.material.forEach(m=>m.dispose()); else c.material?.dispose(); }});
-    meshGroup = null; meshChildren = []; spatialIndexes.length = 0;
-  }
-
-  const room = currentData.rooms[parseInt(index)];
-  currentScanId = room.scan_id;
-  document.getElementById('loading').style.display = 'block';
-  document.getElementById('loading').textContent = 'Loading mesh...';
-  loadMesh(room.texture_urls || {});
-};
 
 // ============================================================
 // AUTH + INIT
@@ -1149,52 +1005,67 @@ window.selectRoom = async function(index) {
 function getRfqId() {
   const parts = window.location.pathname.split('/');
   const idx = parts.indexOf('rfq');
-  if (idx >= 0 && parts[idx + 1]) return parts[idx + 1];
-  const params = new URLSearchParams(window.location.search);
-  return params.get('rfq') || null;
+  return (idx >= 0 && parts[idx + 1]) ? parts[idx + 1] : new URLSearchParams(window.location.search).get('rfq');
 }
+
+function showAuthModal() {
+  let modal = document.getElementById('auth-modal');
+  if (!modal) { modal = document.createElement('div'); modal.id = 'auth-modal'; modal.className = 'modal-overlay'; document.body.appendChild(modal); }
+  modal.innerHTML = `
+    <div class="modal-content">
+      <h2>Admin Sign In</h2>
+      <p class="auth-subtitle">Sign in to access the annotator</p>
+      <input type="email" id="auth-email" placeholder="Email" autocomplete="email">
+      <input type="password" id="auth-password" placeholder="Password" autocomplete="current-password">
+      <div id="auth-error" class="auth-error"></div>
+      <button class="btn-full btn-primary" id="auth-submit" onclick="handleAuth()">Sign In</button>
+      <div style="color:#8e8e93;font-size:11px;margin:12px 0 8px;text-align:center;">or</div>
+      <button class="btn-full" onclick="handleGoogleSignIn()" style="background:#4285f4;color:#fff;">Sign In with Google</button>
+    </div>`;
+  modal.style.display = 'flex';
+}
+
+window.handleAuth = async function() {
+  const email = document.getElementById('auth-email').value.trim();
+  const password = document.getElementById('auth-password').value;
+  const errorEl = document.getElementById('auth-error');
+  const btn = document.getElementById('auth-submit');
+  if (!email || !password) { errorEl.textContent = 'Email and password required.'; return; }
+  btn.disabled = true; btn.textContent = 'Signing in...';
+  try { await firebase.auth().signInWithEmailAndPassword(email, password); document.getElementById('auth-modal').style.display = 'none'; }
+  catch (e) { errorEl.textContent = e.code === 'auth/wrong-password' ? 'Incorrect password.' : e.code === 'auth/user-not-found' ? 'No account with this email.' : 'Sign-in failed.'; btn.disabled = false; btn.textContent = 'Sign In'; }
+};
+
+window.handleGoogleSignIn = async function() {
+  try { await firebase.auth().signInWithPopup(new firebase.auth.GoogleAuthProvider()); document.getElementById('auth-modal').style.display = 'none'; }
+  catch (e) { const err = document.getElementById('auth-error'); if (err) err.textContent = e.code === 'auth/unauthorized-domain' ? 'Domain not authorized in Firebase.' : e.message; }
+};
 
 async function init() {
   currentRfqId = getRfqId();
-  if (!currentRfqId) {
-    document.getElementById('loading').textContent = 'No RFQ ID. Navigate to /admin/rfq/{rfq_id}';
-    return;
-  }
+  if (!currentRfqId) { document.getElementById('viewer-loading').textContent = 'No RFQ ID. Navigate to /admin/rfq/{rfq_id}'; return; }
 
-  initThree();
-  buildPicker();
-
-  // Wait for Firebase auth
   firebase.auth().onAuthStateChanged(async (user) => {
-    if (!user) {
-      // Show sign-in prompt
-      document.getElementById('loading').innerHTML = 'Sign in required. <button onclick="signIn()" style="padding:8px 16px;border-radius:6px;border:none;background:#e94560;color:#fff;cursor:pointer;font-size:14px;">Sign In with Google</button>';
-      return;
-    }
-
+    if (!user) { showAuthModal(); return; }
     authToken = await user.getIdToken();
-    document.getElementById('loading').textContent = 'Loading scan data...';
+    document.getElementById('viewer-loading').textContent = 'Loading project...';
 
     try {
       const resp = await fetch(`${API_BASE}/api/rfqs/${currentRfqId}/contractor-view`);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       currentData = await resp.json();
-      populateRoomSelector(currentData);
+
+      initThree();
+      renderSidebar(currentData);
+
       if (currentData.rooms?.length > 0) {
-        currentScanId = currentData.rooms[0].scan_id;
-        loadMesh(currentData.rooms[0].texture_urls || {});
+        selectRoom(0);
       } else {
-        document.getElementById('loading').textContent = 'No rooms found in this RFQ.';
+        document.getElementById('viewer-loading').textContent = 'No rooms in this RFQ.';
       }
-    } catch (e) {
-      document.getElementById('loading').textContent = `Failed to load: ${e.message}`;
-    }
+    } catch (e) { document.getElementById('viewer-loading').textContent = `Failed to load: ${e.message}`; }
   });
 }
-
-window.signIn = function() {
-  firebase.auth().signInWithPopup(new firebase.auth.GoogleAuthProvider());
-};
 
 init();
 

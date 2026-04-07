@@ -182,6 +182,12 @@
     #btn-hd { display: none !important; }
   }
 
+  /* Toast / snackbar */
+  .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: #333;
+           color: #fff; padding: 10px 20px; border-radius: 8px; font-size: 13px; font-weight: 500;
+           z-index: 200; opacity: 0; transition: opacity 0.3s; pointer-events: none; }
+  .toast.show { opacity: 1; }
+
   /* Modal overlay */
   .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
                    z-index: 100; background: rgba(0,0,0,0.5); align-items: center; justify-content: center; }
@@ -231,6 +237,7 @@
     <div class="top-bar" id="top-bar">
       <span class="room-name" id="room-name">Select a room</span>
       <button class="btn btn-toggle active" id="btn-measures" onclick="toggleMeasurements()">Hide Measurements</button>
+      <button class="btn btn-toggle" id="btn-view-mode" onclick="toggleViewMode()" style="display:none">Birds Eye View</button>
       <button class="btn btn-toggle" id="btn-hd" onclick="toggleHD()" style="display:none">HD</button>
       <div id="quote-section"></div>
     </div>
@@ -250,11 +257,11 @@
       </div>
       <div class="wasd-keys" id="wasd-keys">
         <div class="wasd-key blank"></div>
-        <div class="wasd-key" id="key-w">W</div>
+        <div class="wasd-key" id="key-arrowup">&#x25B2;</div>
         <div class="wasd-key blank"></div>
-        <div class="wasd-key" id="key-a">A</div>
-        <div class="wasd-key" id="key-s">S</div>
-        <div class="wasd-key" id="key-d">D</div>
+        <div class="wasd-key" id="key-arrowleft">&#x25C0;</div>
+        <div class="wasd-key" id="key-arrowdown">&#x25BC;</div>
+        <div class="wasd-key" id="key-arrowright">&#x25B6;</div>
       </div>
       <div class="corner-thumb" id="corner-thumb" onclick="toggleIsoFullscreen()">
         <canvas id="iso-canvas"></canvas>
@@ -268,6 +275,8 @@
     </div>
   </div>
 </div>
+
+<div class="toast" id="toast-hd-mobile"></div>
 
 <!-- Three.js from CDN -->
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
@@ -306,6 +315,11 @@ let isHD = false;
 let currentTextureUrls = null;
 let currentScanId = null;
 let loadedMeshGroup = null;
+let isBirdsEye = false;
+let savedInteriorCamPos = null;
+let savedInteriorCamTarget = null;
+let savedInteriorFov = 75;
+let currentRoomPolygonM = null; // [[x,z], ...] in meters for wall collision
 
 // Room cache: { contentGroup, measureGroup, camPos, camTarget, isHD, hdGroup } per room index
 // contentGroup contains the preview mesh (OBJ or quads). hdGroup is the HD mesh (separate).
@@ -345,7 +359,7 @@ function renderSidebar(data) {
   let html = '';
 
   // Project info: title, address, description
-  const title = data.project_scope || 'Project';
+  const title = data.title || data.project_scope || 'Project';
   html += '<div class="job-info">';
   html += `<div class="project-title">${esc(title)}</div>`;
   if (data.address) html += `<div class="address">${esc(data.address)}</div>`;
@@ -656,18 +670,17 @@ function renderMetrics(room) {
   if (room.ceiling_height_ft) html += metricRow('Ceiling Height', `${room.ceiling_height_ft} ft`);
   if (room.perimeter_linear_ft) html += metricRow('Perimeter', `${room.perimeter_linear_ft} ft`);
 
-  if (room.wall_heights_ft && room.wall_heights_ft.length > 0) {
-    html += '<h3 style="margin-top:12px">Wall Heights</h3>';
-    room.wall_heights_ft.forEach((h, i) => { html += metricRow(`Wall ${i + 1}`, `${h} ft`); });
-  }
-
   if (room.detected_components) {
-    const items = Array.isArray(room.detected_components) ? room.detected_components : room.detected_components.detected || [];
+    const dc = room.detected_components;
+    const items = Array.isArray(dc) ? dc : dc.detected || [];
+    const details = dc.details || {};
     if (items.length > 0) {
       html += '<h3 style="margin-top:12px">Detected Materials</h3>';
       items.forEach(c => {
         const label = c.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-        html += `<div class="metric-row"><span class="label">${esc(label)}</span></div>`;
+        const d = details[c];
+        const val = d ? `${d.qty} ${d.unit}` : '';
+        html += metricRow(esc(label), val);
       });
     }
   }
@@ -755,6 +768,8 @@ function showAuthModal() {
       <button class="btn btn-primary btn-full" id="auth-submit" onclick="handleAuth()">Sign In</button>
       <button class="btn-link" id="auth-toggle" onclick="toggleAuthMode()">Don't have an account? Create one</button>
       <button class="btn-link" id="auth-forgot" onclick="handleForgotPassword()">Forgot password?</button>
+      <div style="color:#8e8e93;font-size:11px;margin:12px 0 8px;text-align:center;">or</div>
+      <button class="btn btn-full" onclick="handleGoogleSignIn()" style="background:#4285f4;color:#fff;">Sign In with Google</button>
     </div>
   `;
   modal.style.display = 'flex';
@@ -823,6 +838,19 @@ function friendlyAuthError(code) {
     'auth/too-many-requests': 'Too many attempts. Try again later.',
   };
   return map[code] || 'Authentication failed. Please try again.';
+}
+
+window.handleGoogleSignIn = handleGoogleSignIn;
+async function handleGoogleSignIn() {
+  try {
+    await firebase.auth().signInWithPopup(new firebase.auth.GoogleAuthProvider());
+    closeModal('auth-modal');
+  } catch (e) {
+    const errorEl = document.getElementById('auth-error');
+    if (e.code === 'auth/popup-blocked') errorEl.textContent = 'Popup blocked — allow popups for this site.';
+    else if (e.code === 'auth/unauthorized-domain') errorEl.textContent = 'Domain not authorized in Firebase.';
+    else errorEl.textContent = friendlyAuthError(e.code);
+  }
 }
 
 function showBidModal() {
@@ -1036,6 +1064,19 @@ const _joystick = { dx: 0, dz: 0, active: false };
   zone.addEventListener('touchcancel', onEnd);
 }
 
+// Point-in-polygon test (ray casting). poly: [[x,z], ...]
+function pointInPolygon(px, pz, poly) {
+  if (!poly || poly.length < 3) return true; // no polygon = no constraint
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, zi] = poly[i], [xj, zj] = poly[j];
+    if ((zi > pz) !== (zj > pz) && px < (xj - xi) * (pz - zi) / (zj - zi) + xi) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
 function animate() {
   requestAnimationFrame(animate);
 
@@ -1047,24 +1088,35 @@ function animate() {
     forward.normalize();
     const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
     const delta = new THREE.Vector3();
-    // Desktop WASD
-    if (_keys['w']) delta.add(forward.clone().multiplyScalar(MOVE_SPEED));
-    if (_keys['s']) delta.add(forward.clone().multiplyScalar(-MOVE_SPEED));
-    if (_keys['a']) delta.add(right.clone().multiplyScalar(-MOVE_SPEED));
-    if (_keys['d']) delta.add(right.clone().multiplyScalar(MOVE_SPEED));
+    // Desktop arrow keys
+    if (_keys['arrowup']) delta.add(forward.clone().multiplyScalar(MOVE_SPEED));
+    if (_keys['arrowdown']) delta.add(forward.clone().multiplyScalar(-MOVE_SPEED));
+    if (_keys['arrowleft']) delta.add(right.clone().multiplyScalar(-MOVE_SPEED));
+    if (_keys['arrowright']) delta.add(right.clone().multiplyScalar(MOVE_SPEED));
     // Mobile joystick (dz = forward/back, dx = strafe)
     if (_joystick.active) {
       delta.add(forward.clone().multiplyScalar(-_joystick.dz * MOVE_SPEED));
       delta.add(right.clone().multiplyScalar(_joystick.dx * MOVE_SPEED));
     }
     if (delta.lengthSq() > 0) {
-      camera.position.add(delta);
-      controls.target.add(delta);
+      // In 360 Tour mode, only allow movement if new position is inside the room polygon
+      if (!isBirdsEye && currentRoomPolygonM) {
+        const newX = camera.position.x + delta.x;
+        const newZ = camera.position.z + delta.z;
+        if (!pointInPolygon(newX, newZ, currentRoomPolygonM)) {
+          delta.x = 0;
+          delta.z = 0;
+        }
+      }
+      if (delta.lengthSq() > 0) {
+        camera.position.add(delta);
+        controls.target.add(delta);
+      }
     }
   }
 
-  // Update WASD key indicator
-  for (const k of ['w','a','s','d']) {
+  // Update arrow key indicator
+  for (const k of ['arrowup','arrowleft','arrowdown','arrowright']) {
     const el = document.getElementById('key-' + k);
     if (el) el.classList.toggle('active', !!_keys[k]);
   }
@@ -1104,6 +1156,27 @@ async function loadRoom(index) {
 
   const hdBtn = document.getElementById('btn-hd');
   hdBtn.style.display = (hasOBJ && textureUrls.obj_standard) ? '' : 'none';
+
+  // Show view mode toggle and reset to 360 Tour when switching rooms
+  document.getElementById('btn-view-mode').style.display = '';
+  if (isBirdsEye) {
+    isBirdsEye = false;
+    const vmBtn = document.getElementById('btn-view-mode');
+    vmBtn.classList.remove('active');
+    vmBtn.textContent = 'Birds Eye View';
+    controls.enableZoom = false;
+    controls.enablePan = false;
+    controls.rotateSpeed = -0.3;
+  }
+
+  // Store room polygon for wall collision
+  const polyFt = room.room_polygon_ft;
+  if (polyFt && polyFt.length >= 3) {
+    const FT = 1 / 3.28084;
+    currentRoomPolygonM = polyFt.map(([x, z]) => [x * FT, z * FT]);
+  } else {
+    currentRoomPolygonM = null;
+  }
 
   // --- Cached room: show instantly ---
   if (roomCache[index]) {
@@ -1225,6 +1298,16 @@ async function loadRoom(index) {
     hdGroup: null,
   };
   loadedMeshGroup = contentGroup;
+
+  // Auto-enable HD on desktop; show toast on mobile
+  if (hasOBJ && textureUrls.obj_standard) {
+    if (!isMobile) {
+      // Small delay so preview renders first, then HD loads over it
+      setTimeout(() => { if (activeRoomIndex === index && !isHD) toggleHD(); }, 100);
+    } else {
+      showToast('HD mode available on browser only');
+    }
+  }
 }
 
 // Build a horizontal polygon surface at a given Y height using fan triangulation.
@@ -1435,6 +1518,87 @@ window.toggleMeasurements = function() {
   btn.textContent = measurementsVisible ? 'Hide Measurements' : 'Show Measurements';
 };
 
+window.toggleViewMode = function() {
+  isBirdsEye = !isBirdsEye;
+  const btn = document.getElementById('btn-view-mode');
+
+  if (isBirdsEye) {
+    // Save current interior camera state
+    savedInteriorCamPos = camera.position.clone();
+    savedInteriorCamTarget = controls.target.clone();
+    savedInteriorFov = camera.fov;
+
+    // Compute bounding box of visible content
+    const box = new THREE.Box3();
+    if (activeContentGroup) box.expandByObject(activeContentGroup);
+    const center = new THREE.Vector3();
+    const size = new THREE.Vector3();
+    box.getCenter(center);
+    box.getSize(size);
+
+    // Place camera well above ceiling, looking straight down
+    const maxSpan = Math.max(size.x, size.z, 2);
+    const camHeight = box.max.y + maxSpan * 1.5;
+    camera.position.set(center.x, camHeight, center.z);
+    controls.target.set(center.x, box.min.y, center.z);
+
+    // FOV so the room appears small (~40% of viewport)
+    const dist = camHeight - box.min.y;
+    const aspect = camera.aspect;
+    const fovFromV = 2 * Math.atan2(size.z / 2, dist);
+    const fovFromH = 2 * Math.atan2(size.x / 2 / aspect, dist);
+    const fovRad = Math.max(fovFromV, fovFromH) / 0.5;
+    camera.fov = Math.min(Math.max(THREE.MathUtils.radToDeg(fovRad), 30), 120);
+    camera.updateProjectionMatrix();
+
+    // Switch to FrontSide so backface culling hides nearest surfaces (like comparison app)
+    if (activeContentGroup) {
+      activeContentGroup.traverse(child => {
+        if (child.isMesh) {
+          const mats = Array.isArray(child.material) ? child.material : [child.material];
+          mats.forEach(m => { m.side = THREE.FrontSide; });
+        }
+      });
+    }
+
+    // Enable zoom and pan for birds eye navigation
+    controls.enableZoom = true;
+    controls.enablePan = true;
+    controls.rotateSpeed = 0.5;
+    controls.update();
+
+    btn.classList.add('active');
+    btn.textContent = '360 Tour';
+  } else {
+    // Restore interior look-around camera
+    if (savedInteriorCamPos) {
+      camera.position.copy(savedInteriorCamPos);
+      controls.target.copy(savedInteriorCamTarget);
+      camera.fov = savedInteriorFov;
+      camera.updateProjectionMatrix();
+    }
+
+    // Restore DoubleSide for interior viewing (handles inconsistent winding)
+    if (activeContentGroup) {
+      activeContentGroup.traverse(child => {
+        if (child.isMesh) {
+          const mats = Array.isArray(child.material) ? child.material : [child.material];
+          mats.forEach(m => { m.side = THREE.DoubleSide; });
+        }
+      });
+    }
+
+    // Restore interior-mode controls (rotate only)
+    controls.enableZoom = false;
+    controls.enablePan = false;
+    controls.rotateSpeed = -0.3;
+    controls.update();
+
+    btn.classList.remove('active');
+    btn.textContent = 'Birds Eye View';
+  }
+};
+
 // --- OBJ Loading ---
 
 function scanFilesBase(prefix) {
@@ -1531,6 +1695,15 @@ window.toggleHD = function() {
     document.getElementById('viewer-spinner').style.display = 'none';
   }
 };
+
+function showToast(msg, duration = 3000) {
+  const el = document.getElementById('toast-hd-mobile');
+  el.textContent = msg;
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), duration);
+}
+
+const isMobile = window.innerWidth <= 768;
 
 window._toggleDesc = function() {
   const desc = document.getElementById('job-desc');
