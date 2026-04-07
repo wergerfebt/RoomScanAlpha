@@ -37,7 +37,7 @@ struct ScanResultView: View {
                 Spacer().frame(height: 20)
 
                 if let result = viewModel.scanResult {
-                    if result.status == "complete" || result.status == "scan_ready" {
+                    if result.status == "complete" || result.status == "scan_ready" || result.status == "metrics_ready" {
                         readyView(result: result)
                     } else {
                         failedView(result: result)
@@ -144,9 +144,13 @@ struct ScanResultView: View {
         if viewModel.coverageError != nil && viewModel.cloudCoverageResult == nil {
             return true
         }
-        // Coverage checked and good enough
+        // Accurate UV-based coverage (from /coverage endpoint after texturing)
         if let coverage = viewModel.cloudCoverageResult {
             return coverage.coverageRatio >= 0.90
+        }
+        // Fast camera-viability coverage (from Phase 1 metrics_ready)
+        if let fastCov = viewModel.scanResult?.fastCoverage {
+            return fastCov.coverageRatio >= 0.90
         }
         // Still processing or checking coverage
         return false
@@ -291,7 +295,7 @@ struct ScanResultView: View {
     private var coverageSection: some View {
         VStack(spacing: 12) {
             if let result = viewModel.cloudCoverageResult {
-                // Show coverage result
+                // Accurate UV-based coverage (available after texturing completes)
                 let pct = Int(result.coverageRatio * 100)
                 HStack {
                     Image(systemName: pct >= 90 ? "checkmark.shield.fill" : "exclamationmark.triangle.fill")
@@ -311,6 +315,38 @@ struct ScanResultView: View {
                 }
 
                 if pct < 90, let onRescanGaps {
+                    Button(action: onRescanGaps) {
+                        Label("Re-scan Gaps", systemImage: "camera.viewfinder")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(.orange.opacity(0.1))
+                            .foregroundStyle(.orange)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+                }
+            } else if let fastCov = viewModel.scanResult?.fastCoverage {
+                // Fast camera-viability coverage (available immediately with metrics_ready)
+                let pct = Int(fastCov.coverageRatio * 100)
+                HStack {
+                    Image(systemName: pct >= 90 ? "checkmark.shield.fill" : "exclamationmark.triangle.fill")
+                        .foregroundStyle(pct >= 90 ? .green : .orange)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(pct)% Coverage")
+                            .font(.headline)
+                        if viewModel.scanResult?.status == "metrics_ready" {
+                            Text("Refining coverage...")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Spacer()
+                    Text("\(fastCov.uncoveredCount) gaps")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+
+                if pct < 90, let onRescanGaps, viewModel.scanResult?.status != "metrics_ready" {
                     Button(action: onRescanGaps) {
                         Label("Re-scan Gaps", systemImage: "camera.viewfinder")
                             .font(.headline)

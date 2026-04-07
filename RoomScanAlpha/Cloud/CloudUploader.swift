@@ -94,6 +94,16 @@ final class CloudUploader {
         let polygonSource: String?
         /// Signed GCS URL for the PLY mesh (7-day expiry). Nil if not available.
         let scanMeshUrl: String?
+        /// Fast camera-viability coverage from Phase 1 processing.
+        /// Available with "metrics_ready" status, before full UV-based analysis.
+        let fastCoverage: FastCoverage?
+    }
+
+    struct FastCoverage {
+        let coverageRatio: Float
+        let totalFaces: Int
+        let uncoveredCount: Int
+        let uncoveredFaces: [[String: Any]]
     }
 
     /// Full upload flow: zip → sign → upload → complete.
@@ -388,10 +398,52 @@ final class CloudUploader {
 
     /// Poll the status endpoint until the scan reaches a terminal state ("scan_ready" or "failed").
     /// Times out after maxAttempts polls (default 120 = 10 minutes at 5s intervals).
+    /// Poll the status endpoint until the scan reaches an actionable state.
+    ///
+    /// Returns on "metrics_ready" (fast results available), "complete" (texturing done),
+    /// or "failed". Uses adaptive polling: 2s for first 30s, 5s for 30-120s, 10s after.
     func pollForResult(
         scanId: String,
         rfqId: String,
-        intervalSeconds: TimeInterval = 5.0,
+        maxAttempts: Int = 120
+    ) async throws -> ScanResult {
+        let token = try await AuthManager.shared.getToken()
+        let url = URL(string: "\(apiBaseURL)/api/rfqs/\(rfqId)/scans/\(scanId)/status")!
+        let startTime = Date()
+
+        for attempt in 1...maxAttempts {
+            var request = URLRequest(url: url)
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+                let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+                throw UploadError.apiError("Status poll failed (HTTP \(statusCode))")
+            }
+
+            let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+            let status = json["status"] as? String ?? "unknown"
+
+            print("[RoomScanAlpha] Poll status: \(status) (attempt \(attempt)/\(maxAttempts))")
+
+            if status == "metrics_ready" || status == "complete" || status == "scan_ready" || status == "failed" {
+                return _parseScanResult(scanId: scanId, status: status, json: json)
+            }
+
+            // Adaptive polling: fast at first (metrics_ready expected ~20s), slower later
+            let elapsed = Date().timeIntervalSince(startTime)
+            let interval: TimeInterval = elapsed < 30 ? 2.0 : elapsed < 120 ? 5.0 : 10.0
+            try await Task.sleep(for: .seconds(interval))
+        }
+
+        throw UploadError.pollTimeout
+    }
+
+    /// Continue polling after metrics_ready until "complete" or "failed".
+    /// Called by ContentView after showing fast results to get final texture status.
+    func pollForComplete(
+        scanId: String,
+        rfqId: String,
         maxAttempts: Int = 120
     ) async throws -> ScanResult {
         let token = try await AuthManager.shared.getToken()
@@ -410,42 +462,51 @@ final class CloudUploader {
             let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
             let status = json["status"] as? String ?? "unknown"
 
-            print("[RoomScanAlpha] Poll status: \(status) (attempt \(attempt)/\(maxAttempts))")
-
             if status == "complete" || status == "scan_ready" || status == "failed" {
-                // detected_components: Miro format { "detected": ["label_key", ...] }
-                let componentsObj = json["detected_components"] as? [String: Any]
-                let components = componentsObj?["detected"] as? [String]
-
-                // scan_dimensions: contains standard keys + nested "bbox" object
-                let dimensions = json["scan_dimensions"] as? [String: Any]
-
-                // room_polygon_ft: [[x, z], ...] in feet
-                let polygon = json["room_polygon_ft"] as? [[Double]]
-                let wallHeights = json["wall_heights_ft"] as? [Double]
-                let polySource = json["polygon_source"] as? String
-                let meshUrl = json["scan_mesh_url"] as? String
-
-                return ScanResult(
-                    scanId: scanId,
-                    status: status,
-                    floorAreaSqft: json["floor_area_sqft"] as? Double,
-                    wallAreaSqft: json["wall_area_sqft"] as? Double,
-                    ceilingHeightFt: json["ceiling_height_ft"] as? Double,
-                    perimeterLinearFt: json["perimeter_linear_ft"] as? Double,
-                    detectedComponents: components,
-                    scanDimensions: dimensions,
-                    roomPolygonFt: polygon,
-                    wallHeightsFt: wallHeights,
-                    polygonSource: polySource,
-                    scanMeshUrl: meshUrl
-                )
+                return _parseScanResult(scanId: scanId, status: status, json: json)
             }
 
-            try await Task.sleep(for: .seconds(intervalSeconds))
+            try await Task.sleep(for: .seconds(5.0))
         }
 
         throw UploadError.pollTimeout
+    }
+
+    private func _parseScanResult(scanId: String, status: String, json: [String: Any]) -> ScanResult {
+        let componentsObj = json["detected_components"] as? [String: Any]
+        let components = componentsObj?["detected"] as? [String]
+        let dimensions = json["scan_dimensions"] as? [String: Any]
+        let polygon = json["room_polygon_ft"] as? [[Double]]
+        let wallHeights = json["wall_heights_ft"] as? [Double]
+        let polySource = json["polygon_source"] as? String
+        let meshUrl = json["scan_mesh_url"] as? String
+
+        // Parse fast_coverage from Phase 1 processing
+        var fastCov: FastCoverage?
+        if let fc = json["fast_coverage"] as? [String: Any] {
+            fastCov = FastCoverage(
+                coverageRatio: (fc["coverage_ratio"] as? Double).map { Float($0) } ?? 0,
+                totalFaces: fc["total_faces"] as? Int ?? 0,
+                uncoveredCount: fc["uncovered_count"] as? Int ?? 0,
+                uncoveredFaces: fc["uncovered_faces"] as? [[String: Any]] ?? []
+            )
+        }
+
+        return ScanResult(
+            scanId: scanId,
+            status: status,
+            floorAreaSqft: json["floor_area_sqft"] as? Double,
+            wallAreaSqft: json["wall_area_sqft"] as? Double,
+            ceilingHeightFt: json["ceiling_height_ft"] as? Double,
+            perimeterLinearFt: json["perimeter_linear_ft"] as? Double,
+            detectedComponents: components,
+            scanDimensions: dimensions,
+            roomPolygonFt: polygon,
+            wallHeightsFt: wallHeights,
+            polygonSource: polySource,
+            scanMeshUrl: meshUrl,
+            fastCoverage: fastCov
+        )
     }
 
     // MARK: - Coverage Check

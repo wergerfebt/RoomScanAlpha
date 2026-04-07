@@ -46,8 +46,9 @@ CREATE TABLE IF NOT EXISTS rfqs (
 );
 
 -- 4. SCANNED_ROOMS — one row per processed room scan
--- scan_status lifecycle: pending → processing → complete → failed
--- RFQ status transitions to 'scan_ready' only when ALL rooms reach 'complete'
+-- scan_status lifecycle: pending → processing → metrics_ready → complete | failed
+-- "metrics_ready" = dimensions + fast coverage available, texturing still running.
+-- RFQ status transitions to 'scan_ready' only when ALL rooms reach 'complete'.
 CREATE TABLE IF NOT EXISTS scanned_rooms (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     rfq_id UUID REFERENCES rfqs(id),
@@ -65,6 +66,12 @@ CREATE TABLE IF NOT EXISTS scanned_rooms (
     perimeter_linear_ft FLOAT,
     detected_components JSONB,
     scan_dimensions JSONB,
+    room_polygon_ft JSONB,
+    wall_heights_ft JSONB,
+    polygon_source VARCHAR(50),
+    texture_manifest JSONB,
+    scope JSONB,
+    fast_coverage JSONB,
     created_at TIMESTAMP DEFAULT NOW()
 );
 

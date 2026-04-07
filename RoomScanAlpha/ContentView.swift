@@ -485,23 +485,43 @@ struct ContentView: View {
     /// Poll the backend for scan processing results. On failure, we still show the result
     /// view with a "failed" status so the user can see something went wrong and retry,
     /// rather than being stuck on a loading screen.
+    /// Two-phase polling: first waits for "metrics_ready" (fast, ~20-30s) to show dimensions
+    /// and fast coverage, then continues polling for "complete" (texturing done) to trigger
+    /// accurate UV-based coverage analysis.
     private func startPolling(scanId: String, rfqId: String) {
         viewModel.state = .viewingResults
 
         Task {
             do {
+                // Phase 1: Wait for metrics_ready (or complete/failed)
                 let result = try await CloudUploader.shared.pollForResult(scanId: scanId, rfqId: rfqId)
                 viewModel.scanResult = result
                 viewModel.saveToHistory(scanId: scanId, status: result.status)
                 print("[RoomScanAlpha] Scan result: \(result.status)")
 
-                // Auto-check coverage once processing completes
-                if result.status == "complete" || result.status == "scan_ready" {
+                if result.status == "metrics_ready" {
+                    // Show fast results immediately, then continue polling for texturing
+                    print("[RoomScanAlpha] Showing fast metrics, continuing to poll for texturing...")
+                    do {
+                        let finalResult = try await CloudUploader.shared.pollForComplete(
+                            scanId: scanId, rfqId: rfqId
+                        )
+                        viewModel.scanResult = finalResult
+                        viewModel.saveToHistory(scanId: scanId, status: finalResult.status)
+                        print("[RoomScanAlpha] Final result: \(finalResult.status)")
+
+                        if finalResult.status == "complete" || finalResult.status == "scan_ready" {
+                            checkCoverageAutomatically(scanId: scanId, rfqId: rfqId)
+                        }
+                    } catch {
+                        // Texturing timed out but fast results are still shown
+                        print("[RoomScanAlpha] Phase 2 polling timed out (fast results still visible): \(error)")
+                    }
+                } else if result.status == "complete" || result.status == "scan_ready" {
                     checkCoverageAutomatically(scanId: scanId, rfqId: rfqId)
                 }
             } catch {
                 viewModel.saveToHistory(scanId: scanId, status: "failed")
-                // Create a placeholder "failed" result so the UI can display the error state
                 viewModel.scanResult = CloudUploader.ScanResult(
                     scanId: scanId,
                     status: "failed",
@@ -514,7 +534,8 @@ struct ContentView: View {
                     roomPolygonFt: nil,
                     wallHeightsFt: nil,
                     polygonSource: nil,
-                    scanMeshUrl: nil
+                    scanMeshUrl: nil,
+                    fastCoverage: nil
                 )
                 print("[RoomScanAlpha] Polling error: \(error)")
             }

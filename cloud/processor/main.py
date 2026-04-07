@@ -46,6 +46,10 @@ CLOUD_SQL_CONNECTION = os.environ.get("CLOUD_SQL_CONNECTION", "roomscanalpha:us-
 DB_USER = os.environ.get("DB_USER", "postgres")
 DB_PASS = os.environ.get("DB_PASS", "")
 DB_NAME = os.environ.get("DB_NAME", "quoterra")
+REGION = os.environ.get("GCP_REGION", "us-central1")
+TASKS_QUEUE = os.environ.get("TASKS_QUEUE", "scan-processing")
+PROCESSOR_URL = os.environ.get("PROCESSOR_URL", "")
+TASKS_INVOKER_SA = os.environ.get("TASKS_INVOKER_SA", "839349778883-compute@developer.gserviceaccount.com")
 
 firebase_admin.initialize_app()
 storage_client = storage.Client()
@@ -105,10 +109,11 @@ def update_scan_status(
 ) -> bool:
     """Write scan processing results (or failure) to the scanned_rooms table.
 
-    Per-room scan_status lifecycle (Miro DB Board Section 3 v3):
-      pending → processing → complete | failed
-    The RFQ-level status transitions to 'scan_ready' only when ALL its
-    scanned_rooms rows reach 'complete'.
+    Per-room scan_status lifecycle:
+      pending → processing → metrics_ready → complete | failed
+    "metrics_ready" means dimensions + fast coverage are available but
+    texturing is still running. The RFQ-level status transitions to
+    'scan_ready' only when ALL its scanned_rooms rows reach 'complete'.
 
     Args:
         scan_id: UUID of the scan row to update.
@@ -146,7 +151,8 @@ def update_scan_status(
                        polygon_source = %s,
                        scan_mesh_url = %s,
                        texture_manifest = %s,
-                       scope = %s
+                       scope = %s,
+                       fast_coverage = %s
                    WHERE id = %s""",
                 (
                     status,
@@ -162,6 +168,7 @@ def update_scan_status(
                     room_data.get("scan_mesh_url"),
                     json.dumps(room_data.get("texture_manifest")),
                     json.dumps(room_data.get("room_scope")),
+                    json.dumps(room_data.get("fast_coverage")),
                     scan_id,
                 ),
             )
@@ -222,12 +229,11 @@ def send_fcm_notification(scan_id: str, status: str, rfq_ready: bool = False) ->
 async def process_scan(request: Request) -> dict:
     """Process an uploaded scan package (called by Cloud Tasks, not directly by clients).
 
-    Steps:
-      1. Download the zip from GCS.
-      2. Unzip and locate the scan root directory.
-      3. Validate package structure (PLY header, metadata, keyframes, depth maps).
-      4. Parse the binary PLY mesh and compute room dimensions.
-      5. Write results to Cloud SQL and send an FCM notification.
+    Two-phase pipeline for fast user feedback:
+      Phase 1 (this endpoint, ~20-30s): Download, parse PLY, compute metrics,
+        run fast camera-viability coverage check, write "metrics_ready" to DB.
+      Phase 2 (/process-texture, async): OpenMVS texturing, upload textured mesh,
+        update status to "complete". Enqueued as a separate Cloud Tasks job.
     """
     body = await request.json()
     scan_id = body.get("scan_id")
@@ -291,7 +297,119 @@ async def process_scan(request: Request) -> dict:
         annotation = metadata.get("corner_annotation")
         polygon_result = _compute_from_annotation(annotation, room_metrics)
 
-        # Step 7A: Texture generation — OpenMVS TextureMesh with seam leveling
+        # Step 4c: Upload mesh.ply to a known GCS path for direct access (signed URLs)
+        mesh_gcs_path = blob_path.rsplit("/", 1)[0] + "/mesh.ply"
+        try:
+            _upload_to_gcs(os.path.join(scan_root, "mesh.ply"), mesh_gcs_path)
+        except Exception as e:
+            print(f"[Processor] Warning: mesh upload failed: {e}")
+            mesh_gcs_path = None
+
+        # Step 4d: Fast coverage check — camera-viability analysis on raw mesh.
+        # Uses the same distance/angle/projection thresholds as OpenMVS TextureMesh,
+        # giving a quick estimate before the full UV-based analysis is available.
+        fast_coverage = None
+        try:
+            cameras = _load_cameras(scan_root, metadata)
+            if cameras:
+                import trimesh as _trimesh
+                tri_mesh = _trimesh.Trimesh(
+                    vertices=parsed_mesh.positions,
+                    faces=parsed_mesh.faces,
+                    vertex_normals=parsed_mesh.normals,
+                    process=False,
+                )
+                uncovered = _check_face_coverage(tri_mesh, cameras)
+                total_faces = len(parsed_mesh.faces)
+                ratio = 1.0 - len(uncovered) / max(total_faces, 1)
+                fast_coverage = {
+                    "coverage_ratio": round(ratio, 3),
+                    "total_faces": total_faces,
+                    "uncovered_count": len(uncovered),
+                    "uncovered_faces": uncovered[:2000],
+                }
+                print(f"[Processor] Fast coverage: {int(ratio * 100)}% "
+                      f"({len(uncovered)}/{total_faces} uncovered), {len(cameras)} cameras")
+        except Exception as e:
+            print(f"[Processor] Warning: fast coverage check failed: {e}")
+
+        # Phase 1 complete — write "metrics_ready" with dimensions + fast coverage.
+        # The iOS app can show results immediately while texturing runs async.
+        room_data = {
+            "floor_area_sqft": polygon_result["floor_area_sqft"],
+            "wall_area_sqft": polygon_result["wall_area_sqft"],
+            "ceiling_height_ft": polygon_result["ceiling_height_ft"],
+            "perimeter_linear_ft": polygon_result["perimeter_linear_ft"],
+            "detected_components": room_metrics["detected_components"],
+            "scan_dimensions": polygon_result["scan_dimensions"],
+            "room_polygon_ft": polygon_result.get("room_polygon_ft"),
+            "wall_heights_ft": polygon_result.get("wall_heights_ft"),
+            "polygon_source": polygon_result["polygon_source"],
+            "scan_mesh_url": mesh_gcs_path,
+            "texture_manifest": None,
+            "room_scope": metadata.get("room_scope"),
+            "fast_coverage": fast_coverage,
+        }
+        update_scan_status(scan_id, rfq_id, "metrics_ready", room_data=room_data)
+        send_fcm_notification(scan_id, "metrics_ready")
+        print(f"[Processor] Phase 1 complete — metrics_ready for scan {scan_id}")
+
+        # Enqueue Phase 2: async texturing via Cloud Tasks
+        _enqueue_texture_task(scan_id, rfq_id, blob_path)
+
+        return {"status": "metrics_ready", "scan_id": scan_id}
+
+
+@app.post("/process-texture")
+async def process_texture(request: Request) -> dict:
+    """Phase 2: Run OpenMVS texturing on an already-parsed scan (called by Cloud Tasks).
+
+    Downloads the scan zip, runs texture generation, uploads textured mesh to GCS,
+    and updates scan status to "complete". The iOS app continues polling and will
+    pick up the final status + call /coverage for accurate UV-based analysis.
+    """
+    body = await request.json()
+    scan_id = body.get("scan_id")
+    rfq_id = body.get("rfq_id")
+    blob_path = body.get("blob_path")
+
+    if not all([scan_id, rfq_id, blob_path]):
+        raise HTTPException(status_code=400, detail="Missing required fields")
+
+    print(f"[Processor] Starting Phase 2 texturing for scan {scan_id}")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        zip_path = os.path.join(tmpdir, "scan.zip")
+        extract_dir = os.path.join(tmpdir, "scan")
+
+        try:
+            _download_from_gcs(blob_path, zip_path)
+            _extract_zip(zip_path, extract_dir)
+        except Exception as e:
+            print(f"[Processor] Phase 2 download/unzip failed: {e}")
+            # Don't fail the scan — metrics_ready is already available
+            return {"status": "texture_failed", "error": str(e)}
+
+        scan_root = _find_scan_root(extract_dir)
+        if not scan_root:
+            print(f"[Processor] Phase 2: scan root not found")
+            return {"status": "texture_failed", "error": "scan root not found"}
+
+        metadata_path = os.path.join(scan_root, "metadata.json")
+        with open(metadata_path, "r") as f:
+            metadata = json.load(f)
+
+        annotation = metadata.get("corner_annotation")
+
+        # Re-parse mesh for texture projection fallback
+        try:
+            parsed_mesh = parse_and_classify(os.path.join(scan_root, "mesh.ply"))
+            room_metrics = compute_room_metrics_from_parsed(parsed_mesh)
+        except Exception as e:
+            print(f"[Processor] Phase 2: PLY re-parse failed: {e}")
+            return {"status": "texture_failed", "error": str(e)}
+
+        # Texture generation — OpenMVS TextureMesh with seam leveling
         texture_manifest = None
         USE_OPENMVS = os.environ.get("USE_OPENMVS", "true").lower() == "true"
 
@@ -301,12 +419,10 @@ async def process_scan(request: Request) -> dict:
 
                 tex_output = texture_scan(scan_root, metadata)
 
-                # Upload all resolution levels to GCS
                 gcs_base = blob_path.rsplit("/", 1)[0]
                 texture_manifest = {}
                 for key, local_path in tex_output.items():
                     fname = os.path.basename(local_path)
-                    # Prefix non-default levels to avoid filename collisions
                     if "_standard" in key:
                         gcs_fname = f"standard_{fname}"
                     else:
@@ -321,7 +437,7 @@ async def process_scan(request: Request) -> dict:
                 import traceback
                 traceback.print_exc()
 
-        # Fallback: old per-surface texture projection
+        # Fallback: per-surface texture projection
         if not USE_OPENMVS or texture_manifest is None:
             if annotation and len(annotation.get("corners_xz", [])) >= 3:
                 try:
@@ -372,34 +488,81 @@ async def process_scan(request: Request) -> dict:
                     import traceback
                     traceback.print_exc()
 
-        # Step 4c: Upload mesh.ply to a known GCS path for direct access (signed URLs)
-        mesh_gcs_path = blob_path.rsplit("/", 1)[0] + "/mesh.ply"
-        try:
-            _upload_to_gcs(os.path.join(scan_root, "mesh.ply"), mesh_gcs_path)
-        except Exception as e:
-            print(f"[Processor] Warning: mesh upload failed: {e}")
-            mesh_gcs_path = None
+        # Update scan status to "complete" with texture manifest
+        # (dimensions already written in Phase 1 — only update texture + status)
+        _update_texture_status(scan_id, rfq_id, texture_manifest)
+        send_fcm_notification(scan_id, "complete")
 
-        # Step 5: Write results to DB and notify
-        room_data = {
-            "floor_area_sqft": polygon_result["floor_area_sqft"],
-            "wall_area_sqft": polygon_result["wall_area_sqft"],
-            "ceiling_height_ft": polygon_result["ceiling_height_ft"],
-            "perimeter_linear_ft": polygon_result["perimeter_linear_ft"],
-            "detected_components": room_metrics["detected_components"],
-            "scan_dimensions": polygon_result["scan_dimensions"],
-            "room_polygon_ft": polygon_result.get("room_polygon_ft"),
-            "wall_heights_ft": polygon_result.get("wall_heights_ft"),
-            "polygon_source": polygon_result["polygon_source"],
-            "scan_mesh_url": mesh_gcs_path,
-            "texture_manifest": texture_manifest,
-            "room_scope": metadata.get("room_scope"),
-        }
-        rfq_ready = update_scan_status(scan_id, rfq_id, "complete", room_data=room_data)
-        send_fcm_notification(scan_id, "complete", rfq_ready=rfq_ready)
+        print(f"[Processor] Phase 2 complete — scan {scan_id} fully textured")
+        return {"status": "complete", "scan_id": scan_id}
 
-        print(f"[Processor] Scan {scan_id} processed successfully (rfq_ready={rfq_ready})")
-        return {"status": "complete", "scan_id": scan_id, "rfq_ready": rfq_ready}
+
+def _enqueue_texture_task(scan_id: str, rfq_id: str, blob_path: str) -> None:
+    """Enqueue Phase 2 texturing as a separate Cloud Tasks job.
+
+    Non-fatal on failure — the scan remains in "metrics_ready" status with
+    dimensions and fast coverage available. Texturing can be retried manually.
+    """
+    try:
+        from google.cloud import tasks_v2 as _tasks_v2
+
+        tasks_client = _tasks_v2.CloudTasksClient()
+        queue_path = tasks_client.queue_path(PROJECT_ID, REGION, TASKS_QUEUE)
+
+        task_payload = json.dumps({
+            "scan_id": scan_id,
+            "rfq_id": rfq_id,
+            "blob_path": blob_path,
+        })
+
+        task = _tasks_v2.Task(
+            http_request=_tasks_v2.HttpRequest(
+                http_method=_tasks_v2.HttpMethod.POST,
+                url=f"{PROCESSOR_URL}/process-texture",
+                headers={"Content-Type": "application/json"},
+                body=task_payload.encode(),
+                oidc_token=_tasks_v2.OidcToken(
+                    service_account_email=TASKS_INVOKER_SA,
+                ),
+            ),
+        )
+
+        tasks_client.create_task(parent=queue_path, task=task)
+        print(f"[Processor] Enqueued Phase 2 texture task for scan {scan_id}")
+    except Exception as e:
+        print(f"[Processor] Warning: Failed to enqueue texture task: {e}")
+
+
+def _update_texture_status(scan_id: str, rfq_id: str, texture_manifest: Optional[dict]) -> None:
+    """Update scan from metrics_ready → complete after texturing finishes.
+
+    Only updates the texture_manifest and scan_status columns — dimensions
+    were already written in Phase 1.
+    """
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """UPDATE scanned_rooms
+               SET scan_status = 'complete',
+                   texture_manifest = %s
+               WHERE id = %s""",
+            (json.dumps(texture_manifest), scan_id),
+        )
+
+        # RFQ status transition: set to 'scan_ready' only when ALL rooms are complete
+        cursor.execute(
+            """UPDATE rfqs SET status = 'scan_ready'
+               WHERE id = %s
+                 AND NOT EXISTS (
+                   SELECT 1 FROM scanned_rooms
+                   WHERE rfq_id = %s AND scan_status != 'complete'
+                 )""",
+            (rfq_id, rfq_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def _download_from_gcs(blob_path: str, dest_path: str) -> None:
@@ -887,60 +1050,63 @@ async def check_coverage(request: Request) -> dict:
         total_faces = len(face_vert_indices)
         print(f"[Coverage] Parsed OBJ: {len(vertices)} vertices, {len(vt)} UVs, {total_faces} faces")
 
-        # Compute per-face 3D area and UV area
-        uncovered = []
-        total_area = 0.0
-        uncovered_area = 0.0
-        # UV area threshold — OpenMVS assigns degenerate (near-zero) UV to untextured faces
+        # Vectorized per-face 3D area and UV area computation
         UV_AREA_THRESHOLD = 1e-6
 
-        for i in range(total_faces):
-            vi = face_vert_indices[i]
-            ui = face_uv_indices[i]
+        face_vi = np.array(face_vert_indices, dtype=np.int64)
+        face_ui = np.array(face_uv_indices, dtype=np.int64)
 
-            # 3D face area
-            v0, v1, v2 = vertices[vi[0]], vertices[vi[1]], vertices[vi[2]]
-            face_area = 0.5 * np.linalg.norm(np.cross(v1 - v0, v2 - v0))
-            total_area += face_area
+        # 3D face areas (vectorized cross product)
+        v0 = vertices[face_vi[:, 0]]
+        v1 = vertices[face_vi[:, 1]]
+        v2 = vertices[face_vi[:, 2]]
+        face_areas = 0.5 * np.linalg.norm(np.cross(v1 - v0, v2 - v0), axis=1)
+        total_area = float(face_areas.sum())
 
-            # UV area (2D cross product)
-            uv0, uv1, uv2 = vt[ui[0]], vt[ui[1]], vt[ui[2]]
-            uv_area = 0.5 * abs(
-                (uv1[0] - uv0[0]) * (uv2[1] - uv0[1]) -
-                (uv2[0] - uv0[0]) * (uv1[1] - uv0[1])
-            )
+        # UV areas (vectorized 2D cross product)
+        uv0 = vt[face_ui[:, 0]]
+        uv1 = vt[face_ui[:, 1]]
+        uv2 = vt[face_ui[:, 2]]
+        uv_areas = 0.5 * np.abs(
+            (uv1[:, 0] - uv0[:, 0]) * (uv2[:, 1] - uv0[:, 1]) -
+            (uv2[:, 0] - uv0[:, 0]) * (uv1[:, 1] - uv0[:, 1])
+        )
 
-            is_gap = False
-            if uv_area < UV_AREA_THRESHOLD:
-                # Degenerate UV — OpenMVS couldn't assign a camera (orange in viewer)
-                is_gap = True
-            else:
-                # Valid UV — check if the sampled atlas pixel is black (dark/occluded)
-                uv_center_u = (uv0[0] + uv1[0] + uv2[0]) / 3.0
-                uv_center_v = (uv0[1] + uv1[1] + uv2[1]) / 3.0
-                px = int(np.clip(uv_center_u * atlas_w, 0, atlas_w - 1))
-                py = int(np.clip((1.0 - uv_center_v) * atlas_h, 0, atlas_h - 1))
-                color = atlas_pixels[py, px]
-                if int(color[0]) + int(color[1]) + int(color[2]) < 30:
-                    is_gap = True
+        # Degenerate UV mask (OpenMVS couldn't assign a camera → orange in viewer)
+        degenerate_mask = uv_areas < UV_AREA_THRESHOLD
 
-            if is_gap:
-                uncovered_area += face_area
-                uncovered.append({
-                    "vertices": [
-                        [round(float(v0[0]), 4), round(float(v0[1]), 4), round(float(v0[2]), 4)],
-                        [round(float(v1[0]), 4), round(float(v1[1]), 4), round(float(v1[2]), 4)],
-                        [round(float(v2[0]), 4), round(float(v2[1]), 4), round(float(v2[2]), 4)],
-                    ],
-                })
+        # Black pixel check for non-degenerate faces (valid UV but dark/occluded)
+        valid_mask = ~degenerate_mask
+        black_mask = np.zeros(total_faces, dtype=bool)
+        if valid_mask.any():
+            uv_center_u = (uv0[valid_mask, 0] + uv1[valid_mask, 0] + uv2[valid_mask, 0]) / 3.0
+            uv_center_v = (uv0[valid_mask, 1] + uv1[valid_mask, 1] + uv2[valid_mask, 1]) / 3.0
+            px = np.clip((uv_center_u * atlas_w).astype(int), 0, atlas_w - 1)
+            py = np.clip(((1.0 - uv_center_v) * atlas_h).astype(int), 0, atlas_h - 1)
+            colors = atlas_pixels[py, px]  # (N, 3)
+            color_sum = colors.astype(np.int32).sum(axis=1)
+            valid_black = color_sum < 30
+            black_mask[valid_mask] = valid_black
 
-        n_degenerate = sum(1 for fi in range(total_faces)
-                          if len(face_uv_indices[fi]) >= 3 and
-                          0.5 * abs((vt[face_uv_indices[fi][1]][0] - vt[face_uv_indices[fi][0]][0]) *
-                                    (vt[face_uv_indices[fi][2]][1] - vt[face_uv_indices[fi][0]][1]) -
-                                    (vt[face_uv_indices[fi][2]][0] - vt[face_uv_indices[fi][0]][0]) *
-                                    (vt[face_uv_indices[fi][1]][1] - vt[face_uv_indices[fi][0]][1])) < UV_AREA_THRESHOLD)
-        n_black = len(uncovered) - n_degenerate
+        # Combined gap mask
+        gap_mask = degenerate_mask | black_mask
+        uncovered_area = float(face_areas[gap_mask].sum())
+        gap_indices = np.where(gap_mask)[0]
+
+        # Build uncovered face list (vertices for AR overlay)
+        uncovered = []
+        for i in gap_indices:
+            vi = face_vi[i]
+            uncovered.append({
+                "vertices": [
+                    [round(float(vertices[vi[0]][0]), 4), round(float(vertices[vi[0]][1]), 4), round(float(vertices[vi[0]][2]), 4)],
+                    [round(float(vertices[vi[1]][0]), 4), round(float(vertices[vi[1]][1]), 4), round(float(vertices[vi[1]][2]), 4)],
+                    [round(float(vertices[vi[2]][0]), 4), round(float(vertices[vi[2]][1]), 4), round(float(vertices[vi[2]][2]), 4)],
+                ],
+            })
+
+        n_degenerate = int(degenerate_mask.sum())
+        n_black = int(black_mask.sum())
         coverage_ratio = 1.0 - (uncovered_area / max(total_area, 1e-6))
         print(f"[Coverage] {total_faces} faces: {n_degenerate} degenerate UV + {n_black} black = "
               f"{len(uncovered)} uncovered, "

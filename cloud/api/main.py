@@ -290,12 +290,12 @@ def get_scan_status(rfq_id: str, scan_id: str, authorization: str = Header(None)
 
     Possible room-level status values (SCANNED_ROOMS.scan_status):
       - "processing": Cloud processor is still working on this scan.
-      - "complete": Processing succeeded; room dimensions and components are populated.
+      - "metrics_ready": Room dimensions + fast coverage available; texturing still running.
+      - "complete": Texturing succeeded; accurate UV-based coverage available via /coverage.
       - "failed": Processing failed; detected_components contains an error description.
 
-    Note: The RFQ-level status (rfqs.status) transitions to "scan_ready" only when
-    ALL scanned_rooms rows for the RFQ reach "complete". The iOS app polls for
-    room-level "complete" status on this endpoint.
+    The iOS app polls this endpoint. It should treat "metrics_ready" as actionable
+    (show dimensions + fast coverage) and continue polling until "complete".
     """
     verify_firebase_token(authorization)
 
@@ -303,6 +303,7 @@ def get_scan_status(rfq_id: str, scan_id: str, authorization: str = Header(None)
         "scan_status", "floor_area_sqft", "wall_area_sqft", "ceiling_height_ft",
         "perimeter_linear_ft", "detected_components", "scan_dimensions",
         "room_polygon_ft", "wall_heights_ft", "polygon_source", "scan_mesh_url",
+        "fast_coverage",
     ]
 
     conn = get_db_connection()
