@@ -1033,6 +1033,109 @@ def _unit_for_label(label_key: str) -> str:
     return 'SF'
 
 
+@app.get("/api/admin/rfqs/{rfq_id}/scans/{scan_id}/features")
+def get_features(rfq_id: str, scan_id: str, authorization: str = Header(None)) -> list:
+    """Load features (doors, cabinets, openings) from GCS."""
+    _verify_admin(authorization)
+    try:
+        bucket = storage_client.bucket(BUCKET_NAME)
+        blob = bucket.blob(f"scans/{rfq_id}/{scan_id}/features.json")
+        if not blob.exists():
+            return []
+        return json.loads(blob.download_as_text())
+    except Exception as e:
+        print(f"[Admin] Failed to load features: {e}")
+        return []
+
+
+@app.put("/api/admin/rfqs/{rfq_id}/scans/{scan_id}/features")
+async def save_features(rfq_id: str, scan_id: str, request: Request, authorization: str = Header(None)) -> dict:
+    """Save features (doors, cabinets, openings) to GCS."""
+    _verify_admin(authorization)
+    body = await request.json()
+    try:
+        bucket = storage_client.bucket(BUCKET_NAME)
+        blob = bucket.blob(f"scans/{rfq_id}/{scan_id}/features.json")
+        blob.upload_from_string(json.dumps(body), content_type="application/json")
+        return {"status": "saved", "count": len(body)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save features: {e}")
+
+
+@app.put("/api/admin/rfqs/{rfq_id}/scans/{scan_id}/polygon")
+async def update_polygon(rfq_id: str, scan_id: str, request: Request, authorization: str = Header(None)) -> dict:
+    """Update room polygon corners and recompute dimensions."""
+    _verify_admin(authorization)
+    body = await request.json()
+    polygon_ft = body.get('room_polygon_ft', [])
+    wall_heights_ft = body.get('wall_heights_ft', [])     # ceiling Y per corner
+    floor_heights_ft = body.get('floor_heights_ft', [])   # floor Y per corner (new)
+
+    if len(polygon_ft) < 3:
+        raise HTTPException(status_code=400, detail="At least 3 corners required")
+
+    # Recompute dimensions from the updated polygon
+    import math
+    FT_TO_M = 1.0 / 3.28084
+    SQM_TO_SQFT = 10.7639
+
+    corners_m = [[c[0] * FT_TO_M, c[1] * FT_TO_M] for c in polygon_ft]
+    n = len(corners_m)
+
+    # Floor area via shoelace formula
+    signed_area = 0
+    for i in range(n):
+        j = (i + 1) % n
+        signed_area += corners_m[i][0] * corners_m[j][1]
+        signed_area -= corners_m[j][0] * corners_m[i][1]
+    floor_area_sqft = round(abs(signed_area) / 2.0 * SQM_TO_SQFT, 1)
+
+    # Perimeter
+    perimeter_m = 0
+    for i in range(n):
+        j = (i + 1) % n
+        dx = corners_m[j][0] - corners_m[i][0]
+        dz = corners_m[j][1] - corners_m[i][1]
+        perimeter_m += math.sqrt(dx * dx + dz * dz)
+    perimeter_ft = round(perimeter_m * 3.28084, 1)
+
+    # Ceiling height: average of (ceilingY - floorY) per corner
+    if wall_heights_ft and floor_heights_ft and len(floor_heights_ft) == len(wall_heights_ft):
+        wall_h_per_corner = [wall_heights_ft[i] - floor_heights_ft[i] for i in range(len(wall_heights_ft))]
+        avg_height_ft = round(sum(wall_h_per_corner) / len(wall_h_per_corner), 2)
+    elif wall_heights_ft:
+        avg_height_ft = round(sum(wall_heights_ft) / len(wall_heights_ft), 2)
+    else:
+        avg_height_ft = 8.0
+    wall_area_sqft = round(perimeter_ft * avg_height_ft, 1)
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """UPDATE scanned_rooms
+               SET room_polygon_ft = %s, wall_heights_ft = %s,
+                   floor_area_sqft = %s, wall_area_sqft = %s,
+                   perimeter_linear_ft = %s, ceiling_height_ft = %s,
+                   polygon_source = 'admin_edited'
+               WHERE id = %s AND rfq_id = %s""",
+            (json.dumps(polygon_ft), json.dumps(wall_heights_ft),
+             floor_area_sqft, wall_area_sqft, perimeter_ft, avg_height_ft,
+             scan_id, rfq_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {
+        "status": "saved",
+        "floor_area_sqft": floor_area_sqft,
+        "wall_area_sqft": wall_area_sqft,
+        "perimeter_linear_ft": perimeter_ft,
+        "ceiling_height_ft": avg_height_ft,
+    }
+
+
 @app.get("/health")
 def health() -> dict:
     """Health check endpoint for Cloud Run readiness/liveness probes."""
