@@ -506,20 +506,19 @@ def _enqueue_texture_task(scan_id: str, rfq_id: str, blob_path: str) -> None:
 
 
 def _update_texture_status(scan_id: str, rfq_id: str, texture_manifest: Optional[dict]) -> None:
-    """Update scan from metrics_ready → complete after texturing finishes.
+    """Merge new texture keys into the existing texture_manifest.
 
-    Only updates the texture_manifest and scan_status columns — dimensions
-    were already written in Phase 1.
+    Uses JSONB || operator to merge — preserves preview keys from /process
+    while adding standard keys from /process-texture.
     """
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
         cursor.execute(
             """UPDATE scanned_rooms
-               SET scan_status = 'complete',
-                   texture_manifest = %s
+               SET texture_manifest = COALESCE(texture_manifest, '{}'::jsonb) || %s::jsonb
                WHERE id = %s""",
-            (json.dumps(texture_manifest), scan_id),
+            (json.dumps(texture_manifest or {}), scan_id),
         )
 
         # RFQ status transition: set to 'scan_ready' only when ALL rooms are complete
