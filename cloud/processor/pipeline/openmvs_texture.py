@@ -255,28 +255,34 @@ RESOLUTION_LEVELS = {
 }
 
 
-def texture_scan(scan_root: str, metadata: dict, preview_faces: int = 0) -> dict:
-    """Top-level entry point: texture a scan at multiple resolutions.
+def texture_scan(scan_root: str, metadata: dict, preview_faces: int = 0,
+                  levels: list[str] | None = None) -> dict:
+    """Top-level entry point: texture a scan at specified resolutions.
 
-    Generates a fast-loading preview (10K faces) and a standard quality
-    version (full mesh). InterfaceCOLMAP runs once; TextureMesh runs per level.
+    InterfaceCOLMAP runs once; TextureMesh runs per level.
 
     Args:
         preview_faces: override preview decimation target. If 0, uses default
-            (10K). Set higher for merged meshes to avoid fragmentation from
+            (50K). Set higher for merged meshes to avoid fragmentation from
             decimating overlapping geometry.
+        levels: which resolution levels to generate. Defaults to ["preview"]
+            for fast coverage-only processing. Pass ["preview", "standard"]
+            for full web viewer quality.
 
     Returns:
         Dict with output file paths per resolution:
         {"obj": ..., "mtl": ..., "atlas": ...,
          "obj_standard": ..., "mtl_standard": ..., "atlas_standard": ...}
     """
+    if levels is None:
+        levels = ["preview"]
+
     work_dir = os.path.join(scan_root, "openmvs_work")
     os.makedirs(work_dir, exist_ok=True)
 
     # Apply preview override
-    resolution_levels = dict(RESOLUTION_LEVELS)
-    if preview_faces > 0:
+    resolution_levels = {k: v for k, v in RESOLUTION_LEVELS.items() if k in levels}
+    if preview_faces > 0 and "preview" in resolution_levels:
         resolution_levels["preview"] = preview_faces
 
     # 1. Prepare COLMAP format (once)

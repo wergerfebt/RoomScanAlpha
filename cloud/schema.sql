@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS scanned_rooms (
     texture_manifest JSONB,
     scope JSONB,
     fast_coverage JSONB,
+    coverage JSONB,
     created_at TIMESTAMP DEFAULT NOW()
 );
 

@@ -152,7 +152,8 @@ def update_scan_status(
                        scan_mesh_url = %s,
                        texture_manifest = %s,
                        scope = %s,
-                       fast_coverage = %s
+                       fast_coverage = %s,
+                       coverage = %s
                    WHERE id = %s""",
                 (
                     status,
@@ -169,6 +170,7 @@ def update_scan_status(
                     json.dumps(room_data.get("texture_manifest")),
                     json.dumps(room_data.get("room_scope")),
                     json.dumps(room_data.get("fast_coverage")),
+                    json.dumps(room_data.get("coverage")),
                     scan_id,
                 ),
             )
@@ -229,11 +231,14 @@ def send_fcm_notification(scan_id: str, status: str, rfq_ready: bool = False) ->
 async def process_scan(request: Request) -> dict:
     """Process an uploaded scan package (called by Cloud Tasks, not directly by clients).
 
-    Two-phase pipeline for fast user feedback:
-      Phase 1 (this endpoint, ~20-30s): Download, parse PLY, compute metrics,
-        run fast camera-viability coverage check, write "metrics_ready" to DB.
-      Phase 2 (/process-texture, async): OpenMVS texturing, upload textured mesh,
-        update status to "complete". Enqueued as a separate Cloud Tasks job.
+    Single-pass pipeline (~30-40s total):
+      1. Download zip, parse PLY, compute room metrics (~20s)
+      2. Preview-only OpenMVS texture at 50K faces (~10-15s)
+      3. Inline UV-based coverage analysis (<1s)
+      4. Write "complete" with dimensions + accurate coverage
+
+    Standard texture (300K faces for web viewer) is enqueued as an optional
+    background job via /process-texture — not on the critical path.
     """
     body = await request.json()
     scan_id = body.get("scan_id")
@@ -305,36 +310,74 @@ async def process_scan(request: Request) -> dict:
             print(f"[Processor] Warning: mesh upload failed: {e}")
             mesh_gcs_path = None
 
-        # Step 4d: Fast coverage check — camera-viability analysis on raw mesh.
-        # Uses the same distance/angle/projection thresholds as OpenMVS TextureMesh,
-        # giving a quick estimate before the full UV-based analysis is available.
-        fast_coverage = None
-        try:
-            cameras = _load_cameras(scan_root, metadata)
-            if cameras:
-                import trimesh as _trimesh
-                tri_mesh = _trimesh.Trimesh(
-                    vertices=parsed_mesh.positions,
-                    faces=parsed_mesh.faces,
-                    vertex_normals=parsed_mesh.normals,
-                    process=False,
-                )
-                uncovered = _check_face_coverage(tri_mesh, cameras)
-                total_faces = len(parsed_mesh.faces)
-                ratio = 1.0 - len(uncovered) / max(total_faces, 1)
-                fast_coverage = {
-                    "coverage_ratio": round(ratio, 3),
-                    "total_faces": total_faces,
-                    "uncovered_count": len(uncovered),
-                    "uncovered_faces": uncovered[:2000],
-                }
-                print(f"[Processor] Fast coverage: {int(ratio * 100)}% "
-                      f"({len(uncovered)}/{total_faces} uncovered), {len(cameras)} cameras")
-        except Exception as e:
-            print(f"[Processor] Warning: fast coverage check failed: {e}")
+        # Step 5: Preview-only OpenMVS texture (50K faces, ~10-15s).
+        # Standard (300K) is deferred to optional /process-texture for web viewer.
+        texture_manifest = None
+        USE_OPENMVS = os.environ.get("USE_OPENMVS", "true").lower() == "true"
 
-        # Phase 1 complete — write "metrics_ready" with dimensions + fast coverage.
-        # The iOS app can show results immediately while texturing runs async.
+        if USE_OPENMVS:
+            try:
+                from pipeline.openmvs_texture import texture_scan
+
+                tex_output = texture_scan(scan_root, metadata, levels=["preview"])
+
+                # Upload preview texture to GCS
+                gcs_base = blob_path.rsplit("/", 1)[0]
+                texture_manifest = {}
+                for key, local_path in tex_output.items():
+                    fname = os.path.basename(local_path)
+                    gcs_path = f"{gcs_base}/{fname}"
+                    _upload_to_gcs(local_path, gcs_path)
+                    texture_manifest[key] = fname
+
+                print(f"[Processor] Preview texturing complete: {list(texture_manifest.keys())}")
+            except Exception as e:
+                print(f"[Processor] Warning: OpenMVS texturing failed: {e}")
+                import traceback
+                traceback.print_exc()
+
+        # Step 6: Inline UV-based coverage analysis on preview texture output.
+        # Runs on local files already in memory — no GCS download needed.
+        coverage_result = None
+        if texture_manifest and "obj" in tex_output:
+            try:
+                obj_path = tex_output["obj"]
+                atlas_path = tex_output.get("atlas")
+                coverage_result = _compute_coverage_from_files(obj_path, atlas_path)
+                print(f"[Processor] UV coverage: {int(coverage_result['coverage_ratio'] * 100)}% "
+                      f"({coverage_result['uncovered_count']}/{coverage_result['total_faces']} uncovered)")
+            except Exception as e:
+                print(f"[Processor] Warning: inline coverage analysis failed: {e}")
+                import traceback
+                traceback.print_exc()
+
+        # Step 6b: Fast camera-viability coverage as fallback if texturing failed.
+        fast_coverage = None
+        if coverage_result is None:
+            try:
+                cameras = _load_cameras(scan_root, metadata)
+                if cameras:
+                    import trimesh as _trimesh
+                    tri_mesh = _trimesh.Trimesh(
+                        vertices=parsed_mesh.positions,
+                        faces=parsed_mesh.faces,
+                        vertex_normals=parsed_mesh.normals,
+                        process=False,
+                    )
+                    uncovered = _check_face_coverage(tri_mesh, cameras)
+                    total_faces = len(parsed_mesh.faces)
+                    ratio = 1.0 - len(uncovered) / max(total_faces, 1)
+                    fast_coverage = {
+                        "coverage_ratio": round(ratio, 3),
+                        "total_faces": total_faces,
+                        "uncovered_count": len(uncovered),
+                        "uncovered_faces": uncovered[:2000],
+                    }
+                    print(f"[Processor] Fallback fast coverage: {int(ratio * 100)}%")
+            except Exception as e:
+                print(f"[Processor] Warning: fast coverage check failed: {e}")
+
+        # Step 7: Write "complete" with dimensions + accurate coverage + texture.
         room_data = {
             "floor_area_sqft": polygon_result["floor_area_sqft"],
             "wall_area_sqft": polygon_result["wall_area_sqft"],
@@ -346,27 +389,29 @@ async def process_scan(request: Request) -> dict:
             "wall_heights_ft": polygon_result.get("wall_heights_ft"),
             "polygon_source": polygon_result["polygon_source"],
             "scan_mesh_url": mesh_gcs_path,
-            "texture_manifest": None,
+            "texture_manifest": texture_manifest,
             "room_scope": metadata.get("room_scope"),
             "fast_coverage": fast_coverage,
+            "coverage": coverage_result,
         }
-        update_scan_status(scan_id, rfq_id, "metrics_ready", room_data=room_data)
-        send_fcm_notification(scan_id, "metrics_ready")
-        print(f"[Processor] Phase 1 complete — metrics_ready for scan {scan_id}")
+        rfq_ready = update_scan_status(scan_id, rfq_id, "complete", room_data=room_data)
+        send_fcm_notification(scan_id, "complete", rfq_ready=rfq_ready)
 
-        # Enqueue Phase 2: async texturing via Cloud Tasks
+        print(f"[Processor] Scan {scan_id} complete (rfq_ready={rfq_ready})")
+
+        # Optionally enqueue standard texture for web viewer (not on critical path)
         _enqueue_texture_task(scan_id, rfq_id, blob_path)
 
-        return {"status": "metrics_ready", "scan_id": scan_id}
+        return {"status": "complete", "scan_id": scan_id, "rfq_ready": rfq_ready}
 
 
 @app.post("/process-texture")
 async def process_texture(request: Request) -> dict:
-    """Phase 2: Run OpenMVS texturing on an already-parsed scan (called by Cloud Tasks).
+    """Optional background job: generate standard-resolution (300K) texture for web viewer.
 
-    Downloads the scan zip, runs texture generation, uploads textured mesh to GCS,
-    and updates scan status to "complete". The iOS app continues polling and will
-    pick up the final status + call /coverage for accurate UV-based analysis.
+    Not on the critical path — /process already writes "complete" with preview texture
+    and accurate coverage. This endpoint adds higher-resolution textures for the
+    contractor web viewer.
     """
     body = await request.json()
     scan_id = body.get("scan_id")
@@ -376,7 +421,7 @@ async def process_texture(request: Request) -> dict:
     if not all([scan_id, rfq_id, blob_path]):
         raise HTTPException(status_code=400, detail="Missing required fields")
 
-    print(f"[Processor] Starting Phase 2 texturing for scan {scan_id}")
+    print(f"[Processor] Starting standard texture generation for scan {scan_id}")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         zip_path = os.path.join(tmpdir, "scan.zip")
@@ -386,115 +431,42 @@ async def process_texture(request: Request) -> dict:
             _download_from_gcs(blob_path, zip_path)
             _extract_zip(zip_path, extract_dir)
         except Exception as e:
-            print(f"[Processor] Phase 2 download/unzip failed: {e}")
-            # Don't fail the scan — metrics_ready is already available
+            print(f"[Processor] Standard texture download/unzip failed: {e}")
             return {"status": "texture_failed", "error": str(e)}
 
         scan_root = _find_scan_root(extract_dir)
         if not scan_root:
-            print(f"[Processor] Phase 2: scan root not found")
+            print(f"[Processor] Standard texture: scan root not found")
             return {"status": "texture_failed", "error": "scan root not found"}
 
         metadata_path = os.path.join(scan_root, "metadata.json")
         with open(metadata_path, "r") as f:
             metadata = json.load(f)
 
-        annotation = metadata.get("corner_annotation")
-
-        # Re-parse mesh for texture projection fallback
         try:
-            parsed_mesh = parse_and_classify(os.path.join(scan_root, "mesh.ply"))
-            room_metrics = compute_room_metrics_from_parsed(parsed_mesh)
+            from pipeline.openmvs_texture import texture_scan
+
+            tex_output = texture_scan(scan_root, metadata, levels=["standard"])
+
+            gcs_base = blob_path.rsplit("/", 1)[0]
+            texture_manifest = {}
+            for key, local_path in tex_output.items():
+                fname = os.path.basename(local_path)
+                gcs_fname = f"standard_{fname}" if "_standard" in key else fname
+                gcs_path = f"{gcs_base}/{gcs_fname}"
+                _upload_to_gcs(local_path, gcs_path)
+                texture_manifest[key] = gcs_fname
+
+            # Update texture manifest in DB (merge with existing preview manifest)
+            _update_texture_status(scan_id, rfq_id, texture_manifest)
+            print(f"[Processor] Standard texture complete: {list(texture_manifest.keys())}")
         except Exception as e:
-            print(f"[Processor] Phase 2: PLY re-parse failed: {e}")
+            print(f"[Processor] Standard texture failed: {e}")
+            import traceback
+            traceback.print_exc()
             return {"status": "texture_failed", "error": str(e)}
 
-        # Texture generation — OpenMVS TextureMesh with seam leveling
-        texture_manifest = None
-        USE_OPENMVS = os.environ.get("USE_OPENMVS", "true").lower() == "true"
-
-        if USE_OPENMVS:
-            try:
-                from pipeline.openmvs_texture import texture_scan
-
-                tex_output = texture_scan(scan_root, metadata)
-
-                gcs_base = blob_path.rsplit("/", 1)[0]
-                texture_manifest = {}
-                for key, local_path in tex_output.items():
-                    fname = os.path.basename(local_path)
-                    if "_standard" in key:
-                        gcs_fname = f"standard_{fname}"
-                    else:
-                        gcs_fname = fname
-                    gcs_path = f"{gcs_base}/{gcs_fname}"
-                    _upload_to_gcs(local_path, gcs_path)
-                    texture_manifest[key] = gcs_fname
-
-                print(f"[Processor] OpenMVS texturing complete: {list(texture_manifest.keys())}")
-            except Exception as e:
-                print(f"[Processor] Warning: OpenMVS texturing failed: {e}")
-                import traceback
-                traceback.print_exc()
-
-        # Fallback: per-surface texture projection
-        if not USE_OPENMVS or texture_manifest is None:
-            if annotation and len(annotation.get("corners_xz", [])) >= 3:
-                try:
-                    from pipeline.texture_projection import (
-                        build_surfaces_from_annotation, load_keyframes,
-                        load_panoramic_keyframes, project_textures, save_textures,
-                    )
-
-                    ceiling_ft = room_metrics.get("ceiling_height_ft", 0)
-                    ceiling_m = ceiling_ft / M_TO_FT if ceiling_ft else None
-                    surfaces = build_surfaces_from_annotation(
-                        corners_xz=annotation["corners_xz"],
-                        corners_y=annotation["corners_y"],
-                        ceiling_height_m=ceiling_m,
-                    )
-
-                    tri_mesh = None
-                    try:
-                        import trimesh as _trimesh
-                        tri_mesh = _trimesh.Trimesh(
-                            vertices=parsed_mesh.positions,
-                            faces=parsed_mesh.faces,
-                            vertex_normals=parsed_mesh.normals,
-                        )
-                    except Exception:
-                        pass
-
-                    pano_keyframes = load_panoramic_keyframes(scan_root, metadata)
-                    walk_keyframes = load_keyframes(scan_root, metadata)
-                    keyframes = pano_keyframes + walk_keyframes
-
-                    if surfaces and keyframes:
-                        tex_results = project_textures(keyframes, surfaces, mesh=tri_mesh)
-                        tex_dir = os.path.join(scan_root, "textures")
-                        texture_manifest = save_textures(tex_results, tex_dir)
-
-                        gcs_base = blob_path.rsplit("/", 1)[0]
-                        for surface_id, filename in texture_manifest.items():
-                            local_path = os.path.join(tex_dir, filename)
-                            gcs_path = f"{gcs_base}/textures/{filename}"
-                            _upload_to_gcs(local_path, gcs_path)
-                        texture_manifest = {
-                            sid: f"textures/{fname}" for sid, fname in texture_manifest.items()
-                        }
-                        print(f"[Processor] Fallback texture projection: {len(texture_manifest)} surfaces")
-                except Exception as e:
-                    print(f"[Processor] Warning: fallback texture projection failed: {e}")
-                    import traceback
-                    traceback.print_exc()
-
-        # Update scan status to "complete" with texture manifest
-        # (dimensions already written in Phase 1 — only update texture + status)
-        _update_texture_status(scan_id, rfq_id, texture_manifest)
-        send_fcm_notification(scan_id, "complete")
-
-        print(f"[Processor] Phase 2 complete — scan {scan_id} fully textured")
-        return {"status": "complete", "scan_id": scan_id}
+        return {"status": "standard_complete", "scan_id": scan_id}
 
 
 def _enqueue_texture_task(scan_id: str, rfq_id: str, blob_path: str) -> None:
@@ -975,6 +947,181 @@ def _compute_from_annotation(annotation: Optional[dict], ply_metrics: dict) -> d
         "room_polygon_ft": polygon_ft,
         "wall_heights_ft": wall_heights_ft,
         "polygon_source": "annotated",
+    }
+
+
+def _compute_coverage_from_files(obj_path: str, atlas_path: str | None) -> dict:
+    """Compute UV-based texture coverage from local OBJ + atlas files.
+
+    Analyzes the OpenMVS output: faces with degenerate UV (near-zero area) are
+    untextured. Faces with valid UV but black atlas pixels are occluded.
+    Also runs ray-cast hole detection with 2K rays for speed.
+
+    Returns dict with coverage_ratio, uncovered_count, uncovered_faces, etc.
+    """
+    from PIL import Image
+
+    # Parse OBJ
+    vertices = []
+    vt_coords = []
+    face_vert_indices = []
+    face_uv_indices = []
+
+    with open(obj_path) as f:
+        for line in f:
+            if line.startswith("v "):
+                parts = line.split()
+                vertices.append([float(parts[1]), float(parts[2]), float(parts[3])])
+            elif line.startswith("vt "):
+                parts = line.split()
+                vt_coords.append([float(parts[1]), float(parts[2])])
+            elif line.startswith("f "):
+                parts = line.split()[1:]
+                vi, ui = [], []
+                for p in parts:
+                    segs = p.split("/")
+                    vi.append(int(segs[0]) - 1)
+                    ui.append(int(segs[1]) - 1 if len(segs) >= 2 and segs[1] else 0)
+                face_vert_indices.append(vi)
+                face_uv_indices.append(ui)
+
+    vertices = np.array(vertices, dtype=np.float64)
+    vt = np.array(vt_coords, dtype=np.float64)
+    total_faces = len(face_vert_indices)
+
+    # Vectorized UV area analysis
+    UV_AREA_THRESHOLD = 1e-6
+    face_vi = np.array(face_vert_indices, dtype=np.int64)
+    face_ui = np.array(face_uv_indices, dtype=np.int64)
+
+    v0 = vertices[face_vi[:, 0]]
+    v1 = vertices[face_vi[:, 1]]
+    v2 = vertices[face_vi[:, 2]]
+    face_areas = 0.5 * np.linalg.norm(np.cross(v1 - v0, v2 - v0), axis=1)
+    total_area = float(face_areas.sum())
+
+    uv0 = vt[face_ui[:, 0]]
+    uv1 = vt[face_ui[:, 1]]
+    uv2 = vt[face_ui[:, 2]]
+    uv_areas = 0.5 * np.abs(
+        (uv1[:, 0] - uv0[:, 0]) * (uv2[:, 1] - uv0[:, 1]) -
+        (uv2[:, 0] - uv0[:, 0]) * (uv1[:, 1] - uv0[:, 1])
+    )
+
+    degenerate_mask = uv_areas < UV_AREA_THRESHOLD
+
+    # Black pixel check
+    black_mask = np.zeros(total_faces, dtype=bool)
+    if atlas_path and os.path.exists(atlas_path):
+        atlas_img = Image.open(atlas_path).convert("RGB")
+        atlas_pixels = np.array(atlas_img)
+        atlas_h, atlas_w = atlas_pixels.shape[:2]
+
+        valid_mask = ~degenerate_mask
+        if valid_mask.any():
+            uv_center_u = (uv0[valid_mask, 0] + uv1[valid_mask, 0] + uv2[valid_mask, 0]) / 3.0
+            uv_center_v = (uv0[valid_mask, 1] + uv1[valid_mask, 1] + uv2[valid_mask, 1]) / 3.0
+            px = np.clip((uv_center_u * atlas_w).astype(int), 0, atlas_w - 1)
+            py = np.clip(((1.0 - uv_center_v) * atlas_h).astype(int), 0, atlas_h - 1)
+            colors = atlas_pixels[py, px]
+            color_sum = colors.astype(np.int32).sum(axis=1)
+            valid_black = color_sum < 30
+            black_mask[valid_mask] = valid_black
+
+    gap_mask = degenerate_mask | black_mask
+    uncovered_area = float(face_areas[gap_mask].sum())
+    gap_indices = np.where(gap_mask)[0]
+
+    uncovered = []
+    for i in gap_indices[:2000]:
+        vi = face_vi[i]
+        uncovered.append({
+            "vertices": [
+                [round(float(vertices[vi[0]][0]), 4), round(float(vertices[vi[0]][1]), 4), round(float(vertices[vi[0]][2]), 4)],
+                [round(float(vertices[vi[1]][0]), 4), round(float(vertices[vi[1]][1]), 4), round(float(vertices[vi[1]][2]), 4)],
+                [round(float(vertices[vi[2]][0]), 4), round(float(vertices[vi[2]][1]), 4), round(float(vertices[vi[2]][2]), 4)],
+            ],
+        })
+
+    n_degenerate = int(degenerate_mask.sum())
+    n_black = int(black_mask.sum())
+    coverage_ratio = 1.0 - (uncovered_area / max(total_area, 1e-6))
+
+    # Reduced ray-cast hole detection (2K rays for speed, ~1-3s)
+    import trimesh as _trimesh
+    hole_faces = []
+    try:
+        tri_mesh = _trimesh.Trimesh(
+            vertices=vertices,
+            faces=np.array(face_vert_indices, dtype=np.int64),
+            process=False,
+        )
+        center = vertices.mean(axis=0)
+        bbox_min = vertices.min(axis=0) - 0.1
+        bbox_max = vertices.max(axis=0) + 0.1
+
+        n_rays = int(os.environ.get("HOLE_DETECTION_RAYS", "2000"))
+        golden_ratio = (1 + np.sqrt(5)) / 2
+        directions = np.zeros((n_rays, 3))
+        for ri in range(n_rays):
+            theta = np.arccos(1 - 2 * (ri + 0.5) / n_rays)
+            phi = 2 * np.pi * ri / golden_ratio
+            directions[ri] = [np.sin(theta) * np.cos(phi),
+                              np.sin(theta) * np.sin(phi),
+                              np.cos(theta)]
+        origins = np.tile(center, (n_rays, 1))
+
+        _, ray_ids, _ = tri_mesh.ray.intersects_location(origins, directions, multiple_hits=False)
+        hit_set = set(ray_ids)
+        miss_indices = [i for i in range(n_rays) if i not in hit_set]
+
+        patch_size = 0.15
+        for mi in miss_indices:
+            d = directions[mi]
+            t_max = np.inf
+            for ax in range(3):
+                if abs(d[ax]) < 1e-10:
+                    continue
+                t1 = (bbox_min[ax] - center[ax]) / d[ax]
+                t2 = (bbox_max[ax] - center[ax]) / d[ax]
+                t_max = min(t_max, max(t1, t2))
+            if t_max <= 0 or t_max == np.inf:
+                continue
+
+            hit_pt = center + d * t_max
+            up = np.array([0, 1, 0]) if abs(d[1]) < 0.9 else np.array([1, 0, 0])
+            right = np.cross(d, up)
+            right = right / (np.linalg.norm(right) + 1e-10) * patch_size * 0.5
+            up_v = np.cross(right, d)
+            up_v = up_v / (np.linalg.norm(up_v) + 1e-10) * patch_size * 0.5
+
+            p0 = hit_pt - right - up_v
+            p1 = hit_pt + right - up_v
+            p2 = hit_pt + right + up_v
+            p3 = hit_pt - right + up_v
+            hole_faces.append({"vertices": [
+                [round(float(p0[0]), 4), round(float(p0[1]), 4), round(float(p0[2]), 4)],
+                [round(float(p1[0]), 4), round(float(p1[1]), 4), round(float(p1[2]), 4)],
+                [round(float(p2[0]), 4), round(float(p2[1]), 4), round(float(p2[2]), 4)],
+            ]})
+            hole_faces.append({"vertices": [
+                [round(float(p0[0]), 4), round(float(p0[1]), 4), round(float(p0[2]), 4)],
+                [round(float(p2[0]), 4), round(float(p2[1]), 4), round(float(p2[2]), 4)],
+                [round(float(p3[0]), 4), round(float(p3[1]), 4), round(float(p3[2]), 4)],
+            ]})
+    except Exception as e:
+        print(f"[Coverage] Hole detection failed: {e}")
+
+    return {
+        "status": "ok",
+        "coverage_ratio": round(coverage_ratio, 3),
+        "total_faces": total_faces,
+        "uncovered_count": len(uncovered),
+        "uncovered_area_m2": round(uncovered_area, 2),
+        "total_area_m2": round(total_area, 2),
+        "uncovered_faces": uncovered,
+        "hole_count": len(hole_faces),
+        "hole_faces": hole_faces[:2000],
     }
 
 

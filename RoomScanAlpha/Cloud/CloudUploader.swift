@@ -97,6 +97,9 @@ final class CloudUploader {
         /// Fast camera-viability coverage from Phase 1 processing.
         /// Available with "metrics_ready" status, before full UV-based analysis.
         let fastCoverage: FastCoverage?
+        /// Accurate UV-based coverage computed inline during processing.
+        /// Available with "complete" status — eliminates need for separate /coverage call.
+        let inlineCoverage: CoverageResult?
     }
 
     struct FastCoverage {
@@ -481,7 +484,7 @@ final class CloudUploader {
         let polySource = json["polygon_source"] as? String
         let meshUrl = json["scan_mesh_url"] as? String
 
-        // Parse fast_coverage from Phase 1 processing
+        // Parse fast_coverage (fallback if texturing failed)
         var fastCov: FastCoverage?
         if let fc = json["fast_coverage"] as? [String: Any] {
             fastCov = FastCoverage(
@@ -489,6 +492,29 @@ final class CloudUploader {
                 totalFaces: fc["total_faces"] as? Int ?? 0,
                 uncoveredCount: fc["uncovered_count"] as? Int ?? 0,
                 uncoveredFaces: fc["uncovered_faces"] as? [[String: Any]] ?? []
+            )
+        }
+
+        // Parse inline UV-based coverage (accurate, from processing)
+        var inlineCov: CoverageResult?
+        if let cov = json["coverage"] as? [String: Any] {
+            let uncoveredRaw = (cov["uncovered_faces"] as? [[String: Any]]) ?? []
+            let uncoveredFaces = uncoveredRaw.compactMap { face -> UncoveredFace? in
+                guard let verts = face["vertices"] as? [[Double]], verts.count == 3 else { return nil }
+                return UncoveredFace(vertices: verts.map { $0.map { Float($0) } })
+            }
+            let holeRaw = (cov["hole_faces"] as? [[String: Any]]) ?? []
+            let holeFaces = holeRaw.compactMap { face -> UncoveredFace? in
+                guard let verts = face["vertices"] as? [[Double]], verts.count == 3 else { return nil }
+                return UncoveredFace(vertices: verts.map { $0.map { Float($0) } })
+            }
+            inlineCov = CoverageResult(
+                coverageRatio: (cov["coverage_ratio"] as? Double).map { Float($0) } ?? 0,
+                totalFaces: cov["total_faces"] as? Int ?? 0,
+                uncoveredCount: cov["uncovered_count"] as? Int ?? 0,
+                uncoveredFaces: uncoveredFaces,
+                holeCount: cov["hole_count"] as? Int ?? 0,
+                holeFaces: holeFaces
             )
         }
 
@@ -505,7 +531,8 @@ final class CloudUploader {
             wallHeightsFt: wallHeights,
             polygonSource: polySource,
             scanMeshUrl: meshUrl,
-            fastCoverage: fastCov
+            fastCoverage: fastCov,
+            inlineCoverage: inlineCov
         )
     }
 

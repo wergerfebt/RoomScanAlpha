@@ -303,7 +303,7 @@ def get_scan_status(rfq_id: str, scan_id: str, authorization: str = Header(None)
         "scan_status", "floor_area_sqft", "wall_area_sqft", "ceiling_height_ft",
         "perimeter_linear_ft", "detected_components", "scan_dimensions",
         "room_polygon_ft", "wall_heights_ft", "polygon_source", "scan_mesh_url",
-        "fast_coverage",
+        "fast_coverage", "coverage",
     ]
 
     conn = get_db_connection()
