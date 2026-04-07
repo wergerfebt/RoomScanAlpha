@@ -46,6 +46,8 @@ SIGNING_SA_EMAIL = os.environ.get("SIGNING_SA_EMAIL", "scan-api-sa@roomscanalpha
 # Service account used by Cloud Tasks to invoke the processor via OIDC.
 # This is the Compute Engine default SA for the GCP project.
 TASKS_INVOKER_SA = os.environ.get("TASKS_INVOKER_SA", "839349778883-compute@developer.gserviceaccount.com")
+# Admin UID allowlist for the annotation tool (comma-separated Firebase UIDs)
+ADMIN_UIDS = set(filter(None, os.environ.get("ADMIN_UIDS", "").split(",")))
 
 # Signed upload URLs expire after this duration. 15 minutes gives the client enough time
 # to zip and upload ~100MB on a typical connection, with margin for retries.
@@ -599,6 +601,33 @@ def delete_rfq(rfq_id: str, authorization: str = Header(None)) -> dict:
     return {"status": "deleted", "rfq_id": rfq_id, "scans_deleted": deleted_scans}
 
 
+@app.put("/api/rfqs/{rfq_id}/scans/{scan_id}/scope")
+async def save_scope(rfq_id: str, scan_id: str, request: Request, authorization: str = Header(None)) -> dict:
+    """Save scope-of-work items and notes for a scanned room."""
+    verify_firebase_token(authorization)
+
+    body = await request.json()
+    scope = {
+        "items": body.get("items", []),
+        "notes": body.get("notes", ""),
+    }
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """UPDATE scanned_rooms SET scope = %s WHERE id = %s AND rfq_id = %s""",
+            (json.dumps(scope), scan_id, rfq_id),
+        )
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Scan not found")
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"status": "ok", "scan_id": scan_id, "scope": scope}
+
+
 @app.get("/api/rfqs/{rfq_id}/contractor-view")
 def contractor_view(rfq_id: str) -> dict:
     """Return all scan data for a contractor to review and quote.
@@ -900,6 +929,52 @@ def apple_touch_icon():
 @app.get("/og-image.png")
 def og_image():
     return FileResponse(Path(__file__).parent / "web" / "og-image.png", media_type="image/png")
+
+
+def _verify_admin(authorization: Optional[str]) -> dict:
+    """Verify Firebase JWT and check admin UID allowlist."""
+    decoded = verify_firebase_token(authorization)
+    if ADMIN_UIDS and decoded['uid'] not in ADMIN_UIDS:
+        raise HTTPException(status_code=403, detail="Not authorized as admin")
+    return decoded
+
+
+@app.get("/admin/rfq/{rfq_id}", response_class=HTMLResponse)
+def serve_admin_page(rfq_id: str) -> str:
+    """Serve the admin annotation tool. Auth checked client-side via Firebase JS."""
+    html_path = Path(__file__).parent / "web" / "admin_annotator.html"
+    if not html_path.exists():
+        raise HTTPException(status_code=500, detail="Admin page not found")
+    return html_path.read_text()
+
+
+@app.get("/api/admin/rfqs/{rfq_id}/scans/{scan_id}/annotations")
+def get_annotations(rfq_id: str, scan_id: str, authorization: str = Header(None)) -> list:
+    """Load annotations for a room from GCS."""
+    _verify_admin(authorization)
+    try:
+        bucket = storage_client.bucket(BUCKET_NAME)
+        blob = bucket.blob(f"scans/{rfq_id}/{scan_id}/annotations.json")
+        if not blob.exists():
+            return []
+        return json.loads(blob.download_as_text())
+    except Exception as e:
+        print(f"[Admin] Failed to load annotations: {e}")
+        return []
+
+
+@app.put("/api/admin/rfqs/{rfq_id}/scans/{scan_id}/annotations")
+async def save_annotations(rfq_id: str, scan_id: str, request: Request, authorization: str = Header(None)) -> dict:
+    """Save annotations for a room to GCS."""
+    _verify_admin(authorization)
+    body = await request.json()
+    try:
+        bucket = storage_client.bucket(BUCKET_NAME)
+        blob = bucket.blob(f"scans/{rfq_id}/{scan_id}/annotations.json")
+        blob.upload_from_string(json.dumps(body), content_type="application/json")
+        return {"status": "saved", "scan_id": scan_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save: {e}")
 
 
 @app.get("/health")

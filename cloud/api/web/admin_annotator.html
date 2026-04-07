@@ -1,0 +1,1203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>RoomScan Admin — Component Annotator</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, sans-serif; background: #111; color: #e0e0e0; overflow: hidden; height: 100vh; }
+
+  .app { display: flex; height: 100vh; }
+
+  /* ---- Sidebar ---- */
+  .sidebar { width: 320px; min-width: 320px; background: #1a1a2e; border-right: 1px solid #2a2a4a;
+             display: flex; flex-direction: column; overflow: hidden; z-index: 10; }
+
+  .sidebar-header { padding: 12px 16px; border-bottom: 1px solid #2a2a4a; display: flex; align-items: center; gap: 8px; }
+  .sidebar-header h1 { font-size: 15px; font-weight: 700; color: #e94560; flex: 1; }
+  .sidebar-header .badge { font-size: 10px; background: #e94560; color: #fff; padding: 2px 8px; border-radius: 10px; font-weight: 600; }
+
+  /* Mode bar */
+  .mode-bar { padding: 8px 12px; border-bottom: 1px solid #2a2a4a; display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
+  .mode-btn { padding: 5px 12px; border-radius: 5px; border: 1px solid #2a2a4a; background: transparent;
+              color: #888; font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.15s; }
+  .mode-btn.active { background: #e94560; color: #fff; border-color: #e94560; }
+  .mode-btn:hover:not(.active) { background: #222240; color: #ccc; }
+  .brush-ctrl { margin-left: auto; display: flex; align-items: center; gap: 4px; font-size: 11px; color: #666; }
+  .brush-ctrl input[type=range] { width: 60px; }
+
+  /* Picker */
+  .picker { padding: 8px 12px; border-bottom: 1px solid #2a2a4a; }
+  .picker label { font-size: 10px; font-weight: 600; color: #666; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; display: block; }
+  .picker-search { width: 100%; padding: 5px 8px; border-radius: 5px; border: 1px solid #2a2a4a; background: #111; color: #e0e0e0; font-size: 12px; }
+  .picker-search::placeholder { color: #444; }
+  .picker-list { max-height: 180px; overflow-y: auto; background: #111; border: 1px solid #2a2a4a; border-radius: 5px; margin-top: 4px; display: none; }
+  .picker-list.open { display: block; }
+  .pg-label { font-size: 10px; font-weight: 700; color: #e94560; padding: 4px 8px; text-transform: uppercase; }
+  .pi { padding: 4px 8px; font-size: 12px; cursor: pointer; display: flex; justify-content: space-between; }
+  .pi:hover { background: #1a1a2e; }
+  .pi .u { color: #666; font-size: 11px; }
+
+  /* Annotations */
+  .ann-section { flex: 1; overflow-y: auto; }
+  .ann-section .hdr { font-size: 10px; font-weight: 600; color: #666; text-transform: uppercase; padding: 6px 12px; }
+  .ann-empty { color: #444; font-size: 12px; padding: 20px 12px; text-align: center; }
+  .ann-row { padding: 6px 12px; cursor: pointer; border-left: 3px solid transparent; display: flex; align-items: center; gap: 8px; transition: background 0.1s; }
+  .ann-row:hover { background: rgba(42,42,74,0.5); }
+  .ann-row.active { background: rgba(233,69,96,0.1); border-left-color: #e94560; }
+  .swatch { width: 12px; height: 12px; border-radius: 2px; flex-shrink: 0; }
+  .ann-info { flex: 1; min-width: 0; }
+  .ann-name { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ann-meta { display: flex; align-items: center; gap: 5px; margin-top: 1px; }
+  .ann-qty { width: 55px; padding: 1px 4px; border-radius: 3px; border: 1px solid #2a2a4a; background: #111; color: #e0e0e0; font-size: 11px; text-align: right; }
+  .ann-unit { font-size: 10px; color: #666; }
+  .ann-faces { font-size: 10px; color: #444; }
+  .ann-btns { display: flex; gap: 1px; flex-shrink: 0; }
+  .abtn { background: none; border: none; color: #666; cursor: pointer; padding: 3px; border-radius: 3px; font-size: 13px; line-height: 1; }
+  .abtn:hover { background: #2a2a4a; color: #e0e0e0; }
+  .abtn.off { color: #333; }
+
+  /* Footer */
+  .sidebar-foot { padding: 8px 12px; border-top: 1px solid #2a2a4a; display: flex; gap: 6px; }
+  .btn-save { flex: 1; padding: 7px; border-radius: 5px; border: none; background: #e94560; color: #fff; font-size: 12px; font-weight: 600; cursor: pointer; }
+  .btn-save:hover { background: #d63851; }
+  .btn-save.ok { background: #2ecc71; }
+  .btn-clr { padding: 7px 10px; border-radius: 5px; border: 1px solid #2a2a4a; background: transparent; color: #666; font-size: 12px; cursor: pointer; }
+  .btn-clr:hover { color: #e94560; }
+
+  /* ---- Viewer ---- */
+  .viewer { flex: 1; position: relative; }
+  .viewer canvas { display: block; }
+  .loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); color: #555; font-size: 14px; }
+  .hint { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.7);
+          padding: 5px 14px; border-radius: 5px; font-size: 11px; color: #666; pointer-events: none; z-index: 5; }
+  .status { position: absolute; top: 8px; right: 8px; background: rgba(0,0,0,0.7); padding: 5px 12px;
+            border-radius: 5px; font-size: 11px; z-index: 5; display: flex; gap: 12px; }
+  .status .dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; margin-right: 4px; }
+  .dot-orbit { background: #2ecc71; }
+  .dot-paint { background: #e94560; }
+
+  ::-webkit-scrollbar { width: 5px; }
+  ::-webkit-scrollbar-track { background: #1a1a2e; }
+  ::-webkit-scrollbar-thumb { background: #2a2a4a; border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <div class="sidebar">
+    <div class="sidebar-header">
+      <h1>Component Annotator</h1>
+      <span class="badge">ADMIN</span>
+    </div>
+
+    <div style="padding:6px 12px;border-bottom:1px solid #2a2a4a;">
+      <select id="room-select" onchange="selectRoom(this.value)" style="width:100%;padding:5px 8px;border-radius:5px;border:1px solid #2a2a4a;background:#111;color:#e0e0e0;font-size:12px;">
+        <option value="">Loading rooms...</option>
+      </select>
+    </div>
+
+    <div class="mode-bar">
+      <button class="mode-btn active" id="btn-orbit" onclick="setMode('orbit')">Navigate</button>
+      <button class="mode-btn" id="btn-paint" onclick="setMode('paint')">Paint</button>
+      <button class="mode-btn" id="btn-erase" onclick="setMode('erase')">Erase</button>
+      <button class="mode-btn" id="btn-undo" onclick="doUndo()" title="Undo (Ctrl+Z)">&#x21A9; Undo</button>
+      <div class="brush-ctrl">
+        <span>R:</span>
+        <input type="range" id="brush-r" min="5" max="25" value="5" oninput="setBrush(this.value)">
+        <span id="brush-lbl">5cm</span>
+      </div>
+    </div>
+
+    <div class="picker">
+      <label>Add Component</label>
+      <input class="picker-search" id="psearch" placeholder="Search..." onfocus="openPicker()" oninput="filterPicker(this.value)">
+      <div class="picker-list" id="plist"></div>
+    </div>
+
+    <div class="ann-section">
+      <div class="hdr">Annotations</div>
+      <div id="ann-rows"><div class="ann-empty">Paint components onto the mesh</div></div>
+    </div>
+
+    <div class="sidebar-foot">
+      <button class="btn-save" id="btn-save" onclick="doSave()">Save</button>
+      <button class="btn-clr" onclick="doExport()" title="Export annotations JSON for training pipeline">Export</button>
+      <button class="btn-clr" onclick="doClear()">Clear</button>
+    </div>
+  </div>
+
+  <div class="viewer" id="viewer">
+    <div class="loading" id="loading">Loading mesh...</div>
+    <div class="hint" id="hint">WASD move &middot; Mouse look &middot; Q/Space up &middot; Shift down &middot; Hold P=paint &middot; Hold E=erase &middot; Ctrl+N/P/E=latch</div>
+    <div class="status" id="statusbar">
+      <span><span class="dot dot-orbit" id="sdot"></span><span id="smode">Navigate</span></span>
+      <span id="slabel" style="display:none"></span>
+      <span id="sfaces">0 faces</span>
+    </div>
+  </div>
+</div>
+
+<!-- Firebase Auth -->
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script>
+  firebase.initializeApp({
+    apiKey: "AIzaSyCW1KBTi5nuNCpJjZG48gQThaSaeK6h6gg",
+    authDomain: "roomscanalpha.firebaseapp.com",
+    projectId: "roomscanalpha"
+  });
+</script>
+
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
+
+// ============================================================
+// TAXONOMY
+// ============================================================
+const TAXONOMY = [
+  { cat: 'Appliances', items: [
+    { key:'sink', name:'Sink', unit:'EA' }, { key:'fridge', name:'Refrigerator', unit:'EA' },
+    { key:'range', name:'Range/Oven', unit:'EA' }, { key:'tub', name:'Bathtub', unit:'EA' },
+    { key:'toilet', name:'Toilet', unit:'EA' }, { key:'shower', name:'Shower', unit:'EA' },
+    { key:'washer', name:'Washer', unit:'EA' }, { key:'dryer', name:'Dryer', unit:'EA' },
+  ]},
+  { cat: 'Cabinets', items: [
+    { key:'cabinet_upper_skinny', name:'Upper Cabinet (Shallow)', unit:'LF' },
+    { key:'cabinet_upper_wide', name:'Upper Cabinet (Deep)', unit:'LF' },
+    { key:'cabinet_lower_skinny', name:'Lower/Base Cabinet (Shallow)', unit:'LF' },
+    { key:'cabinet_lower_wide', name:'Lower/Base Cabinet (Deep)', unit:'LF' },
+    { key:'cabinet_full_skinny', name:'Full Height Cabinet (Shallow)', unit:'LF' },
+    { key:'cabinet_full_wide', name:'Full Height Cabinet (Deep)', unit:'LF' },
+  ]},
+  { cat: 'Floor Materials', items: [
+    { key:'floor_hardwood', name:'Hardwood Floor', unit:'SF' },
+    { key:'floor_carpet', name:'Carpet', unit:'SF' },
+    { key:'floor_tile', name:'Tile Floor', unit:'SF' },
+  ]},
+  { cat: 'Ceiling Types', items: [
+    { key:'ceiling_drywall', name:'Drywall Ceiling', unit:'SF' },
+    { key:'ceiling_drop', name:'Drop/Suspended Ceiling', unit:'SF' },
+  ]},
+  { cat: 'Trim & Molding', items: [
+    { key:'baseboard', name:'Baseboard', unit:'LF' },
+    { key:'toe_kick', name:'Toe Kick', unit:'LF' },
+    { key:'shoe_molding', name:'Shoe Molding', unit:'LF' },
+  ]},
+  { cat: 'Doors & Openings', items: [
+    { key:'door_interior', name:'Interior Door', unit:'EA' },
+    { key:'door_exterior', name:'Exterior Door', unit:'EA' },
+  ]},
+  { cat: 'Light Fixtures', items: [
+    { key:'light_recessed', name:'Recessed Light', unit:'EA' },
+    { key:'light_fixture', name:'Ceiling Light Fixture', unit:'EA' },
+    { key:'light_fluorescent', name:'Fluorescent Light', unit:'EA' },
+  ]},
+  { cat: 'Occlusions / Clutter', items: [
+    { key:'clutter', name:'General Clutter', unit:'SF' },
+    { key:'rug', name:'Rug', unit:'SF' },
+    { key:'furniture', name:'Furniture', unit:'SF' },
+  ]},
+];
+const FLAT = {};
+TAXONOMY.forEach(c => c.items.forEach(i => FLAT[i.key] = { ...i, cat: c.cat }));
+
+const COLORS = [
+  '#4CAF50','#2196F3','#FF9800','#E91E63','#9C27B0','#00BCD4','#FF5722','#795548',
+  '#607D8B','#CDDC39','#F44336','#3F51B5','#009688','#FFC107','#673AB7','#8BC34A',
+  '#03A9F4','#FF6F00','#AD1457','#1B5E20',
+];
+let colorIdx = 0;
+
+// ============================================================
+// STATE
+// ============================================================
+const API_BASE = window.location.origin;
+let authToken = null; // Firebase JWT
+let currentRfqId = null;
+let currentScanId = null;
+let currentData = null; // from contractor-view endpoint
+
+let scene, camera, renderer, controls;
+let mode = 'orbit'; // orbit | paint | erase
+let meshGroup = null;
+let meshChildren = []; // all Mesh objects from OBJ
+let brushCm = 5;
+
+// Annotation map: labelKey -> { name, unit, cat, color, faces: Set<'ci:fi'>, qty, visible, overlay }
+const anns = new Map();
+let activeKey = null;
+
+// Painting
+let painting = false;
+let strokeDirty = false;
+
+// Undo stack — each entry is a snapshot of all annotation face sets before a stroke
+const undoStack = [];
+const MAX_UNDO = 50;
+
+// Hover overlay
+let hoverMesh = null;
+
+// WASD keys
+const keys = {};
+const MOVE_SPEED = 0.04;
+
+// ============================================================
+// THREE.JS SETUP — interior camera like comparison.html
+// ============================================================
+function initThree() {
+  const el = document.getElementById('viewer');
+  const w = el.clientWidth, h = el.clientHeight;
+
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(w, h);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  el.appendChild(renderer.domElement);
+
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x111111);
+
+  scene.add(new THREE.AmbientLight(0xffffff, 2.0));
+  const dl = new THREE.DirectionalLight(0xffffff, 1.0);
+  dl.position.set(0, 2, 0);
+  scene.add(dl);
+
+  camera = new THREE.PerspectiveCamera(60, w / h, 0.01, 100);
+  camera.position.set(0, 0.8, 0);
+
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.target.set(0, 0.8, 1);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.1;
+  controls.rotateSpeed = 0.5;
+  controls.enableZoom = true;
+  controls.enablePan = false;
+  controls.update();
+
+  window.addEventListener('resize', onResize);
+  new ResizeObserver(onResize).observe(el);
+
+  // Pointer events on the canvas for painting
+  renderer.domElement.addEventListener('pointerdown', onDown);
+  renderer.domElement.addEventListener('pointermove', onMove);
+  renderer.domElement.addEventListener('pointerup', onUp);
+  renderer.domElement.addEventListener('pointerleave', onUp);
+
+  window.addEventListener('keydown', onKeyDown);
+  window.addEventListener('keyup', onKeyUp);
+
+  animate();
+}
+
+function onResize() {
+  const el = document.getElementById('viewer');
+  if (!el || !camera) return;
+  const w = el.clientWidth, h = el.clientHeight;
+  if (!w || !h) return;
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  renderer.setSize(w, h);
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  applyMovement();
+  controls.update();
+  renderer.render(scene, camera);
+}
+
+function applyMovement() {
+  if (!camera || !controls) return;
+  const dir = new THREE.Vector3();
+  camera.getWorldDirection(dir);
+  const right = new THREE.Vector3().crossVectors(dir, camera.up).normalize();
+  const fwd = new THREE.Vector3(dir.x, 0, dir.z).normalize();
+  const strafe = new THREE.Vector3(right.x, 0, right.z).normalize();
+
+  const d = new THREE.Vector3();
+  if (keys['w']) d.add(fwd.clone().multiplyScalar(MOVE_SPEED));
+  if (keys['s']) d.add(fwd.clone().multiplyScalar(-MOVE_SPEED));
+  if (keys['a']) d.add(strafe.clone().multiplyScalar(-MOVE_SPEED));
+  if (keys['d']) d.add(strafe.clone().multiplyScalar(MOVE_SPEED));
+  if (keys['q'] || keys[' ']) d.y += MOVE_SPEED;
+  if (keys['shift']) d.y -= MOVE_SPEED;
+
+  if (d.lengthSq() > 0) {
+    camera.position.add(d);
+    controls.target.add(d);
+  }
+}
+
+// ============================================================
+// KEYBOARD SHORTCUTS
+// Hold P = momentary paint, hold N = momentary navigate, hold E = momentary erase
+// Ctrl+P = latch paint, Ctrl+N = latch navigate, Ctrl+E = latch erase
+// ============================================================
+let modeBeforeHold = null; // stashed mode for momentary hold
+
+function onKeyDown(e) {
+  // Skip if typing in an input
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
+    keys[e.key.toLowerCase()] = true;
+    return;
+  }
+
+  const k = e.key.toLowerCase();
+
+  // Ctrl/Cmd+key shortcuts
+  if (e.ctrlKey || e.metaKey) {
+    if (k === 'z') { e.preventDefault(); doUndo(); return; }
+    if (k === 'n') { e.preventDefault(); setMode('orbit'); return; }
+    if (k === 'p') { e.preventDefault(); setMode('paint'); return; }
+    if (k === 'e') { e.preventDefault(); setMode('erase'); return; }
+  }
+
+  // Bare P/N/E (not WASD) = momentary hold
+  if (k === 'p' && mode !== 'paint') {
+    modeBeforeHold = mode;
+    setMode('paint');
+    return;
+  }
+  if (k === 'n' && mode !== 'orbit') {
+    modeBeforeHold = mode;
+    setMode('orbit');
+    return;
+  }
+  if (k === 'e' && mode !== 'erase' && !e.ctrlKey && !e.metaKey) {
+    modeBeforeHold = mode;
+    setMode('erase');
+    return;
+  }
+
+  keys[k] = true;
+}
+
+function onKeyUp(e) {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
+    keys[e.key.toLowerCase()] = false;
+    return;
+  }
+
+  const k = e.key.toLowerCase();
+  keys[k] = false;
+
+  // Release momentary hold — return to previous mode
+  if (modeBeforeHold !== null) {
+    if ((k === 'p' && mode === 'paint') ||
+        (k === 'n' && mode === 'orbit') ||
+        (k === 'e' && mode === 'erase')) {
+      setMode(modeBeforeHold);
+      modeBeforeHold = null;
+    }
+  }
+}
+
+// ============================================================
+// UNDO
+// ============================================================
+function pushUndo() {
+  // Snapshot face sets for all annotations
+  const snap = [];
+  for (const [k, a] of anns) {
+    snap.push({ k, faces: new Set(a.faces) });
+  }
+  undoStack.push(snap);
+  if (undoStack.length > MAX_UNDO) undoStack.shift();
+}
+
+window.doUndo = doUndo;
+function doUndo() {
+  if (undoStack.length === 0) return;
+  const snap = undoStack.pop();
+
+  // Restore face sets from snapshot
+  // First, gather keys present in the snapshot
+  const snapKeys = new Set(snap.map(s => s.k));
+
+  // For annotations in the snapshot, restore their faces
+  for (const s of snap) {
+    const a = anns.get(s.k);
+    if (a) {
+      a.faces = s.faces;
+      rebuildOverlay(a);
+    }
+  }
+
+  // For annotations NOT in the snapshot (added during this stroke — shouldn't happen but be safe)
+  for (const [k, a] of anns) {
+    if (!snapKeys.has(k)) continue; // already handled above
+  }
+
+  renderList();
+  updateFaces();
+}
+
+// ============================================================
+// LOAD MESH — from API (same pattern as contractor_view.html)
+// ============================================================
+function scanFilesBase(prefix) {
+  const base = `${API_BASE}/api/rfqs/${currentRfqId}/scans/${currentScanId}/files/`;
+  return prefix ? base + prefix + '/' : base;
+}
+
+function loadMesh(textureUrls) {
+  const hasOBJ = textureUrls.obj && textureUrls.mtl;
+  if (!hasOBJ) {
+    document.getElementById('loading').textContent = 'No OBJ mesh available for this room.';
+    return;
+  }
+
+  // Use proxy for MTL + atlas so relative texture filenames resolve correctly
+  const resourcePath = scanFilesBase(null);
+  const mtlUrl = resourcePath + 'textured.mtl';
+
+  const mtlLoader = new MTLLoader();
+  mtlLoader.setResourcePath(resourcePath);
+  mtlLoader.setCrossOrigin('anonymous');
+  mtlLoader.load(mtlUrl, (materials) => {
+    materials.preload();
+    Object.values(materials.materials).forEach(mat => {
+      if (mat.map) { mat.map.colorSpace = THREE.SRGBColorSpace; mat.map.needsUpdate = true; }
+      mat.transparent = false;
+      mat.opacity = 1.0;
+      mat.side = THREE.DoubleSide;
+    });
+
+    const objLoader = new OBJLoader();
+    objLoader.setMaterials(materials);
+    objLoader.load(textureUrls.obj, onLoaded,
+      (xhr) => { if (xhr.total > 0) document.getElementById('loading').textContent = `Loading... ${Math.round(xhr.loaded/xhr.total*100)}%`; },
+      (err) => { document.getElementById('loading').textContent = 'Mesh load failed'; console.error(err); }
+    );
+  }, undefined, (err) => {
+    // Fallback: load OBJ with single atlas if MTL fails
+    console.warn('MTL failed, falling back to single atlas:', err);
+    const objLoader = new OBJLoader();
+    objLoader.load(textureUrls.obj, (obj) => {
+      if (textureUrls.atlas) {
+        const tex = new THREE.TextureLoader().load(textureUrls.atlas);
+        tex.colorSpace = THREE.SRGBColorSpace;
+        const mat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide });
+        obj.traverse(child => { if (child.isMesh) child.material = mat; });
+      }
+      onLoaded(obj);
+    });
+  });
+}
+
+function onLoaded(group) {
+  meshGroup = group;
+  scene.add(group);
+
+  meshChildren = [];
+  group.traverse(c => { if (c.isMesh) meshChildren.push(c); });
+
+  // Center camera inside the mesh
+  const box = new THREE.Box3().setFromObject(group);
+  const center = box.getCenter(new THREE.Vector3());
+  camera.position.set(center.x, center.y, center.z);
+  controls.target.set(center.x, center.y, center.z + 1);
+  controls.update();
+
+  document.getElementById('loading').textContent = 'Building spatial index...';
+
+  const totalFaces = meshChildren.reduce((s, m) => s + faceCount(m), 0);
+  console.log(`Loaded: ${meshChildren.length} sub-meshes, ${totalFaces} faces`);
+
+  // Build spatial indexes for brush queries (defer to allow UI update)
+  setTimeout(() => {
+    for (let ci = 0; ci < meshChildren.length; ci++) buildSpatialIndex(ci);
+    document.getElementById('loading').style.display = 'none';
+    loadAnnotations();
+  }, 50);
+}
+
+// ============================================================
+// FACE HELPERS
+// ============================================================
+function faceCount(mesh) {
+  const g = mesh.geometry;
+  return g.index ? g.index.count / 3 : g.attributes.position.count / 3;
+}
+
+function triVerts(mesh, fi) {
+  const g = mesh.geometry, pos = g.attributes.position;
+  const v0 = new THREE.Vector3(), v1 = new THREE.Vector3(), v2 = new THREE.Vector3();
+  if (g.index) {
+    v0.fromBufferAttribute(pos, g.index.getX(fi*3));
+    v1.fromBufferAttribute(pos, g.index.getX(fi*3+1));
+    v2.fromBufferAttribute(pos, g.index.getX(fi*3+2));
+  } else {
+    v0.fromBufferAttribute(pos, fi*3);
+    v1.fromBufferAttribute(pos, fi*3+1);
+    v2.fromBufferAttribute(pos, fi*3+2);
+  }
+  v0.applyMatrix4(mesh.matrixWorld);
+  v1.applyMatrix4(mesh.matrixWorld);
+  v2.applyMatrix4(mesh.matrixWorld);
+  return [v0, v1, v2];
+}
+
+function triArea(v0, v1, v2) {
+  return v1.clone().sub(v0).cross(v2.clone().sub(v0)).length() * 0.5;
+}
+
+// ============================================================
+// SPATIAL INDEX — precompute face centers for fast brush queries
+// ============================================================
+// Per child mesh: Float32Array of face centers (flat xyz), grid for spatial lookup
+const spatialIndexes = []; // one per meshChildren entry
+
+function buildSpatialIndex(ci) {
+  const mesh = meshChildren[ci];
+  const n = faceCount(mesh);
+  const g = mesh.geometry, pos = g.attributes.position;
+  const mat4 = mesh.matrixWorld;
+
+  // Precompute all face centers into a flat Float32Array
+  const centers = new Float32Array(n * 3);
+  const v0 = new THREE.Vector3(), v1 = new THREE.Vector3(), v2 = new THREE.Vector3();
+
+  for (let fi = 0; fi < n; fi++) {
+    if (g.index) {
+      v0.fromBufferAttribute(pos, g.index.getX(fi*3));
+      v1.fromBufferAttribute(pos, g.index.getX(fi*3+1));
+      v2.fromBufferAttribute(pos, g.index.getX(fi*3+2));
+    } else {
+      v0.fromBufferAttribute(pos, fi*3);
+      v1.fromBufferAttribute(pos, fi*3+1);
+      v2.fromBufferAttribute(pos, fi*3+2);
+    }
+    v0.applyMatrix4(mat4);
+    v1.applyMatrix4(mat4);
+    v2.applyMatrix4(mat4);
+    const off = fi * 3;
+    centers[off]     = (v0.x + v1.x + v2.x) / 3;
+    centers[off + 1] = (v0.y + v1.y + v2.y) / 3;
+    centers[off + 2] = (v0.z + v1.z + v2.z) / 3;
+  }
+
+  // Build a grid of cell size = max brush radius (25cm)
+  const CELL = 0.25;
+  const grid = new Map(); // 'ix,iy,iz' -> [faceIndex, ...]
+
+  for (let fi = 0; fi < n; fi++) {
+    const off = fi * 3;
+    const ix = Math.floor(centers[off] / CELL);
+    const iy = Math.floor(centers[off+1] / CELL);
+    const iz = Math.floor(centers[off+2] / CELL);
+    const key = `${ix},${iy},${iz}`;
+    if (!grid.has(key)) grid.set(key, []);
+    grid.get(key).push(fi);
+  }
+
+  spatialIndexes[ci] = { centers, grid, CELL, count: n };
+  console.log(`Spatial index child[${ci}]: ${n} faces, ${grid.size} grid cells`);
+}
+
+function nearbyFaces(mesh, ci, seedFi, rWorld) {
+  if (rWorld <= 0) return [{ ci, fi: seedFi }];
+
+  const idx = spatialIndexes[ci];
+  if (!idx) return [{ ci, fi: seedFi }];
+
+  const off = seedFi * 3;
+  const sx = idx.centers[off], sy = idx.centers[off+1], sz = idx.centers[off+2];
+  const r2 = rWorld * rWorld;
+  const CELL = idx.CELL;
+
+  // Check grid cells within brush radius
+  const cMin = Math.floor((sx - rWorld) / CELL);
+  const cMax = Math.floor((sx + rWorld) / CELL);
+  const rMin = Math.floor((sy - rWorld) / CELL);
+  const rMax = Math.floor((sy + rWorld) / CELL);
+  const dMin = Math.floor((sz - rWorld) / CELL);
+  const dMax = Math.floor((sz + rWorld) / CELL);
+
+  const out = [];
+  for (let ix = cMin; ix <= cMax; ix++) {
+    for (let iy = rMin; iy <= rMax; iy++) {
+      for (let iz = dMin; iz <= dMax; iz++) {
+        const cell = idx.grid.get(`${ix},${iy},${iz}`);
+        if (!cell) continue;
+        for (const fi of cell) {
+          const fo = fi * 3;
+          const dx = idx.centers[fo] - sx;
+          const dy = idx.centers[fo+1] - sy;
+          const dz = idx.centers[fo+2] - sz;
+          if (dx*dx + dy*dy + dz*dz <= r2) out.push({ ci, fi });
+        }
+      }
+    }
+  }
+  return out;
+}
+
+// ============================================================
+// RAYCASTING
+// ============================================================
+const ray = new THREE.Raycaster();
+const ndc = new THREE.Vector2();
+
+function castFace(e) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  ndc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+  ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+  ray.setFromCamera(ndc, camera);
+  const hits = ray.intersectObjects(meshChildren, false);
+  if (hits.length > 0) {
+    const h = hits[0];
+    return { ci: meshChildren.indexOf(h.object), fi: h.faceIndex, pt: h.point, mesh: h.object };
+  }
+  return null;
+}
+
+// ============================================================
+// PAINTING
+// ============================================================
+function onDown(e) {
+  if (mode === 'orbit') return;
+  if (!activeKey) {
+    document.getElementById('hint').textContent = '⚠ Select a component from the picker first!';
+    document.getElementById('hint').style.color = '#e94560';
+    setTimeout(() => { document.getElementById('hint').style.color = ''; }, 2000);
+    return;
+  }
+  e.preventDefault();
+  e.stopPropagation();
+  // Snapshot state before stroke for undo
+  pushUndo();
+  painting = true;
+  strokeDirty = false;
+  paintAt(e);
+}
+
+function onMove(e) {
+  if (mode === 'orbit') return;
+  if (painting) {
+    e.preventDefault();
+    paintAt(e);
+  } else {
+    showHover(e);
+  }
+}
+
+function onUp() {
+  if (!painting) return;
+  painting = false;
+
+  // Flush any pending throttled rebuilds
+  if (rebuildTimer) { clearTimeout(rebuildTimer); rebuildTimer = null; }
+  for (const k of dirtyOverlays) {
+    const a = anns.get(k);
+    if (a) rebuildOverlay(a);
+  }
+  dirtyOverlays.clear();
+
+  if (strokeDirty) {
+    renderList();
+  } else {
+    undoStack.pop();
+  }
+  if (hoverMesh) hoverMesh.visible = false;
+}
+
+// Track which annotations need overlay rebuilds during a stroke
+const dirtyOverlays = new Set();
+let rebuildTimer = null;
+const REBUILD_INTERVAL = 120; // ms — throttle overlay rebuilds during painting
+
+function scheduleRebuild() {
+  if (rebuildTimer) return;
+  rebuildTimer = setTimeout(() => {
+    rebuildTimer = null;
+    for (const k of dirtyOverlays) {
+      const a = anns.get(k);
+      if (a) rebuildOverlay(a);
+    }
+    dirtyOverlays.clear();
+    updateFaces();
+  }, REBUILD_INTERVAL);
+}
+
+function paintAt(e) {
+  const hit = castFace(e);
+  if (!hit) return;
+  if (!activeKey) return;
+  const a = anns.get(activeKey);
+  if (!a) return;
+
+  const erase = (mode === 'erase');
+  const rWorld = brushCm * 0.01;
+  const faces = nearbyFaces(hit.mesh, hit.ci, hit.fi, rWorld);
+
+  let changed = false;
+  for (const { ci, fi } of faces) {
+    const fk = `${ci}:${fi}`;
+    if (erase) {
+      if (a.faces.has(fk)) { a.faces.delete(fk); changed = true; }
+    } else {
+      // Remove from other annotations — just update the Set, don't rebuild yet
+      for (const [k, o] of anns) {
+        if (k !== activeKey && o.faces.has(fk)) {
+          o.faces.delete(fk);
+          dirtyOverlays.add(k);
+        }
+      }
+      if (!a.faces.has(fk)) { a.faces.add(fk); changed = true; }
+    }
+  }
+  if (changed) {
+    strokeDirty = true;
+    dirtyOverlays.add(activeKey);
+    scheduleRebuild();
+  }
+}
+
+function showHover(e) {
+  const hit = castFace(e);
+  if (!hit) { if (hoverMesh) hoverMesh.visible = false; return; }
+
+  const [v0, v1, v2] = triVerts(hit.mesh, hit.fi);
+  if (!hoverMesh) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(9), 3));
+    hoverMesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({
+      color: 0xffffff, transparent: true, opacity: 0.5, side: THREE.DoubleSide,
+      depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+    }));
+    hoverMesh.renderOrder = 3;
+    scene.add(hoverMesh);
+  }
+  const p = hoverMesh.geometry.attributes.position.array;
+  p[0]=v0.x; p[1]=v0.y; p[2]=v0.z; p[3]=v1.x; p[4]=v1.y; p[5]=v1.z; p[6]=v2.x; p[7]=v2.y; p[8]=v2.z;
+  hoverMesh.geometry.attributes.position.needsUpdate = true;
+  hoverMesh.visible = true;
+}
+
+// ============================================================
+// OVERLAY RENDERING
+// ============================================================
+function rebuildOverlay(a) {
+  if (a.overlay) {
+    scene.remove(a.overlay);
+    a.overlay.geometry.dispose();
+    a.overlay.material.dispose();
+    a.overlay = null;
+  }
+  if (a.faces.size === 0) return;
+
+  const positions = [];
+  for (const fk of a.faces) {
+    const [ci, fi] = fk.split(':').map(Number);
+    const m = meshChildren[ci];
+    if (!m) continue;
+    const [v0, v1, v2] = triVerts(m, fi);
+    positions.push(v0.x,v0.y,v0.z, v1.x,v1.y,v1.z, v2.x,v2.y,v2.z);
+  }
+  if (!positions.length) return;
+
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  g.computeVertexNormals();
+
+  a.overlay = new THREE.Mesh(g, new THREE.MeshBasicMaterial({
+    color: new THREE.Color(a.color), transparent: true, opacity: 0.45,
+    side: THREE.DoubleSide, depthWrite: false,
+    polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
+  }));
+  a.overlay.renderOrder = 1;
+  a.overlay.visible = a.visible;
+  scene.add(a.overlay);
+}
+
+// ============================================================
+// ANNOTATION STATE
+// ============================================================
+function addAnn(labelKey) {
+  if (anns.has(labelKey)) { setActive(labelKey); return; }
+  const info = FLAT[labelKey];
+  if (!info) return;
+  const color = COLORS[colorIdx++ % COLORS.length];
+  anns.set(labelKey, {
+    name: info.name, unit: info.unit, cat: info.cat, color,
+    faces: new Set(), qty: info.unit === 'EA' ? 1 : 0, visible: true, overlay: null,
+  });
+  setActive(labelKey);
+  renderList();
+}
+
+function removeAnn(k) {
+  const a = anns.get(k);
+  if (!a) return;
+  if (a.overlay) { scene.remove(a.overlay); a.overlay.geometry.dispose(); a.overlay.material.dispose(); }
+  anns.delete(k);
+  if (activeKey === k) { activeKey = null; updateStatus(); }
+  renderList();
+}
+
+function setActive(k) {
+  activeKey = k;
+  updateStatus();
+  renderList();
+  if (mode === 'orbit') setMode('paint');
+}
+
+function computeArea(a) {
+  let total = 0;
+  for (const fk of a.faces) {
+    const [ci, fi] = fk.split(':').map(Number);
+    const m = meshChildren[ci];
+    if (!m) continue;
+    const [v0, v1, v2] = triVerts(m, fi);
+    total += triArea(v0, v1, v2);
+  }
+  return total * 10.7639; // m² → ft²
+}
+
+// ============================================================
+// MODE
+// ============================================================
+window.setMode = function(m) {
+  mode = m;
+  document.getElementById('btn-orbit').classList.toggle('active', m === 'orbit');
+  document.getElementById('btn-paint').classList.toggle('active', m === 'paint');
+  document.getElementById('btn-erase').classList.toggle('active', m === 'erase');
+
+  // Fully enable/disable OrbitControls — when disabled it won't intercept pointer events
+  controls.enabled = (m === 'orbit');
+
+  renderer.domElement.style.cursor = m === 'orbit' ? 'grab' : m === 'paint' ? 'crosshair' : 'not-allowed';
+  if (hoverMesh) hoverMesh.visible = false;
+
+  const hint = document.getElementById('hint');
+  hint.style.color = '';
+  if (m === 'orbit') hint.textContent = 'WASD move · Mouse look · Q/Space up · Shift down · Hold P=paint · Hold E=erase · Ctrl+P/N/E=latch';
+  else if (m === 'paint') hint.textContent = (activeKey ? 'Click & drag to paint' : '⚠ Pick a component first') + ' · Hold N=navigate · Ctrl+N/P/E=latch';
+  else hint.textContent = (activeKey ? 'Click & drag to erase' : '⚠ Pick a component first') + ' · Hold N=navigate · Ctrl+N/P/E=latch';
+  updateStatus();
+};
+
+window.setBrush = function(v) {
+  brushCm = parseInt(v);
+  document.getElementById('brush-lbl').textContent = brushCm === 0 ? '1px' : `${brushCm}cm`;
+};
+
+// ============================================================
+// PICKER UI
+// ============================================================
+function buildPicker() {
+  const list = document.getElementById('plist');
+  let h = '';
+  TAXONOMY.forEach(c => {
+    h += `<div class="pg"><div class="pg-label">${c.cat}</div>`;
+    c.items.forEach(i => {
+      h += `<div class="pi" data-k="${i.key}" onclick="pick('${i.key}')"><span>${i.name}</span><span class="u">${i.unit}</span></div>`;
+    });
+    h += '</div>';
+  });
+  list.innerHTML = h;
+}
+window.openPicker = () => document.getElementById('plist').classList.add('open');
+window.filterPicker = function(q) {
+  q = q.toLowerCase();
+  document.querySelectorAll('.pi').forEach(el => {
+    el.style.display = el.textContent.toLowerCase().includes(q) ? '' : 'none';
+  });
+  document.querySelectorAll('.pg').forEach(g => {
+    g.style.display = [...g.querySelectorAll('.pi')].some(el => el.style.display !== 'none') ? '' : 'none';
+  });
+};
+window.pick = function(k) {
+  addAnn(k);
+  document.getElementById('plist').classList.remove('open');
+  document.getElementById('psearch').value = '';
+  filterPicker('');
+};
+document.addEventListener('click', e => { if (!e.target.closest('.picker')) document.getElementById('plist').classList.remove('open'); });
+
+// ============================================================
+// ANNOTATION LIST UI
+// ============================================================
+function renderList() {
+  const el = document.getElementById('ann-rows');
+  if (anns.size === 0) { el.innerHTML = '<div class="ann-empty">Paint components onto the mesh</div>'; return; }
+
+  let h = '';
+  for (const [k, a] of anns) {
+    const act = k === activeKey ? ' active' : '';
+    h += `<div class="ann-row${act}" onclick="clickAnn('${k}')">
+      <div class="swatch" style="background:${a.color}"></div>
+      <div class="ann-info">
+        <div class="ann-name">${esc(a.name)}</div>
+        <div class="ann-meta">
+          <input class="ann-qty" type="number" step="any" value="${a.qty}" onclick="event.stopPropagation()" onchange="chgQty('${k}',this.value)">
+          <span class="ann-unit">${a.unit}</span>
+          <span class="ann-faces">${a.faces.size}f</span>
+        </div>
+      </div>
+      <div class="ann-btns">
+        ${(a.unit==='SF'||a.unit==='LF') ? `<button class="abtn" onclick="event.stopPropagation();autoCalc('${k}')" title="Auto-compute">&#x1F4D0;</button>` : ''}
+        <button class="abtn${a.visible?'':' off'}" onclick="event.stopPropagation();togVis('${k}')" title="Toggle visibility">${a.visible?'\u25C9':'\u25CB'}</button>
+        <button class="abtn" onclick="event.stopPropagation();removeAnn('${k}')" title="Delete">&times;</button>
+      </div>
+    </div>`;
+  }
+  el.innerHTML = h;
+}
+
+window.clickAnn = k => setActive(k);
+window.chgQty = (k, v) => { const a = anns.get(k); if (a) a.qty = parseFloat(v) || 0; };
+window.togVis = function(k) {
+  const a = anns.get(k); if (!a) return;
+  a.visible = !a.visible;
+  if (a.overlay) a.overlay.visible = a.visible;
+  renderList();
+};
+window.removeAnn = removeAnn;
+window.autoCalc = function(k) {
+  const a = anns.get(k); if (!a) return;
+  a.qty = Math.round(computeArea(a) * 10) / 10;
+  renderList();
+};
+window.doClear = function() {
+  if (anns.size && !confirm('Clear all annotations?')) return;
+  for (const a of anns.values()) {
+    if (a.overlay) { scene.remove(a.overlay); a.overlay.geometry.dispose(); a.overlay.material.dispose(); }
+  }
+  anns.clear(); activeKey = null; colorIdx = 0;
+  renderList(); updateStatus();
+};
+
+function updateFaces() {
+  const a = activeKey ? anns.get(activeKey) : null;
+  document.getElementById('sfaces').textContent = a ? `${a.faces.size} faces` : '0 faces';
+}
+
+function updateStatus() {
+  const names = { orbit: 'Navigate', paint: 'Paint', erase: 'Erase' };
+  document.getElementById('smode').textContent = names[mode] || '';
+  document.getElementById('sdot').className = `dot ${mode === 'orbit' ? 'dot-orbit' : 'dot-paint'}`;
+  const lbl = document.getElementById('slabel');
+  if (activeKey) {
+    const a = anns.get(activeKey);
+    lbl.style.display = ''; lbl.textContent = a ? `Active: ${a.name}` : '';
+  } else { lbl.style.display = 'none'; }
+  updateFaces();
+}
+
+function esc(s) { const el = document.createElement('span'); el.textContent = s || ''; return el.innerHTML; }
+
+// ============================================================
+// SAVE/LOAD — API with localStorage fallback
+// ============================================================
+function serializeAnnotations() {
+  const data = [];
+  for (const [k, a] of anns) data.push({ k, color: a.color, faces: [...a.faces], qty: a.qty, visible: a.visible });
+  return data;
+}
+
+function deserializeAnnotations(data) {
+  for (const a of anns.values()) {
+    if (a.overlay) { scene.remove(a.overlay); a.overlay.geometry.dispose(); a.overlay.material.dispose(); }
+  }
+  anns.clear(); activeKey = null; colorIdx = 0;
+
+  for (const item of data) {
+    const info = FLAT[item.k];
+    if (!info) continue;
+    const a = {
+      name: info.name, unit: info.unit, cat: info.cat,
+      color: item.color || COLORS[colorIdx++ % COLORS.length],
+      faces: new Set(item.faces || []), qty: item.qty || 0, visible: item.visible !== false, overlay: null,
+    };
+    anns.set(item.k, a);
+    rebuildOverlay(a);
+  }
+  renderList();
+  console.log(`Loaded ${data.length} annotations`);
+}
+
+window.doExport = function() {
+  if (anns.size === 0) { alert('No annotations to export.'); return; }
+  const payload = {
+    rfq_id: currentRfqId,
+    scan_id: currentScanId,
+    annotations: [],
+  };
+  for (const [k, a] of anns) {
+    payload.annotations.push({
+      label_key: k, display_name: a.name, unit: a.unit, category: a.cat,
+      color: a.color, faces: [...a.faces], quantity: a.qty,
+    });
+  }
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url; link.download = `annotations_${currentScanId || 'export'}.json`;
+  link.click(); URL.revokeObjectURL(url);
+};
+
+window.doSave = async function() {
+  const data = serializeAnnotations();
+  const btn = document.getElementById('btn-save');
+
+  // Save to localStorage as fallback
+  const storeKey = `admin_ann_${currentRfqId}_${currentScanId}`;
+  localStorage.setItem(storeKey, JSON.stringify(data));
+
+  // Save to API if authenticated
+  if (authToken && currentRfqId && currentScanId) {
+    try {
+      btn.textContent = 'Saving...';
+      const resp = await fetch(`${API_BASE}/api/admin/rfqs/${currentRfqId}/scans/${currentScanId}/annotations`, {
+        method: 'PUT',
+        headers: { 'Authorization': `Bearer ${authToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      btn.textContent = 'Saved!'; btn.classList.add('ok');
+    } catch (e) {
+      console.error('API save failed (localStorage saved):', e);
+      btn.textContent = 'Saved (local)'; btn.classList.add('ok');
+    }
+  } else {
+    btn.textContent = 'Saved (local)'; btn.classList.add('ok');
+  }
+  setTimeout(() => { btn.textContent = 'Save'; btn.classList.remove('ok'); }, 1500);
+};
+
+async function loadAnnotations() {
+  // Try API first
+  if (authToken && currentRfqId && currentScanId) {
+    try {
+      const resp = await fetch(`${API_BASE}/api/admin/rfqs/${currentRfqId}/scans/${currentScanId}/annotations`, {
+        headers: { 'Authorization': `Bearer ${authToken}` },
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data && data.length > 0) {
+          deserializeAnnotations(data);
+          return;
+        }
+      }
+    } catch (e) { console.warn('API load failed, trying localStorage:', e); }
+  }
+
+  // Fallback to localStorage
+  const storeKey = `admin_ann_${currentRfqId}_${currentScanId}`;
+  const raw = localStorage.getItem(storeKey);
+  if (raw) {
+    try { deserializeAnnotations(JSON.parse(raw)); } catch (e) { console.error('localStorage load failed:', e); }
+  }
+}
+
+// ============================================================
+// ROOM SELECTION
+// ============================================================
+function populateRoomSelector(data) {
+  const sel = document.getElementById('room-select');
+  if (!sel) return;
+  sel.innerHTML = '';
+  data.rooms.forEach((room, i) => {
+    const opt = document.createElement('option');
+    opt.value = i;
+    opt.textContent = room.room_label || `Room ${i + 1}`;
+    sel.appendChild(opt);
+  });
+}
+
+window.selectRoom = async function(index) {
+  if (index === '' || !currentData) return;
+  // Save current room before switching
+  if (currentScanId) await window.doSave();
+
+  // Clear current annotations and mesh
+  for (const a of anns.values()) {
+    if (a.overlay) { scene.remove(a.overlay); a.overlay.geometry.dispose(); a.overlay.material.dispose(); }
+  }
+  anns.clear(); activeKey = null; colorIdx = 0;
+  renderList(); updateStatus();
+
+  if (meshGroup) {
+    scene.remove(meshGroup);
+    meshGroup.traverse(c => { if (c.isMesh) { c.geometry?.dispose(); if (Array.isArray(c.material)) c.material.forEach(m=>m.dispose()); else c.material?.dispose(); }});
+    meshGroup = null; meshChildren = []; spatialIndexes.length = 0;
+  }
+
+  const room = currentData.rooms[parseInt(index)];
+  currentScanId = room.scan_id;
+  document.getElementById('loading').style.display = 'block';
+  document.getElementById('loading').textContent = 'Loading mesh...';
+  loadMesh(room.texture_urls || {});
+};
+
+// ============================================================
+// AUTH + INIT
+// ============================================================
+function getRfqId() {
+  const parts = window.location.pathname.split('/');
+  const idx = parts.indexOf('rfq');
+  if (idx >= 0 && parts[idx + 1]) return parts[idx + 1];
+  const params = new URLSearchParams(window.location.search);
+  return params.get('rfq') || null;
+}
+
+async function init() {
+  currentRfqId = getRfqId();
+  if (!currentRfqId) {
+    document.getElementById('loading').textContent = 'No RFQ ID. Navigate to /admin/rfq/{rfq_id}';
+    return;
+  }
+
+  initThree();
+  buildPicker();
+
+  // Wait for Firebase auth
+  firebase.auth().onAuthStateChanged(async (user) => {
+    if (!user) {
+      // Show sign-in prompt
+      document.getElementById('loading').innerHTML = 'Sign in required. <button onclick="signIn()" style="padding:8px 16px;border-radius:6px;border:none;background:#e94560;color:#fff;cursor:pointer;font-size:14px;">Sign In with Google</button>';
+      return;
+    }
+
+    authToken = await user.getIdToken();
+    document.getElementById('loading').textContent = 'Loading scan data...';
+
+    try {
+      const resp = await fetch(`${API_BASE}/api/rfqs/${currentRfqId}/contractor-view`);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      currentData = await resp.json();
+      populateRoomSelector(currentData);
+      if (currentData.rooms?.length > 0) {
+        currentScanId = currentData.rooms[0].scan_id;
+        loadMesh(currentData.rooms[0].texture_urls || {});
+      } else {
+        document.getElementById('loading').textContent = 'No rooms found in this RFQ.';
+      }
+    } catch (e) {
+      document.getElementById('loading').textContent = `Failed to load: ${e.message}`;
+    }
+  });
+}
+
+window.signIn = function() {
+  firebase.auth().signInWithPopup(new firebase.auth.GoogleAuthProvider());
+};
+
+init();
+
+</script>
+</body>
+</html>
