@@ -1538,8 +1538,8 @@ async def process_supplemental(request: Request) -> dict:
         try:
             from pipeline.openmvs_texture import texture_scan
 
-            # Merged scans have more geometry; use default 50K preview
-            tex_output = texture_scan(merged_dir, merged_metadata)
+            # Merged scans need both preview (for coverage) and standard (for web viewer)
+            tex_output = texture_scan(merged_dir, merged_metadata, levels=["preview", "standard"])
 
             # Upload textured outputs to GCS (overwrite previous)
             gcs_base = original_blob.rsplit("/", 1)[0]
