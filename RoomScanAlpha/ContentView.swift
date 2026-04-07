@@ -611,24 +611,36 @@ struct ContentView: View {
                 .font(.system(size: 64))
                 .foregroundStyle(hasLiDAR ? .blue : .orange)
 
-            HStack {
-                Text("RoomScan Alpha")
-                    .font(.largeTitle)
-                    .fontWeight(.bold)
-                Spacer()
+            Text("RoomScan Alpha")
+                .font(.largeTitle)
+                .fontWeight(.bold)
+                .padding(.horizontal, 24)
+
+            HStack(spacing: 12) {
                 Button {
                     viewModel.showHistory = true
                 } label: {
-                    Image(systemName: "clock.arrow.circlepath")
-                        .font(.title2)
+                    Label("Scan History", systemImage: "clock.arrow.circlepath")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(Color(uiColor: .systemGray6))
+                        .foregroundStyle(.primary)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
                 }
                 Button {
                     try? AuthManager.shared.signOut()
                     isAuthenticated = false
                 } label: {
-                    Image(systemName: "rectangle.portrait.and.arrow.right")
-                        .font(.title2)
+                    Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(Color(uiColor: .systemGray6))
                         .foregroundStyle(.secondary)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
                 }
             }
             .padding(.horizontal, 24)

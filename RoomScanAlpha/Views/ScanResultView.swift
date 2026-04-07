@@ -314,7 +314,7 @@ struct ScanResultView: View {
                     .font(.caption)
                 }
 
-                if pct < 90, let onRescanGaps {
+                if pct < 90, !viewModel.hasCompletedRescan, let onRescanGaps {
                     Button(action: onRescanGaps) {
                         Label("Re-scan Gaps", systemImage: "camera.viewfinder")
                             .font(.headline)
@@ -346,7 +346,7 @@ struct ScanResultView: View {
                         .foregroundStyle(.orange)
                 }
 
-                if pct < 90, let onRescanGaps, viewModel.scanResult?.status != "metrics_ready" {
+                if pct < 90, !viewModel.hasCompletedRescan, let onRescanGaps, viewModel.scanResult?.status != "metrics_ready" {
                     Button(action: onRescanGaps) {
                         Label("Re-scan Gaps", systemImage: "camera.viewfinder")
                             .font(.headline)
