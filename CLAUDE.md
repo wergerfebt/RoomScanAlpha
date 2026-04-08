@@ -88,6 +88,28 @@ Cloud Run: scan-api (public)
 1. **OBJ Mesh** (primary): Loads `textured.obj` via signed URL + MTL/atlas via file proxy (`MTLLoader` + `OBJLoader`). "HD On" toggles to `standard_textured.obj` with multi-atlas support. File proxy: `GET /api/rfqs/{rfq_id}/scans/{scan_id}/files/{path}` — maps `standard/` prefix to `standard_` prefixed GCS blobs.
 2. **Quad Room** (fallback): Builds rectangular walls from annotation polygon, applies per-surface JPEGs
 
+### Admin Component Annotator
+
+**Admin-only tool** (`admin_annotator.html`) at `/admin/rfq/{rfq_id}` for manually labeling 3D room scans with component types. Serves dual purpose: Wizard of Oz alpha (consumers see "detected" components) and DNN training data.
+
+- **Auth**: Firebase JWT + `ADMIN_UIDS` env var allowlist (comma-separated Firebase UIDs)
+- **Face painting**: Raycaster-based click+drag painting on OBJ mesh faces. 30+ component taxonomy (appliances, cabinets, floor materials, ceiling types, trim, doors, lights, occlusions/clutter). Spatial grid index for fast brush queries on 600K+ face meshes.
+- **Corner editing**: Room polygon corners with independent floor/ceiling Y per corner. Edge-click insertion. Corners stored as `room_polygon_ft` + `wall_heights_ft` + `floor_heights_ft` in `scanned_rooms`.
+- **Features layer**: Door frames, cased openings, windows, cabinet outlines as separate 3D polylines. Stored in GCS as `features.json` per room.
+- **Keyboard shortcuts**: Hold P/N/E/C for momentary paint/navigate/erase/corners. Ctrl+P/N/E/C to latch. Ctrl+Z undo.
+- **Save**: Annotations → GCS (`annotations.json`) + DB (`detected_components` JSONB on `scanned_rooms`). Polygon → DB (`room_polygon_ft`, `wall_heights_ft`). Features → GCS (`features.json`).
+- **Detected materials**: Admin annotations update `detected_components` with `{ detected: [...labels], details: { label: { qty, unit } } }`. Contractor view and iOS app read this for display.
+
+**Admin API endpoints** (all require Firebase JWT + admin UID check):
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/admin/rfq/{rfq_id}` | Serve admin annotator HTML |
+| GET/PUT | `/api/admin/rfqs/{rfq_id}/scans/{scan_id}/annotations` | Annotation CRUD (GCS + DB) |
+| GET/PUT | `/api/admin/rfqs/{rfq_id}/scans/{scan_id}/features` | Feature CRUD (GCS) |
+| PUT | `/api/admin/rfqs/{rfq_id}/scans/{scan_id}/polygon` | Update room polygon + recompute dimensions |
+
+**Planned**: Merge features into room polygon so door frames/openings connect to wall edges for segment-level measurements (trim linear feet). See `docs/ML_ARCHITECTURE.md` for the full ML training pipeline plan.
+
 ## iOS App
 
 ### Scan Flow (current working flow)
@@ -199,5 +221,6 @@ gs://roomscanalpha-scans/scans/{rfq_id}/{scan_id}/
 | `PLATFORM_ARCHITECTURE.md` | **Current** | Marketplace expansion plan (accounts, orgs, bids, search) |
 | `cloud/processor/TEXTURE_PIPELINE.md` | **Current** | OpenMVS A/B test results, decimation findings |
 | `cloud/DNN_COMPONENT_TAXONOMY.md` | **Future** | DNN detection classes (Phase 2, not implemented) |
+| `docs/ML_ARCHITECTURE.md` | **Current** | ML strategy: 3D segmentation, monocular depth, Gaussian splatting, data capture |
 | `cloud/README.md` | **Current** | Cloud operations guide |
 | `docs/deprecated/` | **Archived** | 10 old planning docs moved here — do not reference |
