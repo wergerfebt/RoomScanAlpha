@@ -2,6 +2,10 @@
 
 iOS + cloud room scanning system. Users scan rooms with LiDAR-equipped iPhones, the cloud processes PLY meshes into textured 3D models via OpenMVS, and contractors view results in a web viewer to generate renovation quotes.
 
+## Branching
+
+All work branches from and merges into **`mvp-alpha`**, not `master`/`main`. The `mvp-alpha` branch has significant divergence from master (iOS app, cloud pipeline, admin tooling). Branching from master creates massive diffs and merge conflicts.
+
 ## Quick Reference
 
 ### Deploy

@@ -130,6 +130,7 @@
   .measure-label { background: rgba(0,85,204,0.85); color: #fff; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600; font-family: -apple-system, monospace; white-space: nowrap; pointer-events: none; }
   .measure-label.area { background: rgba(52,168,83,0.9); font-size: 13px; }
   .measure-label.height { background: rgba(234,134,0,0.9); }
+  .measure-label.opening { background: rgba(52,168,83,0.9); }
 
   /* Loading / spinners */
   .loading { display: flex; align-items: center; justify-content: center; height: 100%; color: #8e8e93; font-size: 16px; }
@@ -334,30 +335,21 @@ const MOVE_SPEED = 0.04;
 // Spatial index
 const spatialIndexes = [];
 
-// Corner editing state — each corner has independent floor + ceiling Y
-let corners = [];             // [{x, z, ceilingY, floorY}] in feet
-let selectedCornerIdx = -1;
-let selectedIsFloor = false;  // true if the floor sphere is selected (vs ceiling)
-let cornerSpheres = [];       // THREE.Mesh ceiling spheres
-let cornerFloorSpheres = [];  // THREE.Mesh floor spheres
-let cornerEdgeLines = null;   // THREE.LineSegments (ceiling + floor edges)
-let cornerVertLines = null;   // THREE.LineSegments (vertical lines)
-let cornerLabels = [];        // CSS2DObject labels
-let draggingCorner = false;
-let cornersChanged = false;
+// Room polygon + annotation constants
 const CORNER_RADIUS = 0.04;
 const CORNER_COLOR = 0x0055cc;
 const CORNER_SELECTED = 0xe94560;
-const CORNER_FLOOR_COLOR = 0x2196F3; // blue for floor corners (green reserved for features)
+const CORNER_FLOOR_COLOR = 0x2196F3;
+let cornersChanged = false;  // track if room polygon was edited (for DB save)
 
-// Features layer — doors, cabinets, openings, windows
+// Features layer — room polygon + doors, cabinets, openings, windows
 const FEATURE_TYPES = [
   { key: 'door_frame', name: 'Door Frame', color: 0x34a853 },
   { key: 'cased_opening', name: 'Cased Opening', color: 0x8BC34A },
   { key: 'window', name: 'Window', color: 0x00BCD4 },
   { key: 'cabinet_outline', name: 'Cabinet Outline', color: 0xFF9800 },
 ];
-let features = [];               // [{ id, type, points: [{x,y,z}], edges: [[i,j]], closed }]
+let features = [];               // [{ id, type, vertices: [{x,y,z,snap}], edges: [[i,j]], faces: [[v0,v1,v2,v3]] }]
 let activeFeatureIdx = -1;
 let featureDrawing = false;       // true when placing points for a new feature
 let featureLastPointIdx = -1;     // last placed point index (for edge drawing)
@@ -365,6 +357,35 @@ let featureMeshes = new Map();    // feature id → { spheres, lines, labels }
 let featuresChanged = false;
 const FEATURE_SPHERE_RADIUS = 0.025;
 let nextFeatureId = 1;
+
+// Edge extrude state
+let extruding = false;
+let extrudeFeat = null;        // feature being extruded
+let extrudeEdgeIdx = -1;       // index into feat.edges of the edge being extruded
+let extrudeNewVerts = [-1, -1]; // indices of the two new vertices
+let extrudeOrigPos = null;     // [{x,y,z}, {x,y,z}] original positions of the source edge vertices
+let extrudeMouseStart = null;  // {x, y} screen coords at extrude start (for click vs drag detection)
+
+// Vertex dragging state
+let draggingVertex = null;     // { featureIdx, vertexIdx, isCeiling } or null
+// Edge dragging state
+let draggingEdge = null;       // { featureIdx, edgeIdx, origVerts: [{x,y,z}, {x,y,z}], startHit: {x,y,z} } or null
+
+// Hover highlighting
+let hoverEdgeObj = null;       // THREE.Line for edge hover highlight
+let hoverVertObj = null;       // THREE.Mesh for vertex hover highlight
+let hoverFaceObj = null;       // THREE.Mesh for face hover highlight
+
+// Surface selection state
+let selectedFaces = new Map(); // key: "featureIdx-faceIdx" → true
+let faceMeshes = [];           // [{mesh, featureIdx, faceIdx}] for raycasting
+
+// Surface extrude state
+let extrudingSurface = false;
+let extrudeSurfaceFeat = null;
+let extrudeSurfaceNewVerts = []; // indices of duplicated vertices
+let extrudeSurfaceOrigPos = [];  // original positions of new verts
+let extrudeSurfaceNormal = null; // face normal for constrained movement
 
 // Paint throttle
 const dirtyOverlays = new Set();
@@ -457,8 +478,8 @@ function applyMovement() {
   if (keys['arrowdown']) d.add(fwd.clone().multiplyScalar(-MOVE_SPEED));
   if (keys['arrowleft']) d.add(strafe.clone().multiplyScalar(-MOVE_SPEED));
   if (keys['arrowright']) d.add(strafe.clone().multiplyScalar(MOVE_SPEED));
-  if (keys['q'] || keys[' ']) d.y += MOVE_SPEED;
-  if (keys['shift']) d.y -= MOVE_SPEED;
+  if (keys['='] || keys['+']) d.y += MOVE_SPEED;
+  if (keys['-'] || keys['_']) d.y -= MOVE_SPEED;
   if (d.lengthSq() > 0) { camera.position.add(d); controls.target.add(d); }
 
   for (const k of ['arrowup','arrowleft','arrowdown','arrowright']) {
@@ -550,60 +571,82 @@ window.toggleHD = function() {
 };
 
 function buildMeasurements(room) {
-  if (measurementGroup) { scene.remove(measurementGroup); }
+  // Fully clean up old measurement group
+  if (measurementGroup) {
+    measurementGroup.traverse(c => { if (c.isCSS2DObject && c.element) c.element.remove(); });
+    scene.remove(measurementGroup);
+    measurementGroup = null;
+  }
   measurementGroup = new THREE.Group();
   measurementGroup.visible = measurementsVisible;
 
   if (!room.room_polygon_ft || room.room_polygon_ft.length < 3) { scene.add(measurementGroup); return; }
 
   const FT_TO_M = 1/3.28084;
-  const cornersM = room.room_polygon_ft.map(([x,z]) => [x*FT_TO_M, z*FT_TO_M]);
-  const ceilingHeightM = (room.ceiling_height_ft || 8) * FT_TO_M;
-  const cornersYM = (room.wall_heights_ft || []).map(h => h*FT_TO_M);
-  const avgCeilingY = cornersYM.length > 0 ? cornersYM.reduce((s,v)=>s+v,0)/cornersYM.length : ceilingHeightM;
-  const floorY = avgCeilingY - ceilingHeightM;
-  const cx = cornersM.reduce((s,p)=>s+p[0],0)/cornersM.length;
-  const cz = cornersM.reduce((s,p)=>s+p[1],0)/cornersM.length;
-  const NUDGE = 0.005;
+  const rp = getRoomPolygonFeature();
+  if (!rp) { scene.add(measurementGroup); return; }
+  const rpVerts = rp.vertices;
+  const cx = rpVerts.reduce((s,v) => s+v.x, 0) / rpVerts.length * FT_TO_M;
+  const cz = rpVerts.reduce((s,v) => s+v.z, 0) / rpVerts.length * FT_TO_M;
 
-  function nudge(x,z) { const dx=cx-x, dz=cz-z, d=Math.sqrt(dx*dx+dz*dz)||1; return [x+dx/d*NUDGE, z+dz/d*NUDGE]; }
+  // LABELS ONLY — lines are rendered by renderAllFeatures for the room polygon
+  // Wall length labels at ceiling midpoint per edge
+  const wallSegments = computeWallSegments();
 
-  // Edge lines + wall length labels
-  const lineMat = new THREE.LineBasicMaterial({ color: 0x0055cc, depthTest: false });
-  for (let i=0; i<cornersM.length; i++) {
-    const j = (i+1)%cornersM.length;
-    const [x0,z0] = nudge(cornersM[i][0], cornersM[i][1]);
-    const [x1,z1] = nudge(cornersM[j][0], cornersM[j][1]);
-    const h0 = cornersYM[i] || avgCeilingY;
-    const h1 = cornersYM[j] || avgCeilingY;
+  for (let i = 0; i < rpVerts.length; i++) {
+    const j = (i + 1) % rpVerts.length;
+    const pi = rpVerts[i], pj = rpVerts[j];
+    const x0 = pi.x*FT_TO_M, z0 = pi.z*FT_TO_M, x1 = pj.x*FT_TO_M, z1 = pj.z*FT_TO_M;
+    // Label Y at edge height (floor level) with small offset above
+    const h0 = pi.y*FT_TO_M + 0.04, h1 = pj.y*FT_TO_M + 0.04;
+    const wallLen = Math.sqrt((pj.x-pi.x)**2 + (pj.z-pi.z)**2);
 
-    // Ceiling edge
-    const ceilGeom = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(x0,h0,z0), new THREE.Vector3(x1,h1,z1)]);
-    const ceilLine = new THREE.Line(ceilGeom, lineMat); ceilLine.renderOrder = 999;
-    measurementGroup.add(ceilLine);
+    const edgeSegs = wallSegments.find(ws => ws.edgeIdx === i);
+    const hasSegments = edgeSegs && edgeSegs.segments.length > 1;
 
-    // Floor edge
-    const floorGeom = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(x0,floorY,z0), new THREE.Vector3(x1,floorY,z1)]);
-    const floorLine = new THREE.Line(floorGeom, lineMat); floorLine.renderOrder = 999;
-    measurementGroup.add(floorLine);
-
-    // Vertical corner line
-    const vertGeom = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(x0,floorY,z0), new THREE.Vector3(x0,h0,z0)]);
-    const vertLine = new THREE.Line(vertGeom, lineMat); vertLine.renderOrder = 999;
-    measurementGroup.add(vertLine);
-
-    // Wall length label at ceiling midpoint
-    const wallLen = Math.sqrt((cornersM[j][0]-cornersM[i][0])**2 + (cornersM[j][1]-cornersM[i][1])**2) / FT_TO_M;
-    const mx = (x0+x1)/2, mz = (z0+z1)/2, my = ((h0+h1)/2);
-    addLabel(formatFtIn(wallLen), new THREE.Vector3(mx,my,mz));
+    if (hasSegments) {
+      for (const seg of edgeSegs.segments) {
+        if (seg.length > 1.0) {
+          const sx0 = x0 + (x1-x0)*seg.tStart, sz0 = z0 + (z1-z0)*seg.tStart;
+          const sx1 = x0 + (x1-x0)*seg.tEnd, sz1 = z0 + (z1-z0)*seg.tEnd;
+          const smx = (sx0+sx1)/2, smz = (sz0+sz1)/2, smy = (h0+h1)/2;
+          if (seg.type === 'wall') {
+            addLabel(formatFtIn(seg.length), new THREE.Vector3(smx, smy, smz));
+          } else {
+            const typeInfo = FEATURE_TYPES.find(t => t.key === seg.type);
+            addLabel(`${(typeInfo?.name||seg.type)} ${formatFtIn(seg.length)}`, new THREE.Vector3(smx, smy, smz), 'opening');
+          }
+        }
+      }
+    } else if (wallLen > 1.0) {
+      const mx = (x0+x1)/2, mz = (z0+z1)/2, my = (h0+h1)/2;
+      addLabel(formatFtIn(wallLen), new THREE.Vector3(mx, my, mz));
+    }
   }
 
-  // Height label at first corner
-  addLabel(formatFtIn(room.ceiling_height_ft || 8), new THREE.Vector3(nudge(cornersM[0][0],cornersM[0][1])[0], (floorY+avgCeilingY)/2, nudge(cornersM[0][0],cornersM[0][1])[1]), 'height');
+  // Height labels: pair floor vertices with nearest ceiling vertex
+  const rc = getRoomCeilingFeature();
+  const avgFloorY = rpVerts.reduce((s,v) => s+v.y, 0) / rpVerts.length * FT_TO_M;
+  if (rc) {
+    for (const fv of rpVerts) {
+      let best = rc.vertices[0], bestDist = Infinity;
+      for (const cv of rc.vertices) {
+        const d = (cv.x - fv.x)**2 + (cv.z - fv.z)**2;
+        if (d < bestDist) { bestDist = d; best = cv; }
+      }
+      if (bestDist < 4) {
+        const h = best.y - fv.y;
+        if (h > 0.5) {
+          const midY = (fv.y + best.y) / 2 * FT_TO_M;
+          addLabel(formatFtIn(h), new THREE.Vector3(fv.x * FT_TO_M, midY, fv.z * FT_TO_M), 'height');
+        }
+      }
+    }
+  }
 
   // Floor area label
   if (room.floor_area_sqft) {
-    addLabel(`${Math.round(room.floor_area_sqft)} SF`, new THREE.Vector3(cx, floorY + 0.05, cz), 'area');
+    addLabel(`${Math.round(room.floor_area_sqft)} SF`, new THREE.Vector3(cx, avgFloorY + 0.05, cz), 'area');
   }
 
   scene.add(measurementGroup);
@@ -625,10 +668,15 @@ function formatFtIn(totalFt) {
 }
 
 // ============================================================
-// CORNER EDITING — independent floor + ceiling per corner
+// ROOM POLYGON — created from DB corners, lives in features[]
 // ============================================================
-function initCornersFromRoom(room) {
-  corners = [];
+function getRoomFloorFeature() { return features.find(f => f.type === 'room_floor'); }
+function getRoomCeilingFeature() { return features.find(f => f.type === 'room_ceiling'); }
+// Backward compat helper — wall segments and snap use the floor feature
+function getRoomPolygonFeature() { return getRoomFloorFeature(); }
+
+function initRoomPolygonFeature(room) {
+  features = features.filter(f => f.type !== 'room_floor' && f.type !== 'room_ceiling' && f.type !== 'room_polygon');
   const poly = room.room_polygon_ft;
   const ceilH = room.wall_heights_ft || [];
   const floorH = room.floor_heights_ft || [];
@@ -637,197 +685,45 @@ function initCornersFromRoom(room) {
   const avgCeil = ceilH.length ? ceilH.reduce((s,v)=>s+v,0)/ceilH.length : (room.ceiling_height_ft || 8);
   const defaultFloor = avgCeil - (room.ceiling_height_ft || 8);
 
+  const floorVerts = [], floorEdges = [];
+  const ceilVerts = [], ceilEdges = [];
   for (let i = 0; i < poly.length; i++) {
-    corners.push({
-      x: poly[i][0], z: poly[i][1],
-      ceilingY: ceilH[i] || avgCeil,
-      floorY: floorH[i] !== undefined ? floorH[i] : defaultFloor,
-    });
+    floorVerts.push({ x: poly[i][0], z: poly[i][1], y: floorH[i] !== undefined ? floorH[i] : defaultFloor, snap: null });
+    floorEdges.push([i, (i + 1) % poly.length]);
+    ceilVerts.push({ x: poly[i][0], z: poly[i][1], y: ceilH[i] || avgCeil, snap: null });
+    ceilEdges.push([i, (i + 1) % poly.length]);
   }
-  selectedCornerIdx = -1;
-  selectedIsFloor = false;
+  features.unshift(
+    { id: 'room_ceiling', type: 'room_ceiling', vertices: ceilVerts, edges: ceilEdges, faces: [] },
+    { id: 'room_floor', type: 'room_floor', vertices: floorVerts, edges: floorEdges, faces: [] },
+  );
   cornersChanged = false;
-  renderCornerVisuals();
+  renderAllFeatures();
+  renderFeatureList();
 }
 
-function clearCornerVisuals() {
-  cornerSpheres.forEach(s => scene.remove(s));
-  cornerFloorSpheres.forEach(s => scene.remove(s));
-  cornerLabels.forEach(l => { if (l.parent) l.parent.remove(l); });
-  if (cornerEdgeLines) { scene.remove(cornerEdgeLines); cornerEdgeLines = null; }
-  if (cornerVertLines) { scene.remove(cornerVertLines); cornerVertLines = null; }
-  cornerSpheres = []; cornerFloorSpheres = []; cornerLabels = [];
-}
-
-function renderCornerVisuals() {
-  clearCornerVisuals();
-  if (corners.length === 0) return;
-
-  const FT = 1 / 3.28084;
-  const sphereGeom = new THREE.SphereGeometry(CORNER_RADIUS, 12, 12);
-
-  for (let i = 0; i < corners.length; i++) {
-    const c = corners[i];
-    const wx = c.x*FT, wz = c.z*FT, wCY = c.ceilingY*FT, wFY = c.floorY*FT;
-
-    // Ceiling sphere
-    const isCeilSel = (i === selectedCornerIdx && !selectedIsFloor);
-    const cmat = new THREE.MeshBasicMaterial({ color: isCeilSel ? CORNER_SELECTED : CORNER_COLOR, depthTest: false });
-    const cs = new THREE.Mesh(sphereGeom, cmat);
-    cs.position.set(wx, wCY, wz);
-    cs.renderOrder = 10;
-    cs.userData = { cornerIdx: i, isFloor: false };
-    scene.add(cs);
-    cornerSpheres.push(cs);
-
-    // Floor sphere
-    const isFloorSel = (i === selectedCornerIdx && selectedIsFloor);
-    const fmat = new THREE.MeshBasicMaterial({ color: isFloorSel ? CORNER_SELECTED : CORNER_FLOOR_COLOR, depthTest: false });
-    const fs = new THREE.Mesh(sphereGeom, fmat);
-    fs.position.set(wx, wFY, wz);
-    fs.renderOrder = 10;
-    fs.userData = { cornerIdx: i, isFloor: true };
-    scene.add(fs);
-    cornerFloorSpheres.push(fs);
-
-    // Label
-    const div = document.createElement('div');
-    div.className = 'measure-label';
-    div.style.background = (i === selectedCornerIdx) ? '#e94560' : 'rgba(0,85,204,0.85)';
-    div.textContent = `${i + 1}`;
-    const label = new CSS2DObject(div);
-    label.position.set(wx, wCY + 0.08, wz);
-    scene.add(label);
-    cornerLabels.push(label);
-  }
-
-  // Edge lines
-  const ceilPts = [], floorPts = [];
-  for (let i = 0; i < corners.length; i++) {
-    const j = (i+1) % corners.length;
-    const ci = corners[i], cj = corners[j];
-    ceilPts.push(new THREE.Vector3(ci.x*FT, ci.ceilingY*FT, ci.z*FT), new THREE.Vector3(cj.x*FT, cj.ceilingY*FT, cj.z*FT));
-    floorPts.push(new THREE.Vector3(ci.x*FT, ci.floorY*FT, ci.z*FT), new THREE.Vector3(cj.x*FT, cj.floorY*FT, cj.z*FT));
-  }
-  cornerEdgeLines = new THREE.Group();
-  cornerEdgeLines.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(ceilPts), new THREE.LineBasicMaterial({ color: CORNER_COLOR, depthTest: false })));
-  cornerEdgeLines.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(floorPts), new THREE.LineBasicMaterial({ color: CORNER_FLOOR_COLOR, depthTest: false })));
-  cornerEdgeLines.renderOrder = 9;
-  scene.add(cornerEdgeLines);
-
-  // Vertical lines
-  const vertPts = [];
-  for (const c of corners) vertPts.push(new THREE.Vector3(c.x*FT, c.floorY*FT, c.z*FT), new THREE.Vector3(c.x*FT, c.ceilingY*FT, c.z*FT));
-  cornerVertLines = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(vertPts), new THREE.LineBasicMaterial({ color: 0x8e8ea0, depthTest: false }));
-  cornerVertLines.renderOrder = 9;
-  scene.add(cornerVertLines);
-}
-
-function findClosestEdge(point) {
-  if (corners.length < 2) return -1;
-  const FT = 1/3.28084;
-  let bestDist = Infinity, bestEdge = -1;
-  for (let i = 0; i < corners.length; i++) {
-    const j = (i+1) % corners.length;
-    const a = new THREE.Vector3(corners[i].x*FT, (corners[i].ceilingY+corners[i].floorY)/2*FT, corners[i].z*FT);
-    const b = new THREE.Vector3(corners[j].x*FT, (corners[j].ceilingY+corners[j].floorY)/2*FT, corners[j].z*FT);
-    const ab = b.clone().sub(a); const ap = point.clone().sub(a);
-    let t = ap.dot(ab) / ab.dot(ab); t = Math.max(0, Math.min(1, t));
-    const closest = a.clone().add(ab.clone().multiplyScalar(t));
-    const dist = point.distanceTo(closest);
-    if (dist < bestDist) { bestDist = dist; bestEdge = i; }
-  }
-  return bestDist < 0.15 ? bestEdge : -1;
-}
-
-function onCornerDown(e) {
-  e.preventDefault(); e.stopPropagation();
-  controls.enabled = false;
-  pushUndo();
-
-  const rect = renderer.domElement.getBoundingClientRect();
-  ndc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-  ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-  ray.setFromCamera(ndc, camera);
-
-  // Check ceiling spheres
-  const ceilHits = ray.intersectObjects(cornerSpheres, false);
-  if (ceilHits.length > 0) {
-    selectedCornerIdx = ceilHits[0].object.userData.cornerIdx;
-    selectedIsFloor = false;
-    draggingCorner = true;
-    renderCornerVisuals();
-    return;
-  }
-  // Check floor spheres
-  const floorHits = ray.intersectObjects(cornerFloorSpheres, false);
-  if (floorHits.length > 0) {
-    selectedCornerIdx = floorHits[0].object.userData.cornerIdx;
-    selectedIsFloor = true;
-    draggingCorner = true;
-    renderCornerVisuals();
-    return;
-  }
-
-  // Mesh click — insert on edge or append
-  const meshHit = castFace(e);
-  if (!meshHit) { undoStack.pop(); return; }
-
-  const M2F = 3.28084;
-  const hitFt = { x: Math.round(meshHit.pt.x*M2F*100)/100, z: Math.round(meshHit.pt.z*M2F*100)/100, y: Math.round(meshHit.pt.y*M2F*100)/100 };
-
-  const edgeIdx = findClosestEdge(meshHit.pt);
-  if (edgeIdx >= 0) {
-    const ci = corners[edgeIdx], cj = corners[(edgeIdx+1)%corners.length];
-    corners.splice(edgeIdx+1, 0, { x: hitFt.x, z: hitFt.z, ceilingY: hitFt.y, floorY: (ci.floorY+cj.floorY)/2 });
-    selectedCornerIdx = edgeIdx+1; selectedIsFloor = false;
-  } else {
-    const defFloor = corners.length > 0 ? corners[0].floorY : 0;
-    const nc = { x: hitFt.x, z: hitFt.z, ceilingY: hitFt.y, floorY: defFloor };
-    if (selectedCornerIdx >= 0 && selectedCornerIdx < corners.length) {
-      corners.splice(selectedCornerIdx+1, 0, nc);
-      selectedCornerIdx++;
-    } else {
-      corners.push(nc);
-      selectedCornerIdx = corners.length-1;
-    }
-    selectedIsFloor = false;
-  }
-  cornersChanged = true;
-  renderCornerVisuals();
-  rebuildMeasurementsFromCorners();
-}
-
-function onCornerMove(e) {
-  if (!draggingCorner || selectedCornerIdx < 0) return;
-  e.preventDefault();
-  const meshHit = castFace(e);
-  if (!meshHit) return;
-  const M2F = 3.28084;
-  const c = corners[selectedCornerIdx];
-  c.x = Math.round(meshHit.pt.x*M2F*100)/100;
-  c.z = Math.round(meshHit.pt.z*M2F*100)/100;
-  if (selectedIsFloor) c.floorY = Math.round(meshHit.pt.y*M2F*100)/100;
-  else c.ceilingY = Math.round(meshHit.pt.y*M2F*100)/100;
-  cornersChanged = true;
-  renderCornerVisuals();
-}
-
-function onCornerUp(e) {
-  if (draggingCorner) { draggingCorner = false; rebuildMeasurementsFromCorners(); }
-  controls.enabled = false;
-}
-
-function rebuildMeasurementsFromCorners() {
-  if (corners.length < 3) return;
+function syncRoomPolygonToRoom() {
   const room = currentData?.rooms?.[activeRoomIndex];
-  if (!room) return;
-  room.room_polygon_ft = corners.map(c => [c.x, c.z]);
-  room.wall_heights_ft = corners.map(c => c.ceilingY);
-  room.floor_heights_ft = corners.map(c => c.floorY);
+  const rf = getRoomFloorFeature();
+  const rc = getRoomCeilingFeature();
+  if (!room || !rf || rf.vertices.length < 3) return;
+  // Use floor polygon for room shape (XZ positions)
+  room.room_polygon_ft = rf.vertices.map(v => [v.x, v.z]);
+  room.floor_heights_ft = rf.vertices.map(v => v.y);
+  // Ceiling heights: for each floor vertex, find nearest ceiling vertex Y
+  // (since they may have different vertex counts after independent edits)
+  room.wall_heights_ft = rf.vertices.map(fv => {
+    if (!rc || rc.vertices.length === 0) return (room.ceiling_height_ft || 8);
+    let best = rc.vertices[0], bestDist = Infinity;
+    for (const cv of rc.vertices) {
+      const d = (cv.x - fv.x) ** 2 + (cv.z - fv.z) ** 2;
+      if (d < bestDist) { bestDist = d; best = cv; }
+    }
+    return best.y;
+  });
 
   const FT2M = 1/3.28084, SQM2SF = 10.7639;
-  const cm = corners.map(c => [c.x*FT2M, c.z*FT2M]);
+  const cm = rf.vertices.map(v => [v.x*FT2M, v.z*FT2M]);
   const n = cm.length;
   let sa = 0;
   for (let i=0;i<n;i++){const j=(i+1)%n; sa += cm[i][0]*cm[j][1] - cm[j][0]*cm[i][1];}
@@ -835,38 +731,181 @@ function rebuildMeasurementsFromCorners() {
   let pm = 0;
   for (let i=0;i<n;i++){const j=(i+1)%n; pm += Math.sqrt((cm[j][0]-cm[i][0])**2+(cm[j][1]-cm[i][1])**2);}
   room.perimeter_linear_ft = Math.round(pm*3.28084*10)/10;
-  const wh = corners.map(c => c.ceilingY - c.floorY);
-  room.ceiling_height_ft = Math.round(wh.reduce((s,v)=>s+v,0)/wh.length*100)/100;
+  const avgFloor = rf.vertices.reduce((s,v) => s+v.y, 0) / rf.vertices.length;
+  const avgCeil = rc ? rc.vertices.reduce((s,v) => s+v.y, 0) / rc.vertices.length : avgFloor + 8;
+  room.ceiling_height_ft = Math.round((avgCeil - avgFloor)*100)/100;
   room.wall_area_sqft = Math.round(room.perimeter_linear_ft*room.ceiling_height_ft*10)/10;
-  buildMeasurements(room);
-  renderMetrics(room);
 }
 
+// Delete vertex handler (works for any feature type in annotate mode)
 window.addEventListener('keydown', (e) => {
-  if (mode !== 'corners' || selectedCornerIdx < 0) return;
+  if (mode !== 'annotate' || featureLastPointIdx < 0 || activeFeatureIdx < 0) return;
   if (e.key === 'Delete' || e.key === 'Backspace') {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
     e.preventDefault();
-    if (corners.length <= 3) return;
+    const feat = features[activeFeatureIdx];
+    if (!feat) return;
+    // Room polygon: minimum 3 vertices
+    if ((feat.type === 'room_floor' || feat.type === 'room_ceiling') && feat.vertices.length <= 3) return;
     pushUndo();
-    corners.splice(selectedCornerIdx, 1);
-    selectedCornerIdx = Math.min(selectedCornerIdx, corners.length-1);
-    cornersChanged = true;
-    renderCornerVisuals();
-    rebuildMeasurementsFromCorners();
+    const delIdx = featureLastPointIdx;
+    // Remove vertex and merge edges that referenced it
+    const edgesToRemove = [];
+    let mergeA = -1, mergeB = -1;
+    for (let ei = 0; ei < feat.edges.length; ei++) {
+      const [a, b] = feat.edges[ei];
+      if (a === delIdx) { mergeB = b; edgesToRemove.push(ei); }
+      else if (b === delIdx) { mergeA = a; edgesToRemove.push(ei); }
+    }
+    // Create merged edge if both sides existed
+    if (mergeA >= 0 && mergeB >= 0 && mergeA !== mergeB) {
+      feat.edges.push([mergeA, mergeB]);
+    }
+    // Remove old edges (reverse order to preserve indices)
+    edgesToRemove.sort((a,b) => b - a).forEach(ei => feat.edges.splice(ei, 1));
+    // Remove vertex
+    feat.vertices.splice(delIdx, 1);
+    // Update all edge indices > delIdx
+    for (const edge of feat.edges) {
+      if (edge[0] > delIdx) edge[0]--;
+      if (edge[1] > delIdx) edge[1]--;
+    }
+    // Update face indices
+    feat.faces = feat.faces.filter(f => !f.includes(delIdx)).map(f => f.map(vi => vi > delIdx ? vi - 1 : vi));
+    featureLastPointIdx = Math.min(delIdx, feat.vertices.length - 1);
+    featuresChanged = true;
+    if (feat.type === 'room_floor' || feat.type === 'room_ceiling') cornersChanged = true;
+    renderAllFeatures();
+    renderFeatureList();
+    rebuildMeasurementsAfterFeatureChange();
   }
 });
 
 // ============================================================
+// WALL SNAP — auto-snap feature vertices to nearby wall edges
+// ============================================================
+function snapToWallEdge(ptFt) {
+  // ptFt = {x, y, z} in feet. Returns {x, y, z, snap} with snap info if within threshold.
+  const rp = getRoomPolygonFeature();
+  if (!rp || rp.vertices.length < 2) return { ...ptFt, snap: null };
+  const rpVerts = rp.vertices;
+  let bestDist = Infinity, bestEdge = -1, bestT = 0, bestProjX = 0, bestProjZ = 0;
+  for (let i = 0; i < rpVerts.length; i++) {
+    const j = (i + 1) % rpVerts.length;
+    const ax = rpVerts[i].x, az = rpVerts[i].z, bx = rpVerts[j].x, bz = rpVerts[j].z;
+    const dx = bx - ax, dz = bz - az;
+    const len2 = dx * dx + dz * dz;
+    if (len2 < 0.001) continue;
+    let t = ((ptFt.x - ax) * dx + (ptFt.z - az) * dz) / len2;
+    t = Math.max(0, Math.min(1, t));
+    const projX = ax + t * dx, projZ = az + t * dz;
+    const dist = Math.sqrt((ptFt.x - projX) ** 2 + (ptFt.z - projZ) ** 2);
+    if (dist < bestDist) { bestDist = dist; bestEdge = i; bestT = t; bestProjX = projX; bestProjZ = projZ; }
+  }
+  if (bestDist < 0.5) { // ~6 inches in feet
+    const j = (bestEdge + 1) % rpVerts.length;
+    return {
+      x: Math.round(bestProjX * 100) / 100,
+      y: ptFt.y,
+      z: Math.round(bestProjZ * 100) / 100,
+      snap: { wallEdge: [bestEdge, j], t: Math.round(bestT * 1000) / 1000 },
+    };
+  }
+  return { ...ptFt, snap: null };
+}
+
+// Migrate old features format (points → vertices)
+function migrateFeature(feat) {
+  if (feat.points && !feat.vertices) {
+    feat.vertices = feat.points.map(p => ({ x: p.x, y: p.y, z: p.z, snap: null }));
+    delete feat.points;
+  }
+  if (!feat.faces) feat.faces = [];
+  if (!feat.vertices) feat.vertices = [];
+  return feat;
+}
+
+// After room polygon edits, recompute snaps on other features
+function recomputeFeatureSnaps() {
+  for (const feat of features) {
+    if (feat.type === 'room_floor' || feat.type === 'room_ceiling') continue;
+    for (const v of feat.vertices) {
+      if (!v.snap) continue;
+      const snapped = snapToWallEdge(v);
+      v.snap = snapped.snap;
+    }
+  }
+}
+
+// ============================================================
+// WALL SEGMENTS — derived from room polygon + snapped feature vertices
+// ============================================================
+function computeWallSegments() {
+  const rp = getRoomPolygonFeature();
+  if (!rp || rp.vertices.length < 2) return [];
+  const rpVerts = rp.vertices;
+  const segments = [];
+  for (let i = 0; i < rpVerts.length; i++) {
+    const j = (i + 1) % rpVerts.length;
+    const edgeLen = Math.sqrt((rpVerts[j].x - rpVerts[i].x) ** 2 + (rpVerts[j].z - rpVerts[i].z) ** 2);
+
+    // Collect all snapped vertex pairs on this edge
+    const interruptions = [];
+    for (const feat of features) {
+      const snapped = feat.vertices
+        .filter(v => v.snap && v.snap.wallEdge[0] === i && v.snap.wallEdge[1] === j)
+        .sort((a, b) => a.snap.t - b.snap.t);
+      if (snapped.length >= 2) {
+        interruptions.push({
+          tStart: snapped[0].snap.t,
+          tEnd: snapped[snapped.length - 1].snap.t,
+          featureId: feat.id,
+          type: feat.type,
+        });
+      }
+    }
+    interruptions.sort((a, b) => a.tStart - b.tStart);
+
+    // Build: wall-gap-wall-gap-wall
+    const segs = [];
+    let cursor = 0;
+    for (const intr of interruptions) {
+      if (intr.tStart > cursor + 0.001)
+        segs.push({ type: 'wall', tStart: cursor, tEnd: intr.tStart, length: (intr.tStart - cursor) * edgeLen });
+      segs.push({ type: intr.type, tStart: intr.tStart, tEnd: intr.tEnd, length: (intr.tEnd - intr.tStart) * edgeLen, featureId: intr.featureId });
+      cursor = intr.tEnd;
+    }
+    if (cursor < 1 - 0.001)
+      segs.push({ type: 'wall', tStart: cursor, tEnd: 1, length: (1 - cursor) * edgeLen });
+
+    segments.push({ edgeIdx: i, totalLength: edgeLen, segments: segs });
+  }
+  return segments;
+}
+
+const OPENING_TYPES = ['door_frame', 'cased_opening'];
+
+function computeTrimLF() {
+  const wallSegs = computeWallSegments();
+  let gross = 0, deductions = 0;
+  for (const edge of wallSegs) {
+    gross += edge.totalLength;
+    for (const seg of edge.segments)
+      if (OPENING_TYPES.includes(seg.type)) deductions += seg.length;
+  }
+  return { gross: Math.round(gross * 10) / 10, deductions: Math.round(deductions * 10) / 10, net: Math.round((gross - deductions) * 10) / 10 };
+}
+
 // ============================================================
 // FEATURES — doors, cabinets, openings, windows
 // ============================================================
 function renderAllFeatures() {
-  // Clear all feature visuals
+  faceMeshes = []; // reset face mesh tracking for raycasting
+  // Clear all feature visuals — must remove DOM elements for CSS2DObject labels
   for (const [id, vis] of featureMeshes) {
     vis.spheres.forEach(s => scene.remove(s));
     vis.lines.forEach(l => scene.remove(l));
-    vis.labels.forEach(l => { if (l.parent) l.parent.remove(l); });
+    vis.labels.forEach(l => { if (l.element) l.element.remove(); if (l.parent) l.parent.remove(l); scene.remove(l); });
   }
   featureMeshes.clear();
 
@@ -875,28 +914,131 @@ function renderAllFeatures() {
 
   for (let fi = 0; fi < features.length; fi++) {
     const feat = features[fi];
-    const typeInfo = FEATURE_TYPES.find(t => t.key === feat.type) || FEATURE_TYPES[0];
     const isActive = (fi === activeFeatureIdx);
+    const vis = { spheres: [], lines: [], labels: [] };
+    const verts = feat.vertices;
+
+    // ---- Room floor / ceiling: rendered as normal features with room-specific colors + vertical lines ----
+    if (feat.type === 'room_floor' || feat.type === 'room_ceiling') {
+      const isFloor = feat.type === 'room_floor';
+      const rpColor = isFloor ? CORNER_FLOOR_COLOR : CORNER_COLOR;
+      const rpSphereGeom = new THREE.SphereGeometry(CORNER_RADIUS, 12, 12);
+      const isSel = (pi) => (fi === activeFeatureIdx && pi === featureLastPointIdx);
+
+      for (let pi = 0; pi < verts.length; pi++) {
+        const p = verts[pi];
+        const mat = new THREE.MeshBasicMaterial({ color: isSel(pi) ? CORNER_SELECTED : rpColor, depthTest: false });
+        const s = new THREE.Mesh(rpSphereGeom, mat);
+        s.position.set(p.x*FT, p.y*FT, p.z*FT);
+        s.renderOrder = 11;
+        s.userData = { featureIdx: fi, pointIdx: pi };
+        scene.add(s); vis.spheres.push(s);
+      }
+
+      for (let ei = 0; ei < feat.edges.length; ei++) {
+        const [a, b] = feat.edges[ei];
+        if (a >= verts.length || b >= verts.length) continue;
+        const pa = verts[a], pb = verts[b];
+        const line = new THREE.Line(
+          new THREE.BufferGeometry().setFromPoints([
+            new THREE.Vector3(pa.x*FT, pa.y*FT, pa.z*FT),
+            new THREE.Vector3(pb.x*FT, pb.y*FT, pb.z*FT),
+          ]),
+          new THREE.LineBasicMaterial({ color: rpColor, depthTest: false })
+        );
+        line.renderOrder = 9; line.userData = { featureIdx: fi, edgeIdx: ei };
+        scene.add(line); vis.lines.push(line);
+      }
+
+      // Vertical lines: only drawn by the floor feature, connecting to nearest ceiling vertex
+      if (isFloor) {
+        const rc = getRoomCeilingFeature();
+        if (rc) {
+          for (const fv of verts) {
+            // Find nearest ceiling vertex
+            let best = rc.vertices[0], bestDist = Infinity;
+            for (const cv of rc.vertices) {
+              const d = (cv.x - fv.x)**2 + (cv.z - fv.z)**2;
+              if (d < bestDist) { bestDist = d; best = cv; }
+            }
+            if (bestDist < 4) { // within 2ft — reasonable pairing
+              const vLine = new THREE.Line(
+                new THREE.BufferGeometry().setFromPoints([
+                  new THREE.Vector3(fv.x*FT, fv.y*FT, fv.z*FT),
+                  new THREE.Vector3(best.x*FT, best.y*FT, best.z*FT),
+                ]),
+                new THREE.LineBasicMaterial({ color: 0x8e8ea0, depthTest: false })
+              );
+              vLine.renderOrder = 9; scene.add(vLine); vis.lines.push(vLine);
+            }
+          }
+        }
+      }
+
+      // Faces (for extruded room polygon edges) — trackable for S-key surface selection
+      for (let fci = 0; fci < feat.faces.length; fci++) {
+        const face = feat.faces[fci];
+        if (face.length < 3) continue;
+        const faceVerts = face.map(vi => verts[vi]).filter(Boolean);
+        if (faceVerts.length < 3) continue;
+        const geom = new THREE.BufferGeometry();
+        const positions = [];
+        for (let fi2 = 1; fi2 < faceVerts.length - 1; fi2++) {
+          positions.push(faceVerts[0].x*FT, faceVerts[0].y*FT, faceVerts[0].z*FT);
+          positions.push(faceVerts[fi2].x*FT, faceVerts[fi2].y*FT, faceVerts[fi2].z*FT);
+          positions.push(faceVerts[fi2+1].x*FT, faceVerts[fi2+1].y*FT, faceVerts[fi2+1].z*FT);
+        }
+        geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+        geom.computeVertexNormals();
+        const isSelected = selectedFaces.has(`${fi}-${fci}`);
+        const faceColor = isSelected ? 0xffff00 : rpColor;
+        const faceOpacity = isSelected ? 0.3 : 0.15;
+        const fm = new THREE.Mesh(geom, new THREE.MeshBasicMaterial({
+          color: faceColor, transparent: true, opacity: faceOpacity, side: THREE.DoubleSide, depthTest: false,
+        }));
+        fm.renderOrder = 9; fm.userData = { featureIdx: fi, faceIdx: fci };
+        scene.add(fm); vis.lines.push(fm);
+        faceMeshes.push({ mesh: fm, featureIdx: fi, faceIdx: fci });
+      }
+
+      featureMeshes.set(feat.id, vis);
+      continue;
+    }
+
+    // ---- Normal features ----
+    const typeInfo = FEATURE_TYPES.find(t => t.key === feat.type) || FEATURE_TYPES[0];
     const color = isActive ? 0xe94560 : typeInfo.color;
 
-    const vis = { spheres: [], lines: [], labels: [] };
-
-    // Points
-    for (let pi = 0; pi < feat.points.length; pi++) {
-      const p = feat.points[pi];
-      const mat = new THREE.MeshBasicMaterial({ color, depthTest: false });
+    // Vertices (points)
+    for (let pi = 0; pi < verts.length; pi++) {
+      const p = verts[pi];
+      const isSnapped = !!p.snap;
+      const isSel = (fi === activeFeatureIdx && pi === featureLastPointIdx);
+      const mat = new THREE.MeshBasicMaterial({ color: isSel ? CORNER_SELECTED : color, depthTest: false });
       const sphere = new THREE.Mesh(sphereGeom, mat);
       sphere.position.set(p.x * FT, p.y * FT, p.z * FT);
       sphere.renderOrder = 11;
       sphere.userData = { featureIdx: fi, pointIdx: pi };
       scene.add(sphere);
       vis.spheres.push(sphere);
+
+      // Snap halo indicator
+      if (isSnapped) {
+        const haloGeom = new THREE.SphereGeometry(FEATURE_SPHERE_RADIUS * 2, 10, 10);
+        const haloMat = new THREE.MeshBasicMaterial({ color: CORNER_COLOR, transparent: true, opacity: 0.3, depthTest: false });
+        const halo = new THREE.Mesh(haloGeom, haloMat);
+        halo.position.set(p.x * FT, p.y * FT, p.z * FT);
+        halo.renderOrder = 10;
+        scene.add(halo);
+        vis.spheres.push(halo);
+      }
     }
 
     // Edges
-    for (const [a, b] of feat.edges) {
-      if (a >= feat.points.length || b >= feat.points.length) continue;
-      const pa = feat.points[a], pb = feat.points[b];
+    for (let ei = 0; ei < feat.edges.length; ei++) {
+      const [a, b] = feat.edges[ei];
+      if (a >= verts.length || b >= verts.length) continue;
+      const pa = verts[a], pb = verts[b];
       const pts = [
         new THREE.Vector3(pa.x*FT, pa.y*FT, pa.z*FT),
         new THREE.Vector3(pb.x*FT, pb.y*FT, pb.z*FT),
@@ -906,20 +1048,49 @@ function renderAllFeatures() {
         new THREE.LineBasicMaterial({ color, depthTest: false, linewidth: 2 })
       );
       line.renderOrder = 10;
+      line.userData = { featureIdx: fi, edgeIdx: ei };
       scene.add(line);
       vis.lines.push(line);
     }
 
+    // Faces (semi-transparent quads) — trackable for S-key surface selection
+    for (let fci = 0; fci < feat.faces.length; fci++) {
+      const face = feat.faces[fci];
+      if (face.length < 3) continue;
+      const faceVerts = face.map(vi => verts[vi]).filter(Boolean);
+      if (faceVerts.length < 3) continue;
+      const geom = new THREE.BufferGeometry();
+      const positions = [];
+      for (let fi2 = 1; fi2 < faceVerts.length - 1; fi2++) {
+        positions.push(faceVerts[0].x*FT, faceVerts[0].y*FT, faceVerts[0].z*FT);
+        positions.push(faceVerts[fi2].x*FT, faceVerts[fi2].y*FT, faceVerts[fi2].z*FT);
+        positions.push(faceVerts[fi2+1].x*FT, faceVerts[fi2+1].y*FT, faceVerts[fi2+1].z*FT);
+      }
+      geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      geom.computeVertexNormals();
+      const isSelected = selectedFaces.has(`${fi}-${fci}`);
+      const faceColor = isSelected ? 0xffff00 : color;
+      const faceOpacity = isSelected ? 0.3 : 0.15;
+      const faceMesh = new THREE.Mesh(geom, new THREE.MeshBasicMaterial({
+        color: faceColor, transparent: true, opacity: faceOpacity, side: THREE.DoubleSide, depthTest: false,
+      }));
+      faceMesh.renderOrder = 9;
+      faceMesh.userData = { featureIdx: fi, faceIdx: fci };
+      scene.add(faceMesh);
+      vis.lines.push(faceMesh);
+      faceMeshes.push({ mesh: faceMesh, featureIdx: fi, faceIdx: fci });
+    }
+
     // Label with type name + measurements
-    if (feat.points.length > 0) {
-      const cx = feat.points.reduce((s,p) => s+p.x, 0) / feat.points.length * FT;
-      const cy = feat.points.reduce((s,p) => s+p.y, 0) / feat.points.length * FT;
-      const cz = feat.points.reduce((s,p) => s+p.z, 0) / feat.points.length * FT;
+    if (verts.length > 0) {
+      const cx = verts.reduce((s,p) => s+p.x, 0) / verts.length * FT;
+      const cy = verts.reduce((s,p) => s+p.y, 0) / verts.length * FT;
+      const cz = verts.reduce((s,p) => s+p.z, 0) / verts.length * FT;
 
       let labelText = typeInfo.name;
-      if (feat.points.length >= 2) {
+      if (verts.length >= 2) {
         // Compute width and height
-        const xs = feat.points.map(p => p.x), zs = feat.points.map(p => p.z), ys = feat.points.map(p => p.y);
+        const xs = verts.map(p => p.x), zs = verts.map(p => p.z), ys = verts.map(p => p.y);
         const w = Math.sqrt((Math.max(...xs)-Math.min(...xs))**2 + (Math.max(...zs)-Math.min(...zs))**2);
         const h = Math.max(...ys) - Math.min(...ys);
         if (w > 0.1 || h > 0.1) labelText += ` ${formatFtIn(w)}×${formatFtIn(h)}`;
@@ -939,6 +1110,157 @@ function renderAllFeatures() {
   }
 }
 
+// Screen-space edge proximity detection (Three.js line raycast is unreliable)
+function findClosestFeatureEdge(e) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  const mouseX = e.clientX - rect.left;
+  const mouseY = e.clientY - rect.top;
+  const FT = 1 / 3.28084;
+
+  let bestDist = Infinity, bestFeatIdx = -1, bestEdgeIdx = -1;
+  for (let fi = 0; fi < features.length; fi++) {
+    const feat = features[fi];
+    for (let ei = 0; ei < feat.edges.length; ei++) {
+      const [a, b] = feat.edges[ei];
+      if (a >= feat.vertices.length || b >= feat.vertices.length) continue;
+      const pa = feat.vertices[a], pb = feat.vertices[b];
+      const va = new THREE.Vector3(pa.x * FT, pa.y * FT, pa.z * FT).project(camera);
+      const vb = new THREE.Vector3(pb.x * FT, pb.y * FT, pb.z * FT).project(camera);
+      // Skip edges behind camera
+      if (va.z > 1 || vb.z > 1) continue;
+      const sx0 = (va.x + 1) / 2 * rect.width, sy0 = (-va.y + 1) / 2 * rect.height;
+      const sx1 = (vb.x + 1) / 2 * rect.width, sy1 = (-vb.y + 1) / 2 * rect.height;
+      const dist = distPtSeg2D(mouseX, mouseY, sx0, sy0, sx1, sy1);
+      if (dist < bestDist) { bestDist = dist; bestFeatIdx = fi; bestEdgeIdx = ei; }
+    }
+  }
+  return bestDist < 12 ? { featureIdx: bestFeatIdx, edgeIdx: bestEdgeIdx } : null; // 12px threshold
+}
+
+function distPtSeg2D(px, py, x0, y0, x1, y1) {
+  const dx = x1 - x0, dy = y1 - y0, len2 = dx * dx + dy * dy;
+  if (len2 < 0.001) return Math.sqrt((px - x0) ** 2 + (py - y0) ** 2);
+  let t = ((px - x0) * dx + (py - y0) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.sqrt((px - x0 - t * dx) ** 2 + (py - y0 - t * dy) ** 2);
+}
+
+// Detect a face when edge [a,b] closes a cycle. Returns vertex index array or null.
+function findFaceFromEdge(feat, a, b) {
+  // Build adjacency from edges (excluding the edge [a,b] itself)
+  const adj = new Map();
+  for (const [u, v] of feat.edges) {
+    if ((u === a && v === b) || (u === b && v === a)) continue;
+    if (!adj.has(u)) adj.set(u, []);
+    if (!adj.has(v)) adj.set(v, []);
+    adj.get(u).push(v);
+    adj.get(v).push(u);
+  }
+  // BFS from b to a (shortest path = smallest face)
+  const visited = new Map(); // vertex → parent
+  const queue = [b];
+  visited.set(b, -1);
+  while (queue.length > 0) {
+    const cur = queue.shift();
+    if (cur === a) {
+      // Reconstruct path: a ← ... ← b, then add a→b
+      const path = [a];
+      let node = a;
+      while (node !== b) { node = visited.get(node); path.push(node); }
+      // path is [a, ..., b]. The face is this cycle.
+      if (path.length >= 3 && path.length <= 12) return path;
+      return null;
+    }
+    for (const next of (adj.get(cur) || [])) {
+      if (!visited.has(next)) {
+        visited.set(next, cur);
+        queue.push(next);
+      }
+    }
+  }
+  return null;
+}
+
+// Check if a face (vertex index array) already exists in feat.faces
+function faceExists(feat, faceVerts) {
+  const key = [...faceVerts].sort().join(',');
+  return feat.faces.some(f => [...f].sort().join(',') === key);
+}
+
+// Snap a point to the nearest edge across all features (within threshold in feet).
+// Returns {x, y, z, snappedFeatureIdx, snappedEdgeIdx} or null if nothing nearby.
+function snapPointToNearestEdge(ptFt, thresholdFt, excludeFeatureIdx, excludeVertIndices) {
+  let bestDist = Infinity, bestPt = null, bestFi = -1, bestEi = -1;
+  for (let fi = 0; fi < features.length; fi++) {
+    const feat = features[fi];
+    for (let ei = 0; ei < feat.edges.length; ei++) {
+      const [a, b] = feat.edges[ei];
+      if (a >= feat.vertices.length || b >= feat.vertices.length) continue;
+      // Skip edges that connect to the vertices we're moving
+      if (fi === excludeFeatureIdx && excludeVertIndices && (excludeVertIndices.includes(a) || excludeVertIndices.includes(b))) continue;
+      const pa = feat.vertices[a], pb = feat.vertices[b];
+      const dx = pb.x - pa.x, dy = pb.y - pa.y, dz = pb.z - pa.z;
+      const len2 = dx*dx + dy*dy + dz*dz;
+      if (len2 < 0.001) continue;
+      let t = ((ptFt.x-pa.x)*dx + (ptFt.y-pa.y)*dy + (ptFt.z-pa.z)*dz) / len2;
+      t = Math.max(0, Math.min(1, t));
+      const proj = { x: pa.x+t*dx, y: pa.y+t*dy, z: pa.z+t*dz };
+      const dist = Math.sqrt((ptFt.x-proj.x)**2 + (ptFt.y-proj.y)**2 + (ptFt.z-proj.z)**2);
+      if (dist < bestDist) { bestDist = dist; bestPt = proj; bestFi = fi; bestEi = ei; }
+    }
+  }
+  if (bestDist > thresholdFt || !bestPt) return null;
+  return { x: Math.round(bestPt.x*100)/100, y: Math.round(bestPt.y*100)/100, z: Math.round(bestPt.z*100)/100, snappedFeatureIdx: bestFi, snappedEdgeIdx: bestEi };
+}
+
+// Merge vertex at srcIdx into the nearest existing vertex within threshold (in feet).
+// Replaces all edge/face references to srcIdx with the target, then removes srcIdx.
+function mergeNearbyVertex(feat, srcIdx, thresholdFt) {
+  if (srcIdx < 0 || srcIdx >= feat.vertices.length) return false;
+  const sv = feat.vertices[srcIdx];
+  let bestIdx = -1, bestDist = Infinity;
+  for (let i = 0; i < feat.vertices.length; i++) {
+    if (i === srcIdx) continue;
+    const v = feat.vertices[i];
+    const d = Math.sqrt((v.x - sv.x)**2 + (v.y - sv.y)**2 + (v.z - sv.z)**2);
+    if (d < bestDist) { bestDist = d; bestIdx = i; }
+  }
+  if (bestIdx < 0 || bestDist > thresholdFt) return false;
+
+  // Replace all references to srcIdx with bestIdx
+  for (const edge of feat.edges) {
+    if (edge[0] === srcIdx) edge[0] = bestIdx;
+    if (edge[1] === srcIdx) edge[1] = bestIdx;
+  }
+  for (const face of feat.faces) {
+    for (let i = 0; i < face.length; i++) {
+      if (face[i] === srcIdx) face[i] = bestIdx;
+    }
+  }
+  // Remove duplicate edges (same vertex on both ends, or duplicate pairs)
+  feat.edges = feat.edges.filter(([a,b]) => a !== b);
+  const edgeSet = new Set();
+  feat.edges = feat.edges.filter(([a,b]) => {
+    const key = a < b ? `${a}-${b}` : `${b}-${a}`;
+    if (edgeSet.has(key)) return false;
+    edgeSet.add(key);
+    return true;
+  });
+
+  // Remove the merged vertex and shift all indices
+  feat.vertices.splice(srcIdx, 1);
+  for (const edge of feat.edges) {
+    if (edge[0] > srcIdx) edge[0]--;
+    if (edge[1] > srcIdx) edge[1]--;
+  }
+  for (const face of feat.faces) {
+    for (let i = 0; i < face.length; i++) {
+      if (face[i] > srcIdx) face[i]--;
+    }
+  }
+  return true; // merged
+}
+
 function onFeatureDown(e) {
   e.preventDefault(); e.stopPropagation();
   controls.enabled = false;
@@ -949,89 +1271,709 @@ function onFeatureDown(e) {
   ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
   ray.setFromCamera(ndc, camera);
 
-  // Check if clicking an existing feature point
+  // 0. S-key: surface mode (select or extrude)
+  if (keys['s'] && faceMeshes.length > 0) {
+    const faceObjs = faceMeshes.map(fm => fm.mesh);
+    const faceHits = ray.intersectObjects(faceObjs, false);
+    if (faceHits.length > 0) {
+      const { featureIdx, faceIdx } = faceHits[0].object.userData;
+
+      if (keys['e']) {
+        // S+E+click = start surface extrude
+        const feat = features[featureIdx];
+        const face = feat.faces[faceIdx];
+        const FT = 1/3.28084;
+
+        // Compute face normal
+        const fvs = face.map(vi => feat.vertices[vi]);
+        const v0 = new THREE.Vector3(fvs[0].x, fvs[0].y, fvs[0].z);
+        const v1 = new THREE.Vector3(fvs[1].x, fvs[1].y, fvs[1].z);
+        const v2 = new THREE.Vector3(fvs[2].x, fvs[2].y, fvs[2].z);
+        const normal = new THREE.Vector3().crossVectors(
+          v1.clone().sub(v0), v2.clone().sub(v0)
+        ).normalize();
+
+        // Duplicate face vertices
+        const newVertIndices = [];
+        const origPositions = [];
+        for (const vi of face) {
+          const ov = feat.vertices[vi];
+          const nv = { x: ov.x, y: ov.y, z: ov.z, snap: null };
+          const ni = feat.vertices.length;
+          feat.vertices.push(nv);
+          newVertIndices.push(ni);
+          origPositions.push({ x: ov.x, y: ov.y, z: ov.z });
+        }
+
+        // Create side faces + side edges connecting old and new vertices
+        for (let i = 0; i < face.length; i++) {
+          const j = (i + 1) % face.length;
+          feat.faces.push([face[i], face[j], newVertIndices[j], newVertIndices[i]]);
+          feat.edges.push([face[i], newVertIndices[i]]);
+        }
+        // Create top face (new vertices) + top edges
+        feat.faces.push([...newVertIndices]);
+        for (let i = 0; i < newVertIndices.length; i++) {
+          feat.edges.push([newVertIndices[i], newVertIndices[(i+1) % newVertIndices.length]]);
+        }
+
+        extrudingSurface = true;
+        extrudeSurfaceFeat = feat;
+        extrudeSurfaceNewVerts = newVertIndices;
+        extrudeSurfaceOrigPos = origPositions;
+        extrudeSurfaceNormal = normal;
+        featuresChanged = true;
+        renderAllFeatures();
+        return;
+      }
+
+      // S+click (no E) = select + start face drag
+      const key = `${featureIdx}-${faceIdx}`;
+      selectedFaces.set(key, true);
+      // Start face drag
+      const dragFeat = features[featureIdx];
+      const dragFace = dragFeat.faces[faceIdx];
+      const meshHitF = castFace(e);
+      draggingVertex = {
+        featureIdx, vertexIdx: -1, // -1 = face drag mode
+        faceVertIndices: [...dragFace],
+        origPositions: dragFace.map(vi => ({ x: dragFeat.vertices[vi].x, y: dragFeat.vertices[vi].y, z: dragFeat.vertices[vi].z })),
+        startHit: meshHitF ? { x: meshHitF.pt.x * 3.28084, y: meshHitF.pt.y * 3.28084, z: meshHitF.pt.z * 3.28084 } : null,
+      };
+      renderAllFeatures();
+      return;
+    }
+    undoStack.pop();
+    return;
+  }
+
+  // 1. Check if clicking an existing vertex → start drag
   const allSpheres = [];
-  for (const [id, vis] of featureMeshes) allSpheres.push(...vis.spheres);
+  for (const [id, vis] of featureMeshes) {
+    for (const s of vis.spheres) { if (s.userData.pointIdx !== undefined) allSpheres.push(s); }
+  }
   const hits = ray.intersectObjects(allSpheres, false);
 
   if (hits.length > 0) {
-    const { featureIdx, pointIdx } = hits[0].object.userData;
-    activeFeatureIdx = featureIdx;
+    const ud = hits[0].object.userData;
 
-    if (featureDrawing && featureIdx === activeFeatureIdx) {
-      // Clicking an existing point while drawing — create edge to it
-      const feat = features[activeFeatureIdx];
-      if (featureLastPointIdx >= 0 && featureLastPointIdx !== pointIdx) {
-        const edgeExists = feat.edges.some(([a,b]) => (a===featureLastPointIdx&&b===pointIdx)||(a===pointIdx&&b===featureLastPointIdx));
+    if (keys['e'] && featureLastPointIdx >= 0) {
+      // Hold E + click vertex → create edge to this vertex
+      if (activeFeatureIdx === ud.featureIdx && featureLastPointIdx !== ud.pointIdx) {
+        // Same feature — direct edge
+        const feat = features[ud.featureIdx];
+        const edgeExists = feat.edges.some(([a,b]) => (a===featureLastPointIdx&&b===ud.pointIdx)||(a===ud.pointIdx&&b===featureLastPointIdx));
         if (!edgeExists) {
-          feat.edges.push([featureLastPointIdx, pointIdx]);
+          feat.edges.push([featureLastPointIdx, ud.pointIdx]);
+          const face = findFaceFromEdge(feat, featureLastPointIdx, ud.pointIdx);
+          if (face && !faceExists(feat, face)) feat.faces.push(face);
           featuresChanged = true;
+          if (feat.type === 'room_floor' || feat.type === 'room_ceiling') cornersChanged = true;
         }
-        // If connecting back to first point, close the feature
-        if (pointIdx === 0 && feat.points.length >= 3) {
-          feat.closed = true;
-          featureDrawing = false;
-          featureLastPointIdx = -1;
-        } else {
-          featureLastPointIdx = pointIdx;
-        }
+        featureLastPointIdx = ud.pointIdx;
+      } else if (activeFeatureIdx >= 0 && activeFeatureIdx !== ud.featureIdx) {
+        // Cross-feature — copy target vertex position into active feature, create edge
+        const srcFeat = features[ud.featureIdx];
+        const srcVert = srcFeat.vertices[ud.pointIdx];
+        const destFeat = features[activeFeatureIdx];
+        const newVert = { x: srcVert.x, y: srcVert.y, z: srcVert.z, snap: null };
+        const newIdx = destFeat.vertices.length;
+        destFeat.vertices.push(newVert);
+        destFeat.edges.push([featureLastPointIdx, newIdx]);
+        const face = findFaceFromEdge(destFeat, featureLastPointIdx, newIdx);
+        if (face && !faceExists(destFeat, face)) destFeat.faces.push(face);
+        featureLastPointIdx = newIdx;
+        featuresChanged = true;
       }
-    } else {
-      // Select existing feature point
-      featureLastPointIdx = pointIdx;
+      renderAllFeatures();
+      renderFeatureList();
+      rebuildMeasurementsAfterFeatureChange();
+      return;
     }
+
+    activeFeatureIdx = ud.featureIdx;
+    featureLastPointIdx = ud.pointIdx;
+    // Start vertex drag
+    draggingVertex = { featureIdx: ud.featureIdx, vertexIdx: ud.pointIdx };
     renderAllFeatures();
     renderFeatureList();
     return;
   }
 
-  // Click on mesh — place new point
+  // 2. Check if clicking near a feature edge — hold E = extrude, otherwise drag edge
+  const edgeHit = findClosestFeatureEdge(e);
+  if (edgeHit && !keys['e']) {
+    // Edge drag — move both vertices together
+    const { featureIdx, edgeIdx } = edgeHit;
+    const feat = features[featureIdx];
+    activeFeatureIdx = featureIdx;
+    const [v0, v1] = feat.edges[edgeIdx];
+    const p0 = feat.vertices[v0], p1 = feat.vertices[v1];
+    const meshHit = castFace(e);
+    draggingEdge = {
+      featureIdx, edgeIdx,
+      v0Idx: v0, v1Idx: v1,
+      origVerts: [{ x: p0.x, y: p0.y, z: p0.z, ceilingY: p0.ceilingY }, { x: p1.x, y: p1.y, z: p1.z, ceilingY: p1.ceilingY }],
+      startHit: meshHit ? { x: meshHit.pt.x * 3.28084, y: meshHit.pt.y * 3.28084, z: meshHit.pt.z * 3.28084 } : null,
+    };
+    renderAllFeatures();
+    return;
+  }
+  if (edgeHit && keys['e']) {
+    const { featureIdx, edgeIdx } = edgeHit;
+    const feat = features[featureIdx];
+    activeFeatureIdx = featureIdx;
+    const [v0, v1] = feat.edges[edgeIdx];
+    const p0 = feat.vertices[v0], p1 = feat.vertices[v1];
+
+    // For room features, also copy ceilingY to new verts if present
+    const nv0 = { x: p0.x, y: p0.y, z: p0.z, snap: null };
+    const nv1 = { x: p1.x, y: p1.y, z: p1.z, snap: null };
+    if (p0.ceilingY !== undefined) nv0.ceilingY = p0.ceilingY;
+    if (p1.ceilingY !== undefined) nv1.ceilingY = p1.ceilingY;
+    const ni0 = feat.vertices.length;
+    const ni1 = ni0 + 1;
+    feat.vertices.push(nv0, nv1);
+    // Remove the original edge (leaves a gap at the bottom)
+    feat.edges.splice(edgeIdx, 1);
+    // Add two side edges + new top edge
+    feat.edges.push([v0, ni0], [v1, ni1], [ni0, ni1]);
+    feat.faces.push([v0, v1, ni1, ni0]);
+
+    extruding = true;
+    extrudeFeat = feat;
+    extrudeEdgeIdx = -1; // original edge was removed
+    extrudeNewVerts = [ni0, ni1];
+    extrudeOrigPos = [{ x: p0.x, y: p0.y, z: p0.z }, { x: p1.x, y: p1.y, z: p1.z }];
+    // Store original edge vertex indices for click-to-subdivide fallback
+    extrudeFeat._extOrigV0 = v0;
+    extrudeFeat._extOrigV1 = v1;
+    extrudeMouseStart = { x: e.clientX, y: e.clientY };
+    featuresChanged = true;
+    featureDrawing = false;
+    featureLastPointIdx = -1;
+
+    renderAllFeatures();
+    renderFeatureList();
+    return;
+  }
+
+  // 3. Click on mesh — check if near an edge to subdivide, else place new vertex
   const meshHit = castFace(e);
   if (!meshHit) { undoStack.pop(); return; }
 
   const M2F = 3.28084;
-  const pt = {
+  const rawPt = {
     x: Math.round(meshHit.pt.x * M2F * 100) / 100,
     y: Math.round(meshHit.pt.y * M2F * 100) / 100,
     z: Math.round(meshHit.pt.z * M2F * 100) / 100,
   };
 
-  if (featureDrawing && activeFeatureIdx >= 0) {
-    // Add point to current feature
-    const feat = features[activeFeatureIdx];
-    feat.points.push(pt);
-    const newIdx = feat.points.length - 1;
-    // Create edge from last point
-    if (featureLastPointIdx >= 0) {
-      feat.edges.push([featureLastPointIdx, newIdx]);
+  // Near a feature edge? Subdivide it (works uniformly for all feature types including room polygon)
+  const nearEdge = findClosestFeatureEdge(e);
+  if (nearEdge) {
+    const { featureIdx, edgeIdx } = nearEdge;
+    const feat = features[featureIdx];
+    const [v0Idx, v1Idx] = feat.edges[edgeIdx];
+    const p0 = feat.vertices[v0Idx], p1 = feat.vertices[v1Idx];
+    const dx = p1.x - p0.x, dz = p1.z - p0.z;
+    const len2 = dx * dx + dz * dz;
+    let t = len2 > 0.001 ? ((rawPt.x - p0.x) * dx + (rawPt.z - p0.z) * dz) / len2 : 0.5;
+    t = Math.max(0.05, Math.min(0.95, t));
+    const newVert = {
+      x: Math.round((p0.x + t * dx) * 100) / 100,
+      y: Math.round((p0.y + t * (p1.y - p0.y)) * 100) / 100,
+      z: Math.round((p0.z + t * dz) * 100) / 100,
+      snap: null,
+    };
+    // Interpolate ceilingY for room polygon vertices
+    if (p0.ceilingY !== undefined && p1.ceilingY !== undefined) {
+      newVert.ceilingY = Math.round((p0.ceilingY + t * (p1.ceilingY - p0.ceilingY)) * 100) / 100;
     }
+    const newIdx = feat.vertices.length;
+    feat.vertices.push(newVert);
+    feat.edges[edgeIdx] = [v0Idx, newIdx];
+    feat.edges.push([newIdx, v1Idx]);
+    activeFeatureIdx = featureIdx;
     featureLastPointIdx = newIdx;
     featuresChanged = true;
-  } else {
-    // Not drawing — this click doesn't start a feature (need to use Add Feature button)
-    undoStack.pop();
+    if (feat.type === 'room_floor' || feat.type === 'room_ceiling') cornersChanged = true;
+    renderAllFeatures();
+    renderFeatureList();
+    rebuildMeasurementsAfterFeatureChange();
     return;
   }
 
+  // No edge nearby — place free vertex with wall snap
+  const pt = snapToWallEdge(rawPt);
+
+  // Auto-create a feature if none active or not drawing
+  if (activeFeatureIdx < 0 || !featureDrawing || features[activeFeatureIdx]?.type === 'room_floor' || features[activeFeatureIdx]?.type === 'room_ceiling') {
+    const typeKey = document.getElementById('feature-type-select')?.value || 'annotation';
+    const feat = {
+      id: `feat_${nextFeatureId++}`,
+      type: typeKey,
+      vertices: [],
+      edges: [],
+      faces: [],
+    };
+    features.push(feat);
+    activeFeatureIdx = features.length - 1;
+    featureDrawing = true;
+    featureLastPointIdx = -1;
+    featuresChanged = true;
+  }
+
+  const feat = features[activeFeatureIdx];
+  feat.vertices.push(pt);
+  const newIdx = feat.vertices.length - 1;
+  if (featureLastPointIdx >= 0) {
+    feat.edges.push([featureLastPointIdx, newIdx]);
+  }
+  featureLastPointIdx = newIdx;
+  featuresChanged = true;
+
   renderAllFeatures();
   renderFeatureList();
+  rebuildMeasurementsAfterFeatureChange();
+}
+
+function rebuildMeasurementsAfterFeatureChange() {
+  syncRoomPolygonToRoom();
+  const room = currentData?.rooms?.[activeRoomIndex];
+  if (room) { buildMeasurements(room); renderMetrics(room); }
+}
+
+function updateFeatureHover(e) {
+  if (hoverEdgeObj) { scene.remove(hoverEdgeObj); hoverEdgeObj = null; }
+  if (hoverVertObj) { scene.remove(hoverVertObj); hoverVertObj = null; }
+  if (hoverFaceObj) { scene.remove(hoverFaceObj); hoverFaceObj = null; }
+  const FT = 1 / 3.28084;
+
+  const rect = renderer.domElement.getBoundingClientRect();
+  ndc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+  ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+  ray.setFromCamera(ndc, camera);
+
+  // S-key: surface hover mode
+  if (keys['s'] && faceMeshes.length > 0) {
+    const faceObjs = faceMeshes.map(fm => fm.mesh);
+    const faceHits = ray.intersectObjects(faceObjs, false);
+    if (faceHits.length > 0) {
+      const hitMesh = faceHits[0].object;
+      const { featureIdx, faceIdx } = hitMesh.userData;
+      const key = `${featureIdx}-${faceIdx}`;
+      const isAlreadySelected = selectedFaces.has(key);
+      // Clone geometry for hover highlight
+      const hoverGeom = hitMesh.geometry.clone();
+      hoverFaceObj = new THREE.Mesh(hoverGeom, new THREE.MeshBasicMaterial({
+        color: isAlreadySelected ? 0xffff00 : 0x4488ff, transparent: true, opacity: 0.35, side: THREE.DoubleSide, depthTest: false,
+      }));
+      hoverFaceObj.renderOrder = 18;
+      scene.add(hoverFaceObj);
+      renderer.domElement.style.cursor = 'pointer';
+      return;
+    }
+    renderer.domElement.style.cursor = 'copy';
+    return;
+  }
+
+  // Normal hover: check vertex first, then edge
+  const allSpheres = [];
+  for (const [id, vis] of featureMeshes) {
+    for (const s of vis.spheres) { if (s.userData.pointIdx !== undefined) allSpheres.push(s); }
+  }
+  const vertHits = ray.intersectObjects(allSpheres, false);
+  if (vertHits.length > 0) {
+    const pos = vertHits[0].object.position;
+    const haloGeom = new THREE.SphereGeometry(CORNER_RADIUS * 1.8, 12, 12);
+    hoverVertObj = new THREE.Mesh(haloGeom, new THREE.MeshBasicMaterial({ color: 0xffff00, transparent: true, opacity: 0.5, depthTest: false }));
+    hoverVertObj.position.copy(pos);
+    hoverVertObj.renderOrder = 20;
+    scene.add(hoverVertObj);
+    renderer.domElement.style.cursor = 'grab';
+    return;
+  }
+
+  // Check edge hover
+  const edgeHit = findClosestFeatureEdge(e);
+  if (edgeHit) {
+    const feat = features[edgeHit.featureIdx];
+    const [v0, v1] = feat.edges[edgeHit.edgeIdx];
+    const p0 = feat.vertices[v0], p1 = feat.vertices[v1];
+    const pts = [
+      new THREE.Vector3(p0.x*FT, p0.y*FT, p0.z*FT),
+      new THREE.Vector3(p1.x*FT, p1.y*FT, p1.z*FT),
+    ];
+    hoverEdgeObj = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(pts),
+      new THREE.LineBasicMaterial({ color: keys['e'] ? 0xff6600 : 0xffff00, depthTest: false, linewidth: 3 })
+    );
+    hoverEdgeObj.renderOrder = 20;
+    scene.add(hoverEdgeObj);
+    renderer.domElement.style.cursor = keys['e'] ? 'ns-resize' : 'pointer';
+    return;
+  }
+
+  renderer.domElement.style.cursor = 'copy';
 }
 
 function onFeatureMove(e) {
-  // Could add dragging later — for now, no-op
+  // Edge dragging — move both vertices by same delta
+  if (draggingEdge && draggingEdge.startHit) {
+    e.preventDefault();
+    const meshHit = castFace(e);
+    if (!meshHit) return;
+    const M2F = 3.28084;
+    const hitFt = { x: meshHit.pt.x * M2F, y: meshHit.pt.y * M2F, z: meshHit.pt.z * M2F };
+    const dx = hitFt.x - draggingEdge.startHit.x;
+    const dy = hitFt.y - draggingEdge.startHit.y;
+    const dz = hitFt.z - draggingEdge.startHit.z;
+    const feat = features[draggingEdge.featureIdx];
+    const v0 = feat.vertices[draggingEdge.v0Idx], v1 = feat.vertices[draggingEdge.v1Idx];
+    const o0 = draggingEdge.origVerts[0], o1 = draggingEdge.origVerts[1];
+    v0.x = Math.round((o0.x + dx) * 100) / 100;
+    v0.y = Math.round((o0.y + dy) * 100) / 100;
+    v0.z = Math.round((o0.z + dz) * 100) / 100;
+    v1.x = Math.round((o1.x + dx) * 100) / 100;
+    v1.y = Math.round((o1.y + dy) * 100) / 100;
+    v1.z = Math.round((o1.z + dz) * 100) / 100;
+    if (v0.ceilingY !== undefined) v0.ceilingY = Math.round((o0.ceilingY + dy) * 100) / 100;
+    if (v1.ceilingY !== undefined) v1.ceilingY = Math.round((o1.ceilingY + dy) * 100) / 100;
+    if (feat.type === 'room_floor' || feat.type === 'room_ceiling') cornersChanged = true;
+    featuresChanged = true;
+    renderAllFeatures();
+    return;
+  }
+
+  // Vertex or face dragging — with edge/vertex snapping
+  if (draggingVertex) {
+    e.preventDefault();
+    if (hoverEdgeObj) { scene.remove(hoverEdgeObj); hoverEdgeObj = null; }
+    if (hoverVertObj) { scene.remove(hoverVertObj); hoverVertObj = null; }
+    const meshHit = castFace(e);
+    if (!meshHit) return;
+    const M2F = 3.28084;
+    const FT = 1/3.28084;
+    const feat = features[draggingVertex.featureIdx];
+
+    // Face drag mode (vertexIdx === -1)
+    if (draggingVertex.vertexIdx === -1 && draggingVertex.startHit) {
+      const hitFt = { x: meshHit.pt.x * M2F, y: meshHit.pt.y * M2F, z: meshHit.pt.z * M2F };
+      const dx = hitFt.x - draggingVertex.startHit.x;
+      const dy = hitFt.y - draggingVertex.startHit.y;
+      const dz = hitFt.z - draggingVertex.startHit.z;
+      for (let i = 0; i < draggingVertex.faceVertIndices.length; i++) {
+        const vi = draggingVertex.faceVertIndices[i];
+        const op = draggingVertex.origPositions[i];
+        const fv = feat.vertices[vi];
+        fv.x = Math.round((op.x + dx) * 100) / 100;
+        fv.y = Math.round((op.y + dy) * 100) / 100;
+        fv.z = Math.round((op.z + dz) * 100) / 100;
+      }
+      if (feat.type === 'room_floor' || feat.type === 'room_ceiling') cornersChanged = true;
+      featuresChanged = true;
+      renderAllFeatures();
+      return;
+    }
+
+    const v = feat.vertices[draggingVertex.vertexIdx];
+    v.x = Math.round(meshHit.pt.x * M2F * 100) / 100;
+    v.z = Math.round(meshHit.pt.z * M2F * 100) / 100;
+    v.y = Math.round(meshHit.pt.y * M2F * 100) / 100;
+
+    // Shift = constrain to edge (keep straight along connected edge)
+    if (keys['shift'] && draggingVertex.vertexIdx >= 0) {
+      // Find edges connected to this vertex
+      const vi = draggingVertex.vertexIdx;
+      const connEdges = feat.edges.filter(([a,b]) => a === vi || b === vi);
+      if (connEdges.length >= 1) {
+        // Find the two neighbors and project onto the line between them
+        const neighbors = connEdges.map(([a,b]) => a === vi ? b : a);
+        if (neighbors.length >= 2) {
+          const n0 = feat.vertices[neighbors[0]], n1 = feat.vertices[neighbors[1]];
+          const dx = n1.x - n0.x, dz = n1.z - n0.z, dy = n1.y - n0.y;
+          const len2 = dx*dx + dy*dy + dz*dz;
+          if (len2 > 0.001) {
+            let t = ((v.x-n0.x)*dx + (v.y-n0.y)*dy + (v.z-n0.z)*dz) / len2;
+            t = Math.max(0, Math.min(1, t));
+            v.x = Math.round((n0.x + t*dx)*100)/100;
+            v.y = Math.round((n0.y + t*dy)*100)/100;
+            v.z = Math.round((n0.z + t*dz)*100)/100;
+          }
+        }
+      }
+    }
+
+    // Try vertex snap first (closest vertex within 0.5ft)
+    let snapped = false;
+    let bestVertDist = Infinity, bestVert = null;
+    for (let fi2 = 0; fi2 < features.length; fi2++) {
+      for (let vi2 = 0; vi2 < features[fi2].vertices.length; vi2++) {
+        if (fi2 === draggingVertex.featureIdx && vi2 === draggingVertex.vertexIdx) continue;
+        const ov = features[fi2].vertices[vi2];
+        const d = Math.sqrt((ov.x-v.x)**2 + (ov.y-v.y)**2 + (ov.z-v.z)**2);
+        if (d < bestVertDist) { bestVertDist = d; bestVert = ov; }
+      }
+    }
+    if (bestVertDist < 0.5 && bestVert) {
+      v.x = bestVert.x; v.y = bestVert.y; v.z = bestVert.z;
+      const haloGeom = new THREE.SphereGeometry(CORNER_RADIUS * 2, 12, 12);
+      hoverVertObj = new THREE.Mesh(haloGeom, new THREE.MeshBasicMaterial({ color: 0x00ff88, transparent: true, opacity: 0.5, depthTest: false }));
+      hoverVertObj.position.set(v.x*FT, v.y*FT, v.z*FT);
+      hoverVertObj.renderOrder = 20;
+      scene.add(hoverVertObj);
+      snapped = true;
+    }
+
+    // Try edge snap if no vertex snap
+    if (!snapped) {
+      const edgeSnap = snapPointToNearestEdge(v, 0.5, draggingVertex.featureIdx, [draggingVertex.vertexIdx]);
+      if (edgeSnap) {
+        v.x = edgeSnap.x; v.y = edgeSnap.y; v.z = edgeSnap.z;
+        const sf = features[edgeSnap.snappedFeatureIdx];
+        const [sa, sb] = sf.edges[edgeSnap.snappedEdgeIdx];
+        const spa = sf.vertices[sa], spb = sf.vertices[sb];
+        hoverEdgeObj = new THREE.Line(
+          new THREE.BufferGeometry().setFromPoints([
+            new THREE.Vector3(spa.x*FT, spa.y*FT, spa.z*FT),
+            new THREE.Vector3(spb.x*FT, spb.y*FT, spb.z*FT),
+          ]),
+          new THREE.LineBasicMaterial({ color: 0x00ff88, depthTest: false, linewidth: 3 })
+        );
+        hoverEdgeObj.renderOrder = 20;
+        scene.add(hoverEdgeObj);
+      }
+    }
+
+    if (feat.type === 'room_floor' || feat.type === 'room_ceiling') cornersChanged = true;
+    featuresChanged = true;
+    renderAllFeatures();
+    return;
+  }
+
+  // Surface extrude dragging — move new verts along face normal
+  if (extrudingSurface && extrudeSurfaceFeat) {
+    e.preventDefault();
+    const meshHit = castFace(e);
+    if (!meshHit) return;
+    const M2F = 3.28084;
+    const hitFt = { x: meshHit.pt.x * M2F, y: meshHit.pt.y * M2F, z: meshHit.pt.z * M2F };
+    // Project mouse delta onto face normal
+    const origCenter = extrudeSurfaceOrigPos.reduce((s, p) => ({ x: s.x+p.x, y: s.y+p.y, z: s.z+p.z }), {x:0,y:0,z:0});
+    origCenter.x /= extrudeSurfaceOrigPos.length; origCenter.y /= extrudeSurfaceOrigPos.length; origCenter.z /= extrudeSurfaceOrigPos.length;
+    const n = extrudeSurfaceNormal;
+    const delta = (hitFt.x - origCenter.x) * n.x + (hitFt.y - origCenter.y) * n.y + (hitFt.z - origCenter.z) * n.z;
+    for (let i = 0; i < extrudeSurfaceNewVerts.length; i++) {
+      const nv = extrudeSurfaceFeat.vertices[extrudeSurfaceNewVerts[i]];
+      const op = extrudeSurfaceOrigPos[i];
+      nv.x = Math.round((op.x + n.x * delta) * 100) / 100;
+      nv.y = Math.round((op.y + n.y * delta) * 100) / 100;
+      nv.z = Math.round((op.z + n.z * delta) * 100) / 100;
+    }
+    renderAllFeatures();
+    return;
+  }
+
+  // Edge extrude dragging — with edge snapping
+  if (extruding && extrudeFeat) {
+    e.preventDefault();
+    if (hoverEdgeObj) { scene.remove(hoverEdgeObj); hoverEdgeObj = null; }
+    const meshHit = castFace(e);
+    if (!meshHit) return;
+    const M2F = 3.28084;
+    const hitFt = { x: meshHit.pt.x * M2F, y: meshHit.pt.y * M2F, z: meshHit.pt.z * M2F };
+    const orig0 = extrudeOrigPos[0], orig1 = extrudeOrigPos[1];
+    const midX = (orig0.x + orig1.x) / 2, midY = (orig0.y + orig1.y) / 2, midZ = (orig0.z + orig1.z) / 2;
+    let dx = hitFt.x - midX, dy = hitFt.y - midY, dz = hitFt.z - midZ;
+
+    // Shift = constrain extrude perpendicular to original edge
+    if (keys['shift']) {
+      const edgeDx = orig1.x - orig0.x, edgeDy = orig1.y - orig0.y, edgeDz = orig1.z - orig0.z;
+      const edgeLen2 = edgeDx*edgeDx + edgeDy*edgeDy + edgeDz*edgeDz;
+      if (edgeLen2 > 0.001) {
+        // Remove component along edge direction
+        const proj = (dx*edgeDx + dy*edgeDy + dz*edgeDz) / edgeLen2;
+        dx -= proj * edgeDx; dy -= proj * edgeDy; dz -= proj * edgeDz;
+      }
+    }
+
+    const nv0 = extrudeFeat.vertices[extrudeNewVerts[0]];
+    const nv1 = extrudeFeat.vertices[extrudeNewVerts[1]];
+    nv0.x = Math.round((orig0.x + dx) * 100) / 100;
+    nv0.y = Math.round((orig0.y + dy) * 100) / 100;
+    nv0.z = Math.round((orig0.z + dz) * 100) / 100;
+    nv1.x = Math.round((orig1.x + dx) * 100) / 100;
+    nv1.y = Math.round((orig1.y + dy) * 100) / 100;
+    nv1.z = Math.round((orig1.z + dz) * 100) / 100;
+
+    // Try to snap each extruded vertex to a nearby edge
+    const extFi = features.indexOf(extrudeFeat);
+    const snap0 = snapPointToNearestEdge(nv0, 0.5, extFi, extrudeNewVerts);
+    const snap1 = snapPointToNearestEdge(nv1, 0.5, extFi, extrudeNewVerts);
+    if (snap0) { nv0.x = snap0.x; nv0.y = snap0.y; nv0.z = snap0.z; }
+    if (snap1) { nv1.x = snap1.x; nv1.y = snap1.y; nv1.z = snap1.z; }
+
+    // Show hover highlight on snapped edges
+    const snapTarget = snap0 || snap1;
+    if (snapTarget) {
+      const FT = 1/3.28084;
+      const sf = features[snapTarget.snappedFeatureIdx];
+      const [sa, sb] = sf.edges[snapTarget.snappedEdgeIdx];
+      const spa = sf.vertices[sa], spb = sf.vertices[sb];
+      hoverEdgeObj = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(spa.x*FT, spa.y*FT, spa.z*FT),
+          new THREE.Vector3(spb.x*FT, spb.y*FT, spb.z*FT),
+        ]),
+        new THREE.LineBasicMaterial({ color: 0x00ff88, depthTest: false, linewidth: 3 })
+      );
+      hoverEdgeObj.renderOrder = 20;
+      scene.add(hoverEdgeObj);
+    }
+
+    renderAllFeatures();
+    return;
+  }
+
+  // Hover highlighting
+  updateFeatureHover(e);
 }
 
 function onFeatureUp(e) {
-  // No-op for now
+  // Finish edge drag — if barely moved, subdivide instead
+  if (draggingEdge) {
+    const feat = features[draggingEdge.featureIdx];
+    const v0 = feat.vertices[draggingEdge.v0Idx], v1 = feat.vertices[draggingEdge.v1Idx];
+    const o0 = draggingEdge.origVerts[0], o1 = draggingEdge.origVerts[1];
+    const moved = Math.abs(v0.x - o0.x) + Math.abs(v0.z - o0.z) + Math.abs(v1.x - o1.x) + Math.abs(v1.z - o1.z);
+
+    if (moved < 0.05) {
+      // Restore original positions — this was a click, not a drag
+      v0.x = o0.x; v0.y = o0.y; v0.z = o0.z;
+      v1.x = o1.x; v1.y = o1.y; v1.z = o1.z;
+      if (v0.ceilingY !== undefined) v0.ceilingY = o0.ceilingY;
+      if (v1.ceilingY !== undefined) v1.ceilingY = o1.ceilingY;
+
+      // Subdivide the edge (uniform for all feature types)
+      const edgeIdx = draggingEdge.edgeIdx;
+      const p0 = o0, p1 = o1;
+      const meshHit = castFace(e);
+      if (meshHit) {
+        const M2F = 3.28084;
+        const hitX = meshHit.pt.x * M2F, hitZ = meshHit.pt.z * M2F;
+        const dx = p1.x - p0.x, dz = p1.z - p0.z, len2 = dx * dx + dz * dz;
+        let t = len2 > 0.001 ? ((hitX - p0.x) * dx + (hitZ - p0.z) * dz) / len2 : 0.5;
+        t = Math.max(0.05, Math.min(0.95, t));
+        const newVert = {
+          x: Math.round((p0.x + t * dx) * 100) / 100,
+          y: Math.round((p0.y + t * (p1.y - p0.y)) * 100) / 100,
+          z: Math.round((p0.z + t * dz) * 100) / 100,
+          snap: null,
+        };
+        if (p0.ceilingY !== undefined && p1.ceilingY !== undefined) {
+          newVert.ceilingY = Math.round((p0.ceilingY + t * (p1.ceilingY - p0.ceilingY)) * 100) / 100;
+        }
+        const newIdx = feat.vertices.length;
+        feat.vertices.push(newVert);
+        feat.edges[edgeIdx] = [draggingEdge.v0Idx, newIdx];
+        feat.edges.push([newIdx, draggingEdge.v1Idx]);
+        activeFeatureIdx = draggingEdge.featureIdx;
+        featureLastPointIdx = newIdx;
+        if (feat.type === 'room_floor' || feat.type === 'room_ceiling') cornersChanged = true;
+        featuresChanged = true;
+      }
+    }
+
+    draggingEdge = null;
+    renderAllFeatures();
+    renderFeatureList();
+    rebuildMeasurementsAfterFeatureChange();
+    return;
+  }
+
+  // Finish surface extrude — snap new vertices to edges/vertices
+  if (extrudingSurface && extrudeSurfaceFeat) {
+    const feat = extrudeSurfaceFeat;
+    const extFi = features.indexOf(feat);
+    // Snap each new vertex to nearby edges/vertices
+    for (let i = extrudeSurfaceNewVerts.length - 1; i >= 0; i--) {
+      const ni = extrudeSurfaceNewVerts[i];
+      mergeNearbyVertex(feat, ni, 0.5);
+    }
+    // Clean up duplicate edges
+    feat.edges = feat.edges.filter(([a,b]) => a !== b);
+    const edgeSet = new Set();
+    feat.edges = feat.edges.filter(([a,b]) => {
+      const key = a < b ? `${a}-${b}` : `${b}-${a}`;
+      if (edgeSet.has(key)) return false;
+      edgeSet.add(key);
+      return true;
+    });
+    extrudingSurface = false;
+    extrudeSurfaceFeat = null;
+    extrudeSurfaceNewVerts = [];
+    extrudeSurfaceOrigPos = [];
+    extrudeSurfaceNormal = null;
+    featuresChanged = true;
+    renderAllFeatures();
+    renderFeatureList();
+    rebuildMeasurementsAfterFeatureChange();
+    return;
+  }
+
+  // Finish vertex drag — merge if snapped to another vertex
+  if (draggingVertex) {
+    const feat = features[draggingVertex.featureIdx];
+    mergeNearbyVertex(feat, draggingVertex.vertexIdx, 0.5);
+    draggingVertex = null;
+    renderAllFeatures();
+    renderFeatureList();
+    rebuildMeasurementsAfterFeatureChange();
+    return;
+  }
+
+  // Finish extrude — commit, auto-snap new vertices, merge nearby
+  if (extruding) {
+    const nv0 = extrudeFeat.vertices[extrudeNewVerts[0]];
+    const nv1 = extrudeFeat.vertices[extrudeNewVerts[1]];
+    const snapped0 = snapToWallEdge(nv0);
+    const snapped1 = snapToWallEdge(nv1);
+    Object.assign(nv0, snapped0);
+    Object.assign(nv1, snapped1);
+    delete extrudeFeat._extOrigV0;
+    delete extrudeFeat._extOrigV1;
+
+    // Merge extruded vertices with nearby existing vertices (~6 inches)
+    // Merge higher index first so the lower index isn't shifted
+    const [mi0, mi1] = extrudeNewVerts[0] > extrudeNewVerts[1]
+      ? [extrudeNewVerts[0], extrudeNewVerts[1]]
+      : [extrudeNewVerts[1], extrudeNewVerts[0]];
+    const merged0 = mergeNearbyVertex(extrudeFeat, mi0, 0.5);
+    // If mi0 was removed and mi1 was above it, shift mi1 down
+    const adjustedMi1 = (merged0 && mi1 > mi0) ? mi1 - 1 : mi1;
+    mergeNearbyVertex(extrudeFeat, adjustedMi1, 0.5);
+
+    extruding = false;
+    extrudeFeat = null;
+    extrudeEdgeIdx = -1;
+    extrudeNewVerts = [-1, -1];
+    extrudeOrigPos = null;
+    extrudeMouseStart = null;
+    featuresChanged = true;
+    renderAllFeatures();
+    renderFeatureList();
+    rebuildMeasurementsAfterFeatureChange();
+  }
 }
 
 window.startFeature = function(typeKey) {
   const feat = {
     id: `feat_${nextFeatureId++}`,
     type: typeKey,
-    points: [],
+    vertices: [],
     edges: [],
-    closed: false,
+    faces: [],
   };
   features.push(feat);
   activeFeatureIdx = features.length - 1;
@@ -1067,6 +2009,7 @@ window.deleteFeature = function(idx) {
   featureDrawing = false;
   renderAllFeatures();
   renderFeatureList();
+  rebuildMeasurementsAfterFeatureChange();
 };
 
 window.selectFeature = function(idx) {
@@ -1080,21 +2023,23 @@ window.selectFeature = function(idx) {
 function renderFeatureList() {
   const el = document.getElementById('feature-rows');
   if (!el) return;
-  if (features.length === 0) {
-    el.innerHTML = '<div class="ann-empty">No features. Click "Add Feature" below.</div>';
+  const nonPoly = features.filter(f => f.type !== 'room_floor' && f.type !== 'room_ceiling');
+  if (nonPoly.length === 0) {
+    el.innerHTML = '<div class="ann-empty">Switch to Annotate mode to add geometry.</div>';
     return;
   }
   let h = '';
   for (let i = 0; i < features.length; i++) {
     const f = features[i];
-    const typeInfo = FEATURE_TYPES.find(t => t.key === f.type) || { name: f.type };
+    if (f.type === 'room_floor' || f.type === 'room_ceiling') continue; // don't show in list
+    const typeInfo = FEATURE_TYPES.find(t => t.key === f.type) || { name: f.type || 'Annotation' };
     const act = i === activeFeatureIdx ? ' active' : '';
     const drawing = (i === activeFeatureIdx && featureDrawing) ? ' (drawing...)' : '';
     h += `<div class="ann-row${act}" onclick="selectFeature(${i})">
       <div class="swatch" style="background:#${(FEATURE_TYPES.find(t=>t.key===f.type)?.color||0x34a853).toString(16).padStart(6,'0')}"></div>
       <div class="ann-info">
         <div class="ann-name">${typeInfo.name}${drawing}</div>
-        <div class="ann-meta"><span class="ann-faces">${f.points.length} pts, ${f.edges.length} edges${f.closed?' (closed)':''}</span></div>
+        <div class="ann-meta"><span class="ann-faces">${f.vertices.length} pts, ${f.edges.length} edges, ${f.faces.length} faces</span></div>
       </div>
       <div class="ann-btns">
         ${(i === activeFeatureIdx && featureDrawing) ? '<button class="abtn" onclick="event.stopPropagation();finishFeature()" title="Finish">&#x2713;</button>' : ''}
@@ -1145,8 +2090,7 @@ function renderSidebar(data) {
     <button class="mode-btn active" id="btn-orbit" onclick="setMode('orbit')">Navigate</button>
     <button class="mode-btn" id="btn-paint" onclick="setMode('paint')">Paint</button>
     <button class="mode-btn" id="btn-erase" onclick="setMode('erase')">Erase</button>
-    <button class="mode-btn" id="btn-corners" onclick="setMode('corners')">Corners</button>
-    <button class="mode-btn" id="btn-features" onclick="setMode('features')">Features</button>
+    <button class="mode-btn" id="btn-annotate" onclick="setMode('annotate')">Annotate</button>
     <button class="mode-btn" id="btn-undo" onclick="doUndo()" title="Undo (Ctrl+Z)">&#x21A9;</button>
     <div class="brush-ctrl"><span>R:</span><input type="range" id="brush-r" min="5" max="25" value="5" oninput="setBrush(this.value)"><span id="brush-lbl">5cm</span></div>
   </div>`;
@@ -1197,6 +2141,15 @@ function renderMetrics(room) {
   if (room.wall_area_sqft) html += metricRow('Wall Area', `${room.wall_area_sqft} sq ft`);
   if (room.ceiling_height_ft) html += metricRow('Ceiling Height', `${room.ceiling_height_ft} ft`);
   if (room.perimeter_linear_ft) html += metricRow('Perimeter', `${room.perimeter_linear_ft} ft`);
+
+  // Trim LF with opening deductions
+  const trim = computeTrimLF();
+  if (trim.deductions > 0) {
+    html += '<h3 style="margin-top:12px">Trim Estimate</h3>';
+    html += metricRow('Gross Perimeter', `${trim.gross} ft`);
+    html += metricRow('Opening Deductions', `−${trim.deductions} ft`);
+    html += metricRow('Net Baseboard LF', `<strong>${trim.net} ft</strong>`);
+  }
 
   // Detected materials — show with unit and quantity from annotations
   const annList = [];
@@ -1360,10 +2313,10 @@ function onMeshLoaded(group) {
   const totalFaces = meshChildren.reduce((s, m) => s + faceCount(m), 0);
   console.log(`Loaded: ${meshChildren.length} sub-meshes, ${totalFaces} faces`);
 
-  // Build measurements and initialize corners
+  // Build measurements and initialize room polygon
   if (activeRoomIndex >= 0 && currentData?.rooms?.[activeRoomIndex]) {
+    initRoomPolygonFeature(currentData.rooms[activeRoomIndex]);
     buildMeasurements(currentData.rooms[activeRoomIndex]);
-    initCornersFromRoom(currentData.rooms[activeRoomIndex]);
   }
 
   // Build spatial indexes then load annotations
@@ -1380,16 +2333,21 @@ function clearMesh() {
     meshGroup = null; meshChildren = []; spatialIndexes.length = 0;
   }
   if (hdGroup) { scene.remove(hdGroup); hdGroup = null; }
-  if (measurementGroup) { scene.remove(measurementGroup); measurementGroup = null; }
-  // Clear corner visuals
-  cornerSpheres.forEach(s => scene.remove(s)); cornerSpheres = [];
-  cornerFloorSpheres.forEach(s => scene.remove(s)); cornerFloorSpheres = [];
-  cornerLabels.forEach(l => { if (l.parent) l.parent.remove(l); }); cornerLabels = [];
-  if (cornerEdgeLines) { scene.remove(cornerEdgeLines); cornerEdgeLines = null; }
-  if (cornerVertLines) { scene.remove(cornerVertLines); cornerVertLines = null; }
-  corners = []; selectedCornerIdx = -1; cornersChanged = false;
-  // Clear features
-  for (const [id, vis] of featureMeshes) { vis.spheres.forEach(s=>scene.remove(s)); vis.lines.forEach(l=>scene.remove(l)); vis.labels.forEach(l=>{if(l.parent)l.parent.remove(l);}); }
+  if (measurementGroup) {
+    measurementGroup.traverse(c => { if (c.isCSS2DObject && c.element) c.element.remove(); });
+    scene.remove(measurementGroup); measurementGroup = null;
+  }
+  if (hoverEdgeObj) { scene.remove(hoverEdgeObj); hoverEdgeObj = null; }
+  if (hoverVertObj) { scene.remove(hoverVertObj); hoverVertObj = null; }
+  if (hoverFaceObj) { scene.remove(hoverFaceObj); hoverFaceObj = null; }
+  selectedFaces.clear(); faceMeshes = [];
+  cornersChanged = false;
+  // Clear features — must remove DOM elements for CSS2DObject labels
+  for (const [id, vis] of featureMeshes) {
+    vis.spheres.forEach(s=>scene.remove(s));
+    vis.lines.forEach(l=>scene.remove(l));
+    vis.labels.forEach(l=>{ if(l.element) l.element.remove(); if(l.parent) l.parent.remove(l); scene.remove(l); });
+  }
   featureMeshes.clear(); features = []; activeFeatureIdx = -1; featureDrawing = false; featuresChanged = false;
   if (hoverMesh) { scene.remove(hoverMesh); hoverMesh.geometry.dispose(); hoverMesh.material.dispose(); hoverMesh = null; }
 }
@@ -1465,6 +2423,7 @@ function nearbyFaces(mesh, ci, seedFi, rWorld) {
 // RAYCASTING
 // ============================================================
 const ray = new THREE.Raycaster();
+ray.params.Line.threshold = 0.03; // 3cm threshold for edge picking
 const ndc = new THREE.Vector2();
 function castFace(e) {
   const rect = renderer.domElement.getBoundingClientRect();
@@ -1481,6 +2440,8 @@ function castFace(e) {
 // ============================================================
 let modeBeforeHold = null;
 function onKeyDown(e) {
+  // Prevent arrow keys from scrolling sidebar, shift from selecting
+  if (['arrowup','arrowdown','arrowleft','arrowright','shift'].includes(e.key.toLowerCase())) e.preventDefault();
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') { keys[e.key.toLowerCase()] = true; return; }
   const k = e.key.toLowerCase();
   if (e.ctrlKey || e.metaKey) {
@@ -1488,18 +2449,18 @@ function onKeyDown(e) {
     if (k === 'n') { e.preventDefault(); setMode('orbit'); return; }
     if (k === 'p') { e.preventDefault(); setMode('paint'); return; }
     if (k === 'e') { e.preventDefault(); setMode('erase'); return; }
-    if (k === 'c') { e.preventDefault(); setMode('corners'); return; }
+    if (k === 'c') { e.preventDefault(); setMode('annotate'); return; }
   }
   if (k === 'p' && mode !== 'paint') { modeBeforeHold = mode; setMode('paint'); return; }
   if (k === 'n' && mode !== 'orbit') { modeBeforeHold = mode; setMode('orbit'); return; }
-  if (k === 'e' && mode !== 'erase' && !e.ctrlKey && !e.metaKey) { modeBeforeHold = mode; setMode('erase'); return; }
-  if (k === 'c' && mode !== 'corners' && !e.ctrlKey && !e.metaKey) { modeBeforeHold = mode; setMode('corners'); return; }
+  if (k === 'e' && mode !== 'erase' && mode !== 'annotate' && !e.ctrlKey && !e.metaKey) { modeBeforeHold = mode; setMode('erase'); return; }
+  if (k === 'c' && mode !== 'annotate' && !e.ctrlKey && !e.metaKey) { modeBeforeHold = mode; setMode('annotate'); return; }
   keys[k] = true;
 }
 function onKeyUp(e) {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') { keys[e.key.toLowerCase()] = false; return; }
   const k = e.key.toLowerCase(); keys[k] = false;
-  if (modeBeforeHold !== null && ((k==='p'&&mode==='paint')||(k==='n'&&mode==='orbit')||(k==='e'&&mode==='erase')||(k==='c'&&mode==='corners'))) { setMode(modeBeforeHold); modeBeforeHold = null; }
+  if (modeBeforeHold !== null && ((k==='p'&&mode==='paint')||(k==='n'&&mode==='orbit')||(k==='e'&&mode==='erase')||(k==='c'&&mode==='annotate'))) { setMode(modeBeforeHold); modeBeforeHold = null; }
 }
 
 // ============================================================
@@ -1507,24 +2468,23 @@ function onKeyUp(e) {
 // ============================================================
 function pushUndo() {
   const annSnap = []; for (const [k,a] of anns) annSnap.push({k, faces: new Set(a.faces)});
-  const cornerSnap = corners.map(c => ({...c}));
   const featSnap = JSON.parse(JSON.stringify(features));
-  undoStack.push({ anns: annSnap, corners: cornerSnap, features: featSnap });
+  undoStack.push({ anns: annSnap, features: featSnap });
   if (undoStack.length > MAX_UNDO) undoStack.shift();
 }
 window.doUndo = doUndo;
 function doUndo() {
   if (undoStack.length === 0) return;
   const snap = undoStack.pop();
-  // Restore annotations
   for (const s of snap.anns) { const a = anns.get(s.k); if (a) { a.faces = s.faces; rebuildOverlay(a); } }
-  // Restore corners
-  corners = snap.corners.map(c => ({...c}));
-  cornersChanged = true;
-  renderCornerVisuals();
-  rebuildMeasurementsFromCorners();
-  // Restore features
-  if (snap.features) { features = snap.features; featuresChanged = true; renderAllFeatures(); renderFeatureList(); }
+  if (snap.features) {
+    features = snap.features;
+    featuresChanged = true;
+    cornersChanged = true;
+    renderAllFeatures();
+    renderFeatureList();
+    rebuildMeasurementsAfterFeatureChange();
+  }
   renderList(); updateFaces(); updateMetrics();
 }
 
@@ -1533,8 +2493,7 @@ function doUndo() {
 // ============================================================
 function onDown(e) {
   if (mode === 'orbit') return;
-  if (mode === 'corners') { onCornerDown(e); return; }
-  if (mode === 'features') { onFeatureDown(e); return; }
+  if (mode === 'annotate') { onFeatureDown(e); return; }
   if (!activeKey) return;
   e.preventDefault(); e.stopPropagation();
   pushUndo(); painting = true; strokeDirty = false;
@@ -1542,13 +2501,11 @@ function onDown(e) {
 }
 function onMove(e) {
   if (mode === 'orbit') return;
-  if (mode === 'corners') { onCornerMove(e); return; }
-  if (mode === 'features') { onFeatureMove(e); return; }
+  if (mode === 'annotate') { onFeatureMove(e); return; }
   if (painting) { e.preventDefault(); paintAt(e); } else { showHover(e); }
 }
 function onUp(e) {
-  if (mode === 'corners') { onCornerUp(e); return; }
-  if (mode === 'features') { onFeatureUp(e); return; }
+  if (mode === 'annotate') { onFeatureUp(e); return; }
   if (!painting) return;
   painting = false;
   if (rebuildTimer) { clearTimeout(rebuildTimer); rebuildTimer = null; }
@@ -1654,10 +2611,9 @@ window.setMode = function(m) {
   document.getElementById('btn-orbit')?.classList.toggle('active', m === 'orbit');
   document.getElementById('btn-paint')?.classList.toggle('active', m === 'paint');
   document.getElementById('btn-erase')?.classList.toggle('active', m === 'erase');
-  document.getElementById('btn-corners')?.classList.toggle('active', m === 'corners');
-  document.getElementById('btn-features')?.classList.toggle('active', m === 'features');
+  document.getElementById('btn-annotate')?.classList.toggle('active', m === 'annotate');
   controls.enabled = (m === 'orbit');
-  renderer.domElement.style.cursor = m === 'orbit' ? 'grab' : (m === 'corners' || m === 'features') ? 'copy' : m === 'paint' ? 'crosshair' : 'not-allowed';
+  renderer.domElement.style.cursor = m === 'orbit' ? 'grab' : m === 'annotate' ? 'copy' : m === 'paint' ? 'crosshair' : 'not-allowed';
   if (hoverMesh) hoverMesh.visible = false;
   updateStatus();
 };
@@ -1757,6 +2713,15 @@ window.doExport = function() {
 };
 
 window.doSave = async function() {
+  // Auto-set baseboard qty to net trim LF if baseboard is annotated
+  const trim = computeTrimLF();
+  if (trim.net > 0) {
+    for (const [k, a] of anns) {
+      if (k === 'baseboard' || k === 'toe_kick' || k === 'shoe_molding') {
+        a.qty = trim.net;
+      }
+    }
+  }
   const data = serializeAnnotations();
   const btn = document.getElementById('btn-save');
   const storeKey = `admin_ann_${currentRfqId}_${currentScanId}`;
@@ -1766,23 +2731,26 @@ window.doSave = async function() {
       if (btn) btn.textContent = 'Saving...';
       const resp = await fetch(`${API_BASE}/api/admin/rfqs/${currentRfqId}/scans/${currentScanId}/annotations`, { method: 'PUT', headers: { 'Authorization': `Bearer ${authToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      // Save features to GCS
-      if (featuresChanged && features.length > 0) {
+      // Save features to GCS (exclude room floor/ceiling — saved via polygon endpoint)
+      const featsToSave = features.filter(f => f.type !== 'room_floor' && f.type !== 'room_ceiling');
+      if (featuresChanged && featsToSave.length > 0) {
         await fetch(`${API_BASE}/api/admin/rfqs/${currentRfqId}/scans/${currentScanId}/features`, {
           method: 'PUT', headers: { 'Authorization': `Bearer ${authToken}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify(features),
+          body: JSON.stringify(featsToSave),
         });
         featuresChanged = false;
       }
-      // Also save polygon if corners were edited
-      if (cornersChanged && corners.length >= 3) {
+      // Save polygon from room floor/ceiling features
+      syncRoomPolygonToRoom();
+      const rpRoom = currentData?.rooms?.[activeRoomIndex];
+      if (cornersChanged && rpRoom?.room_polygon_ft?.length >= 3) {
         const polyResp = await fetch(`${API_BASE}/api/admin/rfqs/${currentRfqId}/scans/${currentScanId}/polygon`, {
           method: 'PUT',
           headers: { 'Authorization': `Bearer ${authToken}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            room_polygon_ft: corners.map(c => [c.x, c.z]),
-            wall_heights_ft: corners.map(c => c.ceilingY),
-            floor_heights_ft: corners.map(c => c.floorY),
+            room_polygon_ft: rpRoom.room_polygon_ft,
+            wall_heights_ft: rpRoom.wall_heights_ft,
+            floor_heights_ft: rpRoom.floor_heights_ft,
           }),
         });
         if (polyResp.ok) cornersChanged = false;
@@ -1808,7 +2776,7 @@ async function loadAnnotations() {
   if (authToken && currentRfqId && currentScanId) {
     try {
       const resp = await fetch(`${API_BASE}/api/admin/rfqs/${currentRfqId}/scans/${currentScanId}/features`, { headers: { 'Authorization': `Bearer ${authToken}` } });
-      if (resp.ok) { const data = await resp.json(); if (data?.length > 0) { features = data; nextFeatureId = Math.max(...features.map(f => parseInt(f.id?.replace('feat_','') || 0))) + 1; renderAllFeatures(); renderFeatureList(); } }
+      if (resp.ok) { const data = await resp.json(); if (data?.length > 0) { features = data.map(migrateFeature); nextFeatureId = Math.max(...features.map(f => parseInt(f.id?.replace('feat_','') || 0))) + 1; renderAllFeatures(); renderFeatureList(); } }
     } catch (e) { console.warn('Features load failed:', e); }
   }
 }
