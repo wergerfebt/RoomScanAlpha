@@ -715,6 +715,17 @@ def contractor_view(rfq_id: str) -> dict:
         else:
             room["texture_urls"] = None
 
+        # Load features from GCS if available
+        scan_id = room["scan_id"]
+        try:
+            feat_blob = bucket.blob(f"scans/{rfq_id}/{scan_id}/features.json")
+            if feat_blob.exists():
+                room["features"] = json.loads(feat_blob.download_as_text())
+            else:
+                room["features"] = []
+        except Exception:
+            room["features"] = []
+
         rooms.append(room)
 
     return {

@@ -1285,6 +1285,13 @@ async function loadRoom(index) {
   // Build measurements
   buildMeasurements(room, cornersM, floorY, avgCeilingY, ceilingHeightM);
 
+  // Build features (doors, openings, etc.)
+  const featGrp = buildFeatures(room);
+  if (featGrp.children.length > 0) {
+    featGrp.visible = measurementsVisible;
+    contentGroup.add(featGrp);
+  }
+
   // Isometric mini-view
   updateIsoView(room);
 
@@ -1392,6 +1399,96 @@ function clearScene() {
 }
 
 // --- Measurements ---
+
+// Render features (doors, openings, cabinets) as 3D geometry
+let featureGroup = null;
+function buildFeatures(room) {
+  if (featureGroup) { featureGroup.parent?.remove(featureGroup); }
+  featureGroup = new THREE.Group();
+  const feats = room.features || [];
+  if (feats.length === 0) return featureGroup;
+
+  const FT = 1 / 3.28084;
+  const FEATURE_COLORS = {
+    door_frame: 0x34a853, cased_opening: 0x8BC34A, window: 0x00BCD4, cabinet_outline: 0xFF9800,
+  };
+
+  for (const feat of feats) {
+    // Migrate old format
+    const verts = feat.vertices || (feat.points ? feat.points.map(p => ({...p, snap: null})) : []);
+    const edges = feat.edges || [];
+    const faces = feat.faces || [];
+    const color = FEATURE_COLORS[feat.type] || 0x34a853;
+
+    // Render edges
+    for (const [a, b] of edges) {
+      if (a >= verts.length || b >= verts.length) continue;
+      const pa = verts[a], pb = verts[b];
+      const line = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(pa.x*FT, pa.y*FT, pa.z*FT),
+          new THREE.Vector3(pb.x*FT, pb.y*FT, pb.z*FT),
+        ]),
+        new THREE.LineBasicMaterial({ color, depthTest: false })
+      );
+      line.renderOrder = 10;
+      featureGroup.add(line);
+    }
+
+    // Render vertices
+    const sphereGeom = new THREE.SphereGeometry(0.02, 8, 8);
+    for (const p of verts) {
+      const sphere = new THREE.Mesh(sphereGeom, new THREE.MeshBasicMaterial({ color, depthTest: false }));
+      sphere.position.set(p.x*FT, p.y*FT, p.z*FT);
+      sphere.renderOrder = 11;
+      featureGroup.add(sphere);
+    }
+
+    // Render faces
+    for (const face of faces) {
+      if (face.length < 3) continue;
+      const faceVerts = face.map(vi => verts[vi]).filter(Boolean);
+      if (faceVerts.length < 3) continue;
+      const geom = new THREE.BufferGeometry();
+      const positions = [];
+      for (let i = 1; i < faceVerts.length - 1; i++) {
+        positions.push(faceVerts[0].x*FT, faceVerts[0].y*FT, faceVerts[0].z*FT);
+        positions.push(faceVerts[i].x*FT, faceVerts[i].y*FT, faceVerts[i].z*FT);
+        positions.push(faceVerts[i+1].x*FT, faceVerts[i+1].y*FT, faceVerts[i+1].z*FT);
+      }
+      geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      geom.computeVertexNormals();
+      const faceMesh = new THREE.Mesh(geom, new THREE.MeshBasicMaterial({
+        color, transparent: true, opacity: 0.2, side: THREE.DoubleSide, depthTest: false,
+      }));
+      faceMesh.renderOrder = 9;
+      featureGroup.add(faceMesh);
+    }
+
+    // Label
+    if (verts.length >= 2) {
+      const cx = verts.reduce((s,p)=>s+p.x,0)/verts.length * FT;
+      const cy = verts.reduce((s,p)=>s+p.y,0)/verts.length * FT;
+      const cz = verts.reduce((s,p)=>s+p.z,0)/verts.length * FT;
+      const xs = verts.map(p=>p.x), zs = verts.map(p=>p.z), ys = verts.map(p=>p.y);
+      const w = Math.sqrt((Math.max(...xs)-Math.min(...xs))**2 + (Math.max(...zs)-Math.min(...zs))**2);
+      const h = Math.max(...ys) - Math.min(...ys);
+      const FEATURE_NAMES = { door_frame:'Door Frame', cased_opening:'Cased Opening', window:'Window', cabinet_outline:'Cabinet' };
+      const name = FEATURE_NAMES[feat.type] || feat.type || 'Feature';
+      const formatFt = (ft) => { const f=Math.floor(ft), i=Math.round((ft-f)*12); return i===0?`${f}'`:`${f}' ${i}"`; };
+      let text = name;
+      if (w > 0.1 || h > 0.1) text += ` ${formatFt(w)}×${formatFt(h)}`;
+      const div = document.createElement('div');
+      div.className = 'measure-label';
+      div.style.background = `rgba(${(color>>16)&0xff},${(color>>8)&0xff},${color&0xff},0.85)`;
+      div.textContent = text;
+      const label = new CSS2DObject(div);
+      label.position.set(cx, cy + 0.04, cz);
+      featureGroup.add(label);
+    }
+  }
+  return featureGroup;
+}
 
 function buildMeasurements(room, cornersM, floorY, ceilingY, ceilingHeightM) {
   measurementGroup = new THREE.Group();

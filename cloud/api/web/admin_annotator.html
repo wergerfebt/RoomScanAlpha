@@ -2756,8 +2756,8 @@ window.doSave = async function() {
         if (polyResp.ok) cornersChanged = false;
       }
       if (btn) { btn.textContent = 'Saved!'; btn.classList.add('ok'); }
-    } catch (e) { console.error('API save failed:', e); if (btn) { btn.textContent = 'Saved (local)'; btn.classList.add('ok'); } }
-  } else { if (btn) { btn.textContent = 'Saved (local)'; btn.classList.add('ok'); } }
+    } catch (e) { console.error('API save failed:', e); if (btn) { btn.textContent = 'SAVE FAILED'; btn.style.background = '#ff3b30'; } alert('Save to server failed: ' + e.message + '\nData saved to browser only. Try refreshing and signing in again.'); }
+  } else { if (btn) { btn.textContent = 'Local only'; btn.classList.add('ok'); } }
   setTimeout(() => { if (btn) { btn.textContent = 'Save'; btn.classList.remove('ok'); } }, 1500);
 };
 
