@@ -7,9 +7,25 @@ import Network
 protocol URLSessionProtocol: Sendable {
     func data(for request: URLRequest) async throws -> (Data, URLResponse)
     func upload(for request: URLRequest, from data: Data) async throws -> (Data, URLResponse)
+    func upload(for request: URLRequest, fromFile fileURL: URL) async throws -> (Data, URLResponse)
 }
 
-extension URLSession: URLSessionProtocol {}
+extension URLSession: URLSessionProtocol {
+    func upload(for request: URLRequest, fromFile fileURL: URL) async throws -> (Data, URLResponse) {
+        try await withCheckedThrowingContinuation { continuation in
+            let task = self.uploadTask(with: request, fromFile: fileURL) { data, response, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else if let data, let response {
+                    continuation.resume(returning: (data, response))
+                } else {
+                    continuation.resume(throwing: URLError(.unknown))
+                }
+            }
+            task.resume()
+        }
+    }
+}
 
 /// Handles the full scan upload lifecycle: zip → signed URL → GCS upload → backend notification.
 ///
@@ -313,17 +329,19 @@ final class CloudUploader {
         signedURL: URL,
         onProgress: @escaping (Double) -> Void
     ) async throws {
-        let fileData = try Data(contentsOf: fileURL)
-        let totalBytes = fileData.count
+        let fileAttrs = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+        let totalBytes = fileAttrs[.size] as? Int ?? 0
 
         var request = URLRequest(url: signedURL)
         request.httpMethod = "PUT"
         request.setValue("application/zip", forHTTPHeaderField: "Content-Type")
+        request.setValue("\(totalBytes)", forHTTPHeaderField: "Content-Length")
 
         let delegate = UploadProgressDelegate(totalBytes: totalBytes, onProgress: onProgress)
         let uploadSession = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
 
-        let (_, response) = try await uploadSession.upload(for: request, from: fileData)
+        // Stream from disk instead of loading entire file into memory to avoid OOM on large scans.
+        let (_, response) = try await uploadSession.upload(for: request, fromFile: fileURL)
 
         guard let httpResponse = response as? HTTPURLResponse,
               (200...299).contains(httpResponse.statusCode) else {

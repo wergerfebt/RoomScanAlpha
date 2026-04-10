@@ -61,6 +61,10 @@ final class MockURLSession: URLSessionProtocol, @unchecked Sendable {
     func upload(for request: URLRequest, from data: Data) async throws -> (Data, URLResponse) {
         return recordAndRespond(request)
     }
+
+    func upload(for request: URLRequest, fromFile fileURL: URL) async throws -> (Data, URLResponse) {
+        return recordAndRespond(request)
+    }
 }
 
 // MARK: - Tests

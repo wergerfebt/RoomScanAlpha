@@ -391,7 +391,7 @@ struct ContentView: View {
         viewModel.state = .exporting
         viewModel.exportProgress = "Preparing export..."
 
-        let keyframes = sessionManager.frameCaptureManager.capturedFrames
+        let captureManager = sessionManager.frameCaptureManager
         let meshAnchors = sessionManager.lastMeshAnchors
         let duration = viewModel.scanDuration
         let rfqContext = viewModel.rfqContext
@@ -402,8 +402,13 @@ struct ContentView: View {
 
         Task.detached {
             do {
+                // Finalize the HEVC video + sidecar files before packaging.
+                guard let captureResult = await captureManager.finalizeCapture() else {
+                    throw ScanPackager.PackageError.captureFinalizationFailed
+                }
+
                 let result = try ScanPackager.package(
-                    keyframes: keyframes,
+                    captureResult: captureResult,
                     meshAnchors: meshAnchors,
                     scanDuration: duration,
                     rfqContext: rfqContext,
