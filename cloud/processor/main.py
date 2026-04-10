@@ -36,6 +36,7 @@ from pipeline.stage1 import (
     CLASSIFICATION_CEILING,
     CLASSIFICATION_NAMES,
 )
+from pipeline.video_extract import extract_frames_from_hevc
 
 app = FastAPI(title="RoomScanAlpha Scan Processor (Stub)")
 
@@ -308,21 +309,54 @@ def _extract_zip(zip_path: str, extract_dir: str) -> None:
 def validate_structure(scan_root: str, scan_id: str) -> None:
     """Validate that a scan package contains all required files with correct formats.
 
-    Checks:
-      - mesh.ply exists with a valid PLY header containing vertex/face counts
-      - metadata.json exists with all required keys
-      - PLY vertex/face counts match metadata
-      - keyframes/ directory contains the expected number of valid JPEGs
-      - Per-frame JSONs contain 16-element camera_transform arrays
-      - depth/ files (if present) are non-empty
+    Supports two capture formats:
+      - "hevc": HEVC video + JSONL pose sidecar + binary depth sidecar
+      - "jpeg" (or absent): Legacy discrete JPEG keyframes + per-frame JSONs + depth files
+
+    For HEVC format, extracts individual frames from the video into keyframes/ and depth/
+    directories so the rest of the pipeline can process them uniformly.
 
     Raises:
         ValueError: If any validation check fails (message describes the failure).
     """
     _validate_ply(scan_root)
     metadata = _validate_metadata(scan_root)
-    _validate_keyframes(scan_root, metadata)
-    _validate_depth_files(scan_root)
+
+    capture_format = metadata.get("capture_format", "jpeg")
+
+    if capture_format == "hevc":
+        # HEVC format: validate video + sidecars exist, then extract frames.
+        video_filename = metadata.get("video_filename", "scan_video.mov")
+        pose_filename = metadata.get("pose_sidecar_filename", "poses.jsonl")
+        depth_filename = metadata.get("depth_sidecar_filename", "depth.bin")
+
+        video_path = os.path.join(scan_root, video_filename)
+        pose_path = os.path.join(scan_root, pose_filename)
+
+        if not os.path.exists(video_path):
+            raise ValueError(f"missing HEVC video: {video_filename}")
+        if not os.path.exists(pose_path):
+            raise ValueError(f"missing pose sidecar: {pose_filename}")
+
+        print(f"[Processor] HEVC capture format detected — extracting frames from {video_filename}")
+        result = extract_frames_from_hevc(
+            scan_root=scan_root,
+            video_filename=video_filename,
+            pose_filename=pose_filename,
+            depth_filename=depth_filename,
+        )
+        print(f"[Processor] Extracted {result['frame_count']} frames from HEVC video")
+
+        # After extraction, validate the generated keyframes like the legacy path.
+        # Update metadata to reflect extracted frame count for downstream validation.
+        metadata["keyframe_count"] = result["frame_count"]
+        metadata["keyframes"] = [{"index": i} for i in range(result["frame_count"])]
+        _validate_keyframes(scan_root, metadata)
+        _validate_depth_files(scan_root)
+    else:
+        # Legacy JPEG format: validate keyframes directly.
+        _validate_keyframes(scan_root, metadata)
+        _validate_depth_files(scan_root)
 
 
 def _validate_ply(scan_root: str) -> tuple[int, int]:
@@ -371,15 +405,31 @@ def _validate_metadata(scan_root: str) -> dict:
     with open(metadata_path, "r") as f:
         metadata = json.load(f)
 
-    required_keys = [
-        "device", "keyframe_count", "mesh_vertex_count", "mesh_face_count",
-        "camera_intrinsics", "image_resolution", "keyframes",
-    ]
-    missing = [k for k in required_keys if k not in metadata]
-    if missing:
-        raise ValueError(f"metadata.json missing keys: {missing}")
+    capture_format = metadata.get("capture_format", "jpeg")
 
-    print(f"[Processor] metadata.json valid: {metadata['keyframe_count']} keyframes, device: {metadata['device']}")
+    if capture_format == "hevc":
+        # HEVC format has different required keys.
+        required_keys = [
+            "device", "frame_count", "mesh_vertex_count", "mesh_face_count",
+            "camera_intrinsics", "image_resolution", "video_filename",
+            "pose_sidecar_filename",
+        ]
+        missing = [k for k in required_keys if k not in metadata]
+        if missing:
+            raise ValueError(f"metadata.json missing keys: {missing}")
+        # Normalize: set keyframe_count from frame_count for downstream compatibility.
+        metadata["keyframe_count"] = metadata["frame_count"]
+        print(f"[Processor] metadata.json valid (HEVC): {metadata['frame_count']} frames, device: {metadata['device']}")
+    else:
+        required_keys = [
+            "device", "keyframe_count", "mesh_vertex_count", "mesh_face_count",
+            "camera_intrinsics", "image_resolution", "keyframes",
+        ]
+        missing = [k for k in required_keys if k not in metadata]
+        if missing:
+            raise ValueError(f"metadata.json missing keys: {missing}")
+        print(f"[Processor] metadata.json valid: {metadata['keyframe_count']} keyframes, device: {metadata['device']}")
+
     return metadata
 
 

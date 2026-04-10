@@ -26,6 +26,7 @@
 		A11111110000000000000016 /* PLYExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000024 /* PLYExporter.swift */; };
 		A11111110000000000000017 /* ScanPackager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000025 /* ScanPackager.swift */; };
 		A11111110000000000000018 /* ARMeshGeometry+Accessors.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000026 /* ARMeshGeometry+Accessors.swift */; };
+		A11111110000000000000050 /* VideoFrameWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000050 /* VideoFrameWriter.swift */; };
 		A11111110000000000000019 /* ExportingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000027 /* ExportingView.swift */; };
 		A1111111000000000000001A /* PrimaryButtonStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000028 /* PrimaryButtonStyle.swift */; };
 		A1111111000000000000001B /* AuthManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000029 /* AuthManager.swift */; };
@@ -81,6 +82,7 @@
 		A10000000000000000000024 /* PLYExporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PLYExporter.swift; sourceTree = "<group>"; };
 		A10000000000000000000025 /* ScanPackager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanPackager.swift; sourceTree = "<group>"; };
 		A10000000000000000000026 /* ARMeshGeometry+Accessors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ARMeshGeometry+Accessors.swift"; sourceTree = "<group>"; };
+		A10000000000000000000050 /* VideoFrameWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoFrameWriter.swift; sourceTree = "<group>"; };
 		A10000000000000000000027 /* ExportingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportingView.swift; sourceTree = "<group>"; };
 		A10000000000000000000028 /* PrimaryButtonStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrimaryButtonStyle.swift; sourceTree = "<group>"; };
 		A10000000000000000000029 /* AuthManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthManager.swift; sourceTree = "<group>"; };
@@ -197,6 +199,7 @@
 				A10000000000000000000007 /* ARSessionManager.swift */,
 				A10000000000000000000008 /* MeshExtractor.swift */,
 				A10000000000000000000023 /* FrameCaptureManager.swift */,
+				A10000000000000000000050 /* VideoFrameWriter.swift */,
 				A10000000000000000000026 /* ARMeshGeometry+Accessors.swift */,
 			);
 			path = AR;
@@ -368,6 +371,7 @@
 				A11111110000000000000013 /* AppDelegate.swift in Sources */,
 				A11111110000000000000014 /* CapturedFrame.swift in Sources */,
 				A11111110000000000000015 /* FrameCaptureManager.swift in Sources */,
+				A11111110000000000000050 /* VideoFrameWriter.swift in Sources */,
 				A11111110000000000000016 /* PLYExporter.swift in Sources */,
 				A11111110000000000000017 /* ScanPackager.swift in Sources */,
 				A11111110000000000000018 /* ARMeshGeometry+Accessors.swift in Sources */,

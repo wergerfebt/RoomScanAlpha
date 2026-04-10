@@ -1,4 +1,5 @@
-// Bundles keyframes, PLY mesh, depth maps, and metadata into a scan package directory for cloud upload.
+// Bundles HEVC video, pose sidecar, depth sidecar, PLY mesh, and metadata into a scan package
+// directory for cloud upload.
 
 import ARKit
 import UIKit
@@ -10,10 +11,21 @@ struct ScanPackager {
         let totalSizeBytes: Int
     }
 
+    enum PackageError: LocalizedError {
+        case captureFinalizationFailed
+
+        var errorDescription: String? {
+            switch self {
+            case .captureFinalizationFailed:
+                return "Failed to finalize video capture"
+            }
+        }
+    }
+
     /// Package a completed scan into the export directory structure.
     /// Must be called from a background thread.
     static func package(
-        keyframes: [CapturedFrame],
+        captureResult: CaptureResult,
         meshAnchors: [ARMeshAnchor],
         scanDuration: TimeInterval,
         rfqContext: RFQContext?,
@@ -22,44 +34,30 @@ struct ScanPackager {
         let timestamp = Int(Date().timeIntervalSince1970)
         let scanDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("scan_\(timestamp)")
-        let keyframesDir = scanDir.appendingPathComponent("keyframes")
-        let depthDir = scanDir.appendingPathComponent("depth")
 
-        try FileManager.default.createDirectory(at: keyframesDir, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: depthDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: scanDir, withIntermediateDirectories: true)
 
         // 1. Export PLY mesh
         onProgress("Exporting mesh...")
         let plyURL = scanDir.appendingPathComponent("mesh.ply")
         let meshCounts = try PLYExporter.export(meshAnchors: meshAnchors, to: plyURL)
-        let totalVertices = meshCounts.vertexCount
-        let totalFaces = meshCounts.faceCount
 
-        // 2. Export keyframes (JPEG + per-frame JSON) and depth maps
-        onProgress("Exporting keyframes...")
-        for frame in keyframes {
-            let frameName = String(format: "frame_%03d", frame.index)
+        // 2. Copy HEVC video + sidecar files (already on disk from VideoFrameWriter)
+        onProgress("Copying video and metadata...")
+        let videoDestURL = scanDir.appendingPathComponent("scan_video.mov")
+        let poseDestURL = scanDir.appendingPathComponent("poses.jsonl")
+        let depthDestURL = scanDir.appendingPathComponent("depth.bin")
 
-            let jpegURL = keyframesDir.appendingPathComponent("\(frameName).jpg")
-            try frame.jpegData.write(to: jpegURL)
-
-            let frameJSON = FrameMetadata.from(frame)
-            let frameJSONURL = keyframesDir.appendingPathComponent("\(frameName).json")
-            let jsonData = try JSONEncoder.compact.encode(frameJSON)
-            try jsonData.write(to: frameJSONURL)
-
-            if let depthData = frame.depthData {
-                let depthURL = depthDir.appendingPathComponent("\(frameName).depth")
-                try depthData.write(to: depthURL)
-            }
-        }
+        try FileManager.default.copyItem(at: captureResult.videoURL, to: videoDestURL)
+        try FileManager.default.copyItem(at: captureResult.poseSidecarURL, to: poseDestURL)
+        try FileManager.default.copyItem(at: captureResult.depthSidecarURL, to: depthDestURL)
 
         // 3. Build metadata.json
         onProgress("Writing metadata...")
         let metadata = ScanMetadata.build(
-            keyframes: keyframes,
-            meshVertexCount: totalVertices,
-            meshFaceCount: totalFaces,
+            captureResult: captureResult,
+            meshVertexCount: meshCounts.vertexCount,
+            meshFaceCount: meshCounts.faceCount,
             scanDuration: scanDuration,
             rfqContext: rfqContext
         )
@@ -68,7 +66,7 @@ struct ScanPackager {
         try metadataData.write(to: metadataURL)
 
         let totalSize = directorySize(url: scanDir)
-        print("[RoomScanAlpha] Scan packaged at \(scanDir.path) — \(totalSize / 1024 / 1024)MB")
+        print("[RoomScanAlpha] Scan packaged at \(scanDir.path) — \(totalSize / 1024 / 1024)MB (\(captureResult.frameCount) HEVC frames)")
 
         return PackageResult(directoryURL: scanDir, totalSizeBytes: totalSize)
     }
@@ -89,13 +87,16 @@ struct ScanPackager {
 // MARK: - Metadata schema
 
 struct ScanMetadata: Codable {
-    // RFQ context (nil before Phase 8 wiring)
+    // Capture format
+    let captureFormat: String
+
+    // RFQ context
     let rfqId: String?
     let floorId: String?
     let roomLabel: String?
-    let originX: Float?       // meters — AR world space
-    let originY: Float?       // meters — AR world space
-    let rotationDeg: Float?   // degrees
+    let originX: Float?
+    let originY: Float?
+    let rotationDeg: Float?
 
     // Device & scan info
     let device: String
@@ -105,12 +106,17 @@ struct ScanMetadata: Codable {
     let cameraIntrinsics: CameraIntrinsics
     let imageResolution: ImageResolution
     let depthFormat: DepthFormat
-    let keyframeCount: Int
+    let frameCount: Int
     let meshVertexCount: Int
     let meshFaceCount: Int
-    let keyframes: [KeyframeEntry]
+
+    // HEVC-specific filenames
+    let videoFilename: String
+    let poseSidecarFilename: String
+    let depthSidecarFilename: String
 
     enum CodingKeys: String, CodingKey {
+        case captureFormat = "capture_format"
         case rfqId = "rfq_id"
         case floorId = "floor_id"
         case roomLabel = "room_label"
@@ -124,23 +130,25 @@ struct ScanMetadata: Codable {
         case cameraIntrinsics = "camera_intrinsics"
         case imageResolution = "image_resolution"
         case depthFormat = "depth_format"
-        case keyframeCount = "keyframe_count"
+        case frameCount = "frame_count"
         case meshVertexCount = "mesh_vertex_count"
         case meshFaceCount = "mesh_face_count"
-        case keyframes
+        case videoFilename = "video_filename"
+        case poseSidecarFilename = "pose_sidecar_filename"
+        case depthSidecarFilename = "depth_sidecar_filename"
     }
 
     static func build(
-        keyframes: [CapturedFrame],
+        captureResult: CaptureResult,
         meshVertexCount: Int,
         meshFaceCount: Int,
         scanDuration: TimeInterval,
         rfqContext: RFQContext?
     ) -> ScanMetadata {
         let device = UIDevice.current
-        let firstFrame = keyframes.first
 
         return ScanMetadata(
+            captureFormat: "hevc",
             rfqId: rfqContext?.rfqId,
             floorId: rfqContext?.floorId,
             roomLabel: rfqContext?.roomLabel,
@@ -151,16 +159,23 @@ struct ScanMetadata: Codable {
             deviceName: device.name,
             iosVersion: device.systemVersion,
             scanDurationSeconds: round(scanDuration * 10) / 10,
-            cameraIntrinsics: CameraIntrinsics.from(firstFrame?.cameraIntrinsics),
+            cameraIntrinsics: CameraIntrinsics.from(captureResult.firstFrameIntrinsics),
             imageResolution: ImageResolution(
-                width: firstFrame?.imageWidth ?? 0,
-                height: firstFrame?.imageHeight ?? 0
+                width: captureResult.imageWidth,
+                height: captureResult.imageHeight
             ),
-            depthFormat: DepthFormat.from(firstFrame),
-            keyframeCount: keyframes.count,
+            depthFormat: DepthFormat(
+                pixelFormat: captureResult.depthWidth > 0 ? "kCVPixelFormatType_DepthFloat32" : "",
+                width: captureResult.depthWidth,
+                height: captureResult.depthHeight,
+                byteOrder: captureResult.depthWidth > 0 ? "little_endian" : ""
+            ),
+            frameCount: captureResult.frameCount,
             meshVertexCount: meshVertexCount,
             meshFaceCount: meshFaceCount,
-            keyframes: keyframes.map { KeyframeEntry.from($0) }
+            videoFilename: "scan_video.mov",
+            poseSidecarFilename: "poses.jsonl",
+            depthSidecarFilename: "depth.bin"
         )
     }
 }
@@ -192,79 +207,6 @@ struct DepthFormat: Codable {
         case pixelFormat = "pixel_format"
         case width, height
         case byteOrder = "byte_order"
-    }
-
-    static func from(_ frame: CapturedFrame?) -> DepthFormat {
-        guard let frame = frame, frame.depthData != nil else {
-            return DepthFormat(pixelFormat: "", width: 0, height: 0, byteOrder: "")
-        }
-        return DepthFormat(
-            pixelFormat: "kCVPixelFormatType_DepthFloat32",
-            width: frame.depthWidth,
-            height: frame.depthHeight,
-            byteOrder: "little_endian"
-        )
-    }
-}
-
-struct KeyframeEntry: Codable {
-    let index: Int
-    let filename: String
-    let depthFilename: String
-    let timestamp: TimeInterval
-
-    enum CodingKeys: String, CodingKey {
-        case index, filename, timestamp
-        case depthFilename = "depth_filename"
-    }
-
-    static func from(_ frame: CapturedFrame) -> KeyframeEntry {
-        let name = String(format: "frame_%03d", frame.index)
-        return KeyframeEntry(
-            index: frame.index,
-            filename: "\(name).jpg",
-            depthFilename: "\(name).depth",
-            timestamp: frame.timestamp
-        )
-    }
-}
-
-struct FrameMetadata: Codable {
-    let index: Int
-    let timestamp: TimeInterval
-    let cameraTransform: [Float]
-    let imageWidth: Int
-    let imageHeight: Int
-    let depthWidth: Int
-    let depthHeight: Int
-
-    enum CodingKeys: String, CodingKey {
-        case index, timestamp
-        case cameraTransform = "camera_transform"
-        case imageWidth = "image_width"
-        case imageHeight = "image_height"
-        case depthWidth = "depth_width"
-        case depthHeight = "depth_height"
-    }
-
-    static func from(_ frame: CapturedFrame) -> FrameMetadata {
-        let t = frame.cameraTransform
-        let transformArray: [Float] = [
-            t.columns.0.x, t.columns.0.y, t.columns.0.z, t.columns.0.w,
-            t.columns.1.x, t.columns.1.y, t.columns.1.z, t.columns.1.w,
-            t.columns.2.x, t.columns.2.y, t.columns.2.z, t.columns.2.w,
-            t.columns.3.x, t.columns.3.y, t.columns.3.z, t.columns.3.w,
-        ]
-
-        return FrameMetadata(
-            index: frame.index,
-            timestamp: frame.timestamp,
-            cameraTransform: transformArray,
-            imageWidth: frame.imageWidth,
-            imageHeight: frame.imageHeight,
-            depthWidth: frame.depthWidth,
-            depthHeight: frame.depthHeight
-        )
     }
 }
 

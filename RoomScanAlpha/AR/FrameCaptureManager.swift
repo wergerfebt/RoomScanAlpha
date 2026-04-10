@@ -1,92 +1,92 @@
-// Selects keyframes from the AR session based on camera movement thresholds, converting each to
-// JPEG immediately to avoid retaining large CVPixelBuffers in memory.
+// Captures continuous video from the AR session at ~10fps, writing each frame directly to an
+// HEVC video file on disk via VideoFrameWriter. No frame pixel data is held in memory.
+// Cloud handles all keyframe selection — device just records everything.
 
 import ARKit
 import simd
 
 final class FrameCaptureManager {
-    private(set) var capturedFrames: [CapturedFrame] = []
 
-    private var lastCaptureTransform: simd_float4x4?
+    let videoWriter = VideoFrameWriter(depthInterval: 1)
+
     private var lastCaptureTime: TimeInterval = 0
-    private var nextIndex: Int = 0
 
-    // Thresholds — tuned for 30-60 keyframes when walking the perimeter of a ~4x4m room.
-    // 0.15m translation: captures a new angle every ~6 inches — enough overlap for ORB matching
-    // without excessive redundancy.
-    private let translationThreshold: Float = 0.15
-    // 15 deg rotation: captures new viewpoints when turning corners or looking up/down.
-    private let rotationThreshold: Float = 15.0
-    // 0.5s minimum: prevents burst captures from hand tremor or rapid panning.
-    private let minimumInterval: TimeInterval = 0.5
-    // 60 cap: keeps total package under ~100MB (60 JPEGs + PLY + depth maps).
-    private let maxKeyframes: Int = 60
+    /// Called when the frame cap is reached. The session manager should stop capture.
+    var onCapReached: (() -> Void)?
+    private var capNotified = false
 
-    var keyframeCount: Int { capturedFrames.count }
+    // Continuous capture at ~10fps: write every 0.1s (every ~6th ARKit frame at 60fps).
+    // No rotation/translation thresholds — HEVC inter-frame compression handles redundancy.
+    // Cloud selects the best frames from the continuous stream.
+    private let minimumInterval: TimeInterval = 0.1
+
+    // Cap at 6000 frames (~10 minutes at 10fps). HEVC keeps this well under 200MB on disk.
+    private let maxFrames: Int = 6000
+
+    var keyframeCount: Int { videoWriter.frameCount }
+    var isAtCapacity: Bool { videoWriter.frameCount >= maxFrames }
 
     func reset() {
-        capturedFrames.removeAll()
-        lastCaptureTransform = nil
+        videoWriter.cleanup()
         lastCaptureTime = 0
-        nextIndex = 0
+        capNotified = false
     }
 
-    /// Evaluate an ARFrame and capture a keyframe if selection criteria are met.
-    /// Returns true if a keyframe was captured.
+    /// Evaluate an ARFrame and write it to the HEVC video if enough time has elapsed.
+    /// Returns true if a frame was written.
     @discardableResult
     func processFrame(_ frame: ARFrame) -> Bool {
-        guard capturedFrames.count < maxKeyframes else { return false }
-
-        let currentTransform = frame.camera.transform
-        let currentTime = frame.timestamp
-
-        // First frame is always captured
-        guard let lastTransform = lastCaptureTransform else {
-            return captureKeyframe(from: frame)
-        }
-
-        // Minimum interval check
-        guard (currentTime - lastCaptureTime) >= minimumInterval else { return false }
-
-        // Translation check
-        let lastPos = SIMD3<Float>(lastTransform.columns.3.x, lastTransform.columns.3.y, lastTransform.columns.3.z)
-        let currentPos = SIMD3<Float>(currentTransform.columns.3.x, currentTransform.columns.3.y, currentTransform.columns.3.z)
-        let translationDistance = simd_length(currentPos - lastPos)
-
-        // Rotation check
-        let lastRotation = simd_quatf(lastTransform)
-        let currentRotation = simd_quatf(currentTransform)
-        let rotationAngle = angleBetween(lastRotation, currentRotation)
-
-        let movedEnough = translationDistance >= translationThreshold
-        let rotatedEnough = rotationAngle >= (rotationThreshold * .pi / 180.0)
-
-        guard movedEnough || rotatedEnough else { return false }
-
-        return captureKeyframe(from: frame)
-    }
-
-    private func captureKeyframe(from frame: ARFrame) -> Bool {
-        guard let captured = CapturedFrame.from(frame: frame, index: nextIndex) else {
+        guard videoWriter.frameCount < maxFrames else {
+            if !capNotified {
+                capNotified = true
+                print("[RoomScanAlpha] Frame cap reached (\(maxFrames)) — stopping capture")
+                DispatchQueue.main.async { [self] in
+                    onCapReached?()
+                }
+            }
             return false
         }
 
-        capturedFrames.append(captured)
-        lastCaptureTransform = frame.camera.transform
-        lastCaptureTime = frame.timestamp
-        nextIndex += 1
+        guard !videoWriter.hasFailed else { return false }
 
-        let jpegSizeKB = captured.jpegData.count / 1024
-        let depthSizeKB = (captured.depthData?.count ?? 0) / 1024
-        print("[RoomScanAlpha] Keyframe \(captured.index) captured — JPEG: \(jpegSizeKB)KB, depth: \(depthSizeKB)KB, total frames: \(capturedFrames.count)")
+        let currentTime = frame.timestamp
 
-        return true
+        // First frame is always captured.
+        guard lastCaptureTime > 0 else {
+            lastCaptureTime = currentTime
+            return captureFrame(from: frame)
+        }
+
+        // Continuous capture at ~10fps — just check time interval, no movement thresholds.
+        guard (currentTime - lastCaptureTime) >= minimumInterval else { return false }
+
+        return captureFrame(from: frame)
     }
 
-    /// Angle in radians between two quaternions.
-    private func angleBetween(_ q1: simd_quatf, _ q2: simd_quatf) -> Float {
-        let dotProduct = abs(simd_dot(q1, q2))
-        let clamped = min(dotProduct, 1.0)
-        return 2.0 * acos(clamped)
+    /// Finalize the HEVC video and sidecar files. Call when capture ends (user taps stop).
+    func finalizeCapture() async -> CaptureResult? {
+        return await videoWriter.finishWriting()
+    }
+
+    // MARK: - Private
+
+    private func captureFrame(from frame: ARFrame) -> Bool {
+        let success = videoWriter.appendFrame(
+            pixelBuffer: frame.capturedImage,
+            timestamp: frame.timestamp,
+            transform: frame.camera.transform,
+            intrinsics: frame.camera.intrinsics,
+            depthMap: frame.sceneDepth?.depthMap
+        )
+
+        if success {
+            lastCaptureTime = frame.timestamp
+
+            if videoWriter.frameCount % 100 == 0 {
+                print("[RoomScanAlpha] Frame \(videoWriter.frameCount) captured (HEVC, depth: \(videoWriter.depthFrameCount))")
+            }
+        }
+
+        return success
     }
 }
