@@ -179,6 +179,9 @@ struct ContentView: View {
     // MARK: - Scan Control Handlers
 
     private func handleStartScan() {
+        // Pre-warm the HEVC encoder sidecar files before capturing starts
+        // to avoid file I/O stall on the first AR frame.
+        sessionManager.frameCaptureManager.videoWriter.prewarm()
         sessionManager.isCapturing = true
         viewModel.startScan()
     }
@@ -201,18 +204,25 @@ struct ContentView: View {
     private func handleAnnotationDone(annotation: CornerAnnotation?) {
         viewModel.cornerAnnotation = annotation
         sessionManager.snapshotMeshAnchors()
-        // Denser walk-around capture replaces panorama — go straight to labeling
-        sessionManager.pauseSession()
-        saveWorldMapInBackground()
-        advanceToLabelingOrWarning()
+        pauseAndAdvance()
     }
 
     private func handleAnnotationSkip() {
         viewModel.cornerAnnotation = nil
         sessionManager.snapshotMeshAnchors()
-        sessionManager.pauseSession()
+        pauseAndAdvance()
+    }
+
+    /// Pause AR session on a background thread, then advance to labeling on main.
+    /// Doing this synchronously on main blocks the run loop and freezes the keyboard.
+    private func pauseAndAdvance() {
         saveWorldMapInBackground()
-        advanceToLabelingOrWarning()
+        DispatchQueue.global(qos: .userInitiated).async {
+            sessionManager.pauseSession()
+            DispatchQueue.main.async {
+                advanceToLabelingOrWarning()
+            }
+        }
     }
 
     private func checkCoverageAutomatically(scanId: String, rfqId: String) {

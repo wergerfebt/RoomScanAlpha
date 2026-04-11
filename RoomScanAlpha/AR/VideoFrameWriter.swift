@@ -64,6 +64,10 @@ final class VideoFrameWriter {
     /// Whether startWriting() has been called on the asset writer.
     private var isWriting = false
 
+    /// Tracks pending depth writes for backpressure detection.
+    private var pendingDepthWrites: Int = 0
+    private let maxPendingDepthWrites = 10
+
     // MARK: - Depth Sidecar Header
 
     /// 16-byte header: "DPTH" magic (4) + version uint32 (4) + frame count uint32 (4) + bytes per frame uint32 (4).
@@ -85,6 +89,28 @@ final class VideoFrameWriter {
     }
 
     // MARK: - Public
+
+    /// Pre-create sidecar files before scanning starts. Call from a background thread
+    /// before the AR session begins capturing to avoid file I/O on the first frame.
+    func prewarm() {
+        guard poseFileHandle == nil else { return }
+        FileManager.default.createFile(atPath: poseSidecarURL.path, contents: nil)
+        poseFileHandle = try? FileHandle(forWritingTo: poseSidecarURL)
+
+        var header = Data(Self.depthMagic)
+        var version = Self.depthVersion
+        header.append(Data(bytes: &version, count: 4))
+        var count: UInt32 = 0
+        header.append(Data(bytes: &count, count: 4))
+        var bytesPerFrame: UInt32 = 0
+        header.append(Data(bytes: &bytesPerFrame, count: 4))
+        FileManager.default.createFile(atPath: depthSidecarURL.path, contents: header)
+        depthFileHandle = try? FileHandle(forWritingTo: depthSidecarURL)
+        depthFileHandle?.seekToEndOfFile()
+        depthByteOffset = Self.depthHeaderSize
+
+        print("[RoomScanAlpha] VideoFrameWriter pre-warmed sidecar files")
+    }
 
     /// Append a frame from ARKit to the HEVC video and pose sidecar.
     /// Depth is written every `depthInterval` frames on a background queue.
@@ -152,16 +178,16 @@ final class VideoFrameWriter {
         // Write pose entry to JSONL sidecar (lightweight string write — OK on AR thread).
         writePoseEntry(index: frameCount, timestamp: timestamp, transform: transform, intrinsics: intrinsics)
 
-        // Write depth on background queue every Nth frame to reduce AR thread I/O.
-        if let depthMap = depthMap, frameCount % depthInterval == 0 {
-            // Copy depth bytes while we still have the lock, then dispatch write.
+        // Write depth on background queue every Nth frame.
+        // Skip if the queue has too many pending writes (backpressure).
+        if let depthMap = depthMap, frameCount % depthInterval == 0,
+           pendingDepthWrites < maxPendingDepthWrites {
             let depthCopy = copyDepthBuffer(depthMap)
             if let depthCopy = depthCopy {
                 depthByteOffset += depthCopy.count
                 depthFrameCount += 1
 
                 if depthFrameCount == 1 {
-                    // First depth frame — patch the bytes_per_frame header field.
                     if depthWidth == 0 {
                         depthWidth = CVPixelBufferGetWidth(depthMap)
                         depthHeight = CVPixelBufferGetHeight(depthMap)
@@ -169,8 +195,10 @@ final class VideoFrameWriter {
                     patchDepthBytesPerFrame(UInt32(depthCopy.count))
                 }
 
+                pendingDepthWrites += 1
                 depthQueue.async { [weak self] in
                     self?.depthFileHandle?.write(depthCopy)
+                    self?.pendingDepthWrites -= 1
                 }
             }
         }
@@ -287,22 +315,23 @@ final class VideoFrameWriter {
         self.pixelBufferAdaptor = adaptor
         self.isWriting = true
 
-        // Create sidecar files.
-        FileManager.default.createFile(atPath: poseSidecarURL.path, contents: nil)
-        poseFileHandle = try FileHandle(forWritingTo: poseSidecarURL)
+        // Create sidecar files if not already pre-warmed.
+        if poseFileHandle == nil {
+            FileManager.default.createFile(atPath: poseSidecarURL.path, contents: nil)
+            poseFileHandle = try FileHandle(forWritingTo: poseSidecarURL)
 
-        // Write depth sidecar header (frame count placeholder = 0, patched in finishWriting).
-        var header = Data(Self.depthMagic)
-        var version = Self.depthVersion
-        header.append(Data(bytes: &version, count: 4))
-        var count: UInt32 = 0 // placeholder
-        header.append(Data(bytes: &count, count: 4))
-        var bytesPerFrame: UInt32 = 0 // set on first depth frame
-        header.append(Data(bytes: &bytesPerFrame, count: 4))
-        FileManager.default.createFile(atPath: depthSidecarURL.path, contents: header)
-        depthFileHandle = try FileHandle(forWritingTo: depthSidecarURL)
-        depthFileHandle?.seekToEndOfFile()
-        depthByteOffset = Self.depthHeaderSize
+            var header = Data(Self.depthMagic)
+            var version = Self.depthVersion
+            header.append(Data(bytes: &version, count: 4))
+            var count: UInt32 = 0
+            header.append(Data(bytes: &count, count: 4))
+            var bytesPerFrame: UInt32 = 0
+            header.append(Data(bytes: &bytesPerFrame, count: 4))
+            FileManager.default.createFile(atPath: depthSidecarURL.path, contents: header)
+            depthFileHandle = try FileHandle(forWritingTo: depthSidecarURL)
+            depthFileHandle?.seekToEndOfFile()
+            depthByteOffset = Self.depthHeaderSize
+        }
 
         print("[RoomScanAlpha] VideoFrameWriter initialized: \(width)×\(height) HEVC @ ~10fps → \(videoURL.lastPathComponent)")
     }
