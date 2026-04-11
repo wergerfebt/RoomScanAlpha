@@ -33,9 +33,9 @@ final class VideoFrameWriter {
     /// Write depth every Nth video frame. 1 = every frame (needed for 3DGS gradient backprop).
     let depthInterval: Int
 
-    private let videoURL: URL
-    private let poseSidecarURL: URL
-    private let depthSidecarURL: URL
+    private var videoURL: URL
+    private var poseSidecarURL: URL
+    private var depthSidecarURL: URL
 
     private var assetWriter: AVAssetWriter?
     private var writerInput: AVAssetWriterInput?
@@ -86,26 +86,21 @@ final class VideoFrameWriter {
 
     // MARK: - Public
 
-    /// Pre-create sidecar files before scanning starts. Call from a background thread
-    /// before the AR session begins capturing to avoid file I/O on the first frame.
-    func prewarm() {
-        guard poseFileHandle == nil else { return }
-        FileManager.default.createFile(atPath: poseSidecarURL.path, contents: nil)
-        poseFileHandle = try? FileHandle(forWritingTo: poseSidecarURL)
-
-        var header = Data(Self.depthMagic)
-        var version = Self.depthVersion
-        header.append(Data(bytes: &version, count: 4))
-        var count: UInt32 = 0
-        header.append(Data(bytes: &count, count: 4))
-        var bytesPerFrame: UInt32 = 0
-        header.append(Data(bytes: &bytesPerFrame, count: 4))
-        FileManager.default.createFile(atPath: depthSidecarURL.path, contents: header)
-        depthFileHandle = try? FileHandle(forWritingTo: depthSidecarURL)
-        depthFileHandle?.seekToEndOfFile()
-        depthByteOffset = Self.depthHeaderSize
-
-        print("[RoomScanAlpha] VideoFrameWriter pre-warmed sidecar files")
+    /// Pre-create the HEVC encoder and sidecar files before scanning starts.
+    /// Call on a background thread before the first AR frame to avoid a ~10s stall
+    /// while the hardware encoder initializes on the AR delegate thread.
+    ///
+    /// Uses the standard iPhone LiDAR camera resolution (1920×1440).
+    /// If the actual resolution differs, the writer is torn down and re-created
+    /// on the first frame (rare — only non-LiDAR devices).
+    func prewarm(width: Int = 1920, height: Int = 1440) {
+        guard assetWriter == nil else { return }
+        do {
+            try setupWriter(width: width, height: height)
+            print("[RoomScanAlpha] VideoFrameWriter pre-warmed: \(width)×\(height) HEVC encoder ready")
+        } catch {
+            print("[RoomScanAlpha] VideoFrameWriter prewarm failed (will retry on first frame): \(error)")
+        }
     }
 
     /// Append a frame from ARKit to the HEVC video and pose sidecar.
@@ -122,12 +117,27 @@ final class VideoFrameWriter {
     ) -> Bool {
         guard !hasFailed else { return false }
 
-        // Lazy initialization on first frame — we need the pixel buffer dimensions.
+        let w = CVPixelBufferGetWidth(pixelBuffer)
+        let h = CVPixelBufferGetHeight(pixelBuffer)
+
+        // Lazy initialization on first frame if prewarm wasn't called.
         if assetWriter == nil {
             do {
-                try setupWriter(pixelBuffer: pixelBuffer)
+                try setupWriter(width: w, height: h)
             } catch {
                 print("[RoomScanAlpha] VideoFrameWriter setup failed: \(error)")
+                hasFailed = true
+                return false
+            }
+        }
+
+        // If prewarm used wrong dimensions (very rare), recreate the writer.
+        if frameCount == 0 && (imageWidth != w || imageHeight != h) && imageWidth > 0 {
+            print("[RoomScanAlpha] Resolution mismatch: prewarmed \(imageWidth)×\(imageHeight) but got \(w)×\(h) — recreating writer")
+            cleanup()
+            do {
+                try setupWriter(width: w, height: h)
+            } catch {
                 hasFailed = true
                 return false
             }
@@ -151,9 +161,6 @@ final class VideoFrameWriter {
         if frameCount == 0 {
             firstTimestamp = timestamp
             firstIntrinsics = intrinsics
-            imageWidth = CVPixelBufferGetWidth(pixelBuffer)
-            imageHeight = CVPixelBufferGetHeight(pixelBuffer)
-            // Set depth dimensions from the first depth map so pose entries have correct dw/dh.
             if let depthMap = depthMap {
                 depthWidth = CVPixelBufferGetWidth(depthMap)
                 depthHeight = CVPixelBufferGetHeight(depthMap)
@@ -257,6 +264,9 @@ final class VideoFrameWriter {
         try? depthFileHandle?.close()
         poseFileHandle = nil
         depthFileHandle = nil
+        assetWriter = nil
+        writerInput = nil
+        pixelBufferAdaptor = nil
         try? FileManager.default.removeItem(at: videoURL)
         try? FileManager.default.removeItem(at: poseSidecarURL)
         try? FileManager.default.removeItem(at: depthSidecarURL)
@@ -264,10 +274,7 @@ final class VideoFrameWriter {
 
     // MARK: - Private: Setup
 
-    private func setupWriter(pixelBuffer: CVPixelBuffer) throws {
-        let width = CVPixelBufferGetWidth(pixelBuffer)
-        let height = CVPixelBufferGetHeight(pixelBuffer)
-
+    private func setupWriter(width: Int, height: Int) throws {
         let writer = try AVAssetWriter(outputURL: videoURL, fileType: .mov)
 
         let videoSettings: [String: Any] = [
@@ -285,8 +292,10 @@ final class VideoFrameWriter {
         let input = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
         input.expectsMediaDataInRealTime = true
 
+        // Use standard pixel format for the adaptor; actual frames may differ
+        // but AVAssetWriterInputPixelBufferAdaptor handles conversion.
         let sourceAttributes: [String: Any] = [
-            kCVPixelBufferPixelFormatTypeKey as String: CVPixelBufferGetPixelFormatType(pixelBuffer),
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
             kCVPixelBufferWidthKey as String: width,
             kCVPixelBufferHeightKey as String: height,
         ]
@@ -306,8 +315,10 @@ final class VideoFrameWriter {
         self.writerInput = input
         self.pixelBufferAdaptor = adaptor
         self.isWriting = true
+        self.imageWidth = width
+        self.imageHeight = height
 
-        // Create sidecar files if not already pre-warmed.
+        // Create sidecar files if not already opened.
         if poseFileHandle == nil {
             FileManager.default.createFile(atPath: poseSidecarURL.path, contents: nil)
             poseFileHandle = try FileHandle(forWritingTo: poseSidecarURL)

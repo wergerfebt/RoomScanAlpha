@@ -7,7 +7,7 @@ import simd
 
 final class FrameCaptureManager {
 
-    let videoWriter = VideoFrameWriter(depthInterval: 1)
+    private(set) var videoWriter = VideoFrameWriter(depthInterval: 1)
 
     private var lastCaptureTime: TimeInterval = 0
 
@@ -28,6 +28,7 @@ final class FrameCaptureManager {
 
     func reset() {
         videoWriter.cleanup()
+        videoWriter = VideoFrameWriter(depthInterval: 1)
         lastCaptureTime = 0
         capNotified = false
     }

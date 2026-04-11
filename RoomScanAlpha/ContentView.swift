@@ -179,9 +179,11 @@ struct ContentView: View {
     // MARK: - Scan Control Handlers
 
     private func handleStartScan() {
-        // Pre-warm the HEVC encoder sidecar files before capturing starts
-        // to avoid file I/O stall on the first AR frame.
-        sessionManager.frameCaptureManager.videoWriter.prewarm()
+        // Pre-warm the HEVC encoder on a background thread before capturing starts.
+        // This initializes the hardware encoder (~1-2s) off the main/AR thread.
+        DispatchQueue.global(qos: .userInitiated).async {
+            sessionManager.frameCaptureManager.videoWriter.prewarm()
+        }
         sessionManager.isCapturing = true
         viewModel.startScan()
     }
@@ -213,16 +215,15 @@ struct ContentView: View {
         pauseAndAdvance()
     }
 
-    /// Pause AR session on a background thread, then advance to labeling on main.
-    /// Doing this synchronously on main blocks the run loop and freezes the keyboard.
+    /// Advance to labeling immediately, then pause AR + save world map in background.
+    /// Both session.pause() and world map archival are heavy operations that block the
+    /// main thread and prevent the keyboard from appearing.
     private func pauseAndAdvance() {
-        saveWorldMapInBackground()
+        advanceToLabelingOrWarning()
         DispatchQueue.global(qos: .userInitiated).async {
             sessionManager.pauseSession()
-            DispatchQueue.main.async {
-                advanceToLabelingOrWarning()
-            }
         }
+        saveWorldMapInBackground()
     }
 
     private func checkCoverageAutomatically(scanId: String, rfqId: String) {
