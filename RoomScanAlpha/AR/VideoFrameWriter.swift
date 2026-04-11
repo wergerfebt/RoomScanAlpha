@@ -86,21 +86,27 @@ final class VideoFrameWriter {
 
     // MARK: - Public
 
-    /// Pre-create the HEVC encoder and sidecar files before scanning starts.
-    /// Call on a background thread before the first AR frame to avoid a ~10s stall
-    /// while the hardware encoder initializes on the AR delegate thread.
-    ///
-    /// Uses the standard iPhone LiDAR camera resolution (1920×1440).
-    /// If the actual resolution differs, the writer is torn down and re-created
-    /// on the first frame (rare — only non-LiDAR devices).
-    func prewarm(width: Int = 1920, height: Int = 1440) {
-        guard assetWriter == nil else { return }
-        do {
-            try setupWriter(width: width, height: height)
-            print("[RoomScanAlpha] VideoFrameWriter pre-warmed: \(width)×\(height) HEVC encoder ready")
-        } catch {
-            print("[RoomScanAlpha] VideoFrameWriter prewarm failed (will retry on first frame): \(error)")
-        }
+    /// Pre-create sidecar files before scanning starts so the first AR frame
+    /// only needs to initialize the AVAssetWriter (which requires the actual
+    /// pixel buffer format and dimensions).
+    func prewarm() {
+        guard poseFileHandle == nil else { return }
+        FileManager.default.createFile(atPath: poseSidecarURL.path, contents: nil)
+        poseFileHandle = try? FileHandle(forWritingTo: poseSidecarURL)
+
+        var header = Data(Self.depthMagic)
+        var version = Self.depthVersion
+        header.append(Data(bytes: &version, count: 4))
+        var count: UInt32 = 0
+        header.append(Data(bytes: &count, count: 4))
+        var bytesPerFrame: UInt32 = 0
+        header.append(Data(bytes: &bytesPerFrame, count: 4))
+        FileManager.default.createFile(atPath: depthSidecarURL.path, contents: header)
+        depthFileHandle = try? FileHandle(forWritingTo: depthSidecarURL)
+        depthFileHandle?.seekToEndOfFile()
+        depthByteOffset = Self.depthHeaderSize
+
+        print("[RoomScanAlpha] VideoFrameWriter pre-warmed sidecar files")
     }
 
     /// Append a frame from ARKit to the HEVC video and pose sidecar.
@@ -117,27 +123,12 @@ final class VideoFrameWriter {
     ) -> Bool {
         guard !hasFailed else { return false }
 
-        let w = CVPixelBufferGetWidth(pixelBuffer)
-        let h = CVPixelBufferGetHeight(pixelBuffer)
-
-        // Lazy initialization on first frame if prewarm wasn't called.
+        // Lazy initialization on first frame — we need the pixel buffer dimensions and format.
         if assetWriter == nil {
             do {
-                try setupWriter(width: w, height: h)
+                try setupWriter(pixelBuffer: pixelBuffer)
             } catch {
                 print("[RoomScanAlpha] VideoFrameWriter setup failed: \(error)")
-                hasFailed = true
-                return false
-            }
-        }
-
-        // If prewarm used wrong dimensions (very rare), recreate the writer.
-        if frameCount == 0 && (imageWidth != w || imageHeight != h) && imageWidth > 0 {
-            print("[RoomScanAlpha] Resolution mismatch: prewarmed \(imageWidth)×\(imageHeight) but got \(w)×\(h) — recreating writer")
-            cleanup()
-            do {
-                try setupWriter(width: w, height: h)
-            } catch {
                 hasFailed = true
                 return false
             }
@@ -274,7 +265,10 @@ final class VideoFrameWriter {
 
     // MARK: - Private: Setup
 
-    private func setupWriter(width: Int, height: Int) throws {
+    private func setupWriter(pixelBuffer: CVPixelBuffer) throws {
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+
         let writer = try AVAssetWriter(outputURL: videoURL, fileType: .mov)
 
         let videoSettings: [String: Any] = [
@@ -292,10 +286,8 @@ final class VideoFrameWriter {
         let input = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
         input.expectsMediaDataInRealTime = true
 
-        // Use standard pixel format for the adaptor; actual frames may differ
-        // but AVAssetWriterInputPixelBufferAdaptor handles conversion.
         let sourceAttributes: [String: Any] = [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferPixelFormatTypeKey as String: CVPixelBufferGetPixelFormatType(pixelBuffer),
             kCVPixelBufferWidthKey as String: width,
             kCVPixelBufferHeightKey as String: height,
         ]

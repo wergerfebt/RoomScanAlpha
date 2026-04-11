@@ -179,11 +179,8 @@ struct ContentView: View {
     // MARK: - Scan Control Handlers
 
     private func handleStartScan() {
-        // Pre-warm the HEVC encoder on a background thread before capturing starts.
-        // This initializes the hardware encoder (~1-2s) off the main/AR thread.
-        DispatchQueue.global(qos: .userInitiated).async {
-            sessionManager.frameCaptureManager.videoWriter.prewarm()
-        }
+        // Pre-create sidecar files so the first AR frame only needs AVAssetWriter init.
+        sessionManager.frameCaptureManager.videoWriter.prewarm()
         sessionManager.isCapturing = true
         viewModel.startScan()
     }

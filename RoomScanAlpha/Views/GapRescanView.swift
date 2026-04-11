@@ -77,9 +77,7 @@ struct GapRescanView: View {
         }
         .onAppear {
             sessionManager.frameCaptureManager.reset()
-            DispatchQueue.global(qos: .userInitiated).async {
-                sessionManager.frameCaptureManager.videoWriter.prewarm()
-            }
+            sessionManager.frameCaptureManager.videoWriter.prewarm()
             sessionManager.isCapturing = true
             print("[RoomScanAlpha] Gap rescan started — \(uncoveredFaces.count) untextured, \(holeFaces.count) holes")
         }
