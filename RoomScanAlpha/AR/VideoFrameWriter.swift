@@ -44,7 +44,8 @@ final class VideoFrameWriter {
     private var depthFileHandle: FileHandle?
 
     /// Background queue for depth writes — keeps AR delegate thread unblocked.
-    private let depthQueue = DispatchQueue(label: "com.roomscan.depth-writer", qos: .utility)
+    /// userInitiated QoS needed to keep up with every-frame depth at 10fps (~1.9MB/s).
+    private let depthQueue = DispatchQueue(label: "com.roomscan.depth-writer", qos: .userInitiated)
 
     /// First frame's intrinsics — used for metadata.json (all frames share the same camera).
     private var firstIntrinsics: simd_float3x3?

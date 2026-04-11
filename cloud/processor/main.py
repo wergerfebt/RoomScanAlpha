@@ -608,7 +608,10 @@ def validate_structure(scan_root: str, scan_id: str) -> None:
         # After extraction, validate the generated keyframes like the legacy path.
         # Update metadata to reflect extracted frame count for downstream validation.
         metadata["keyframe_count"] = result["frame_count"]
-        metadata["keyframes"] = [{"index": i} for i in range(result["frame_count"])]
+        metadata["keyframes"] = [
+            {"index": i, "filename": f"frame_{i:04d}.jpg"}
+            for i in range(result["frame_count"])
+        ]
         _validate_keyframes(scan_root, metadata)
         _validate_depth_files(scan_root)
     else:
