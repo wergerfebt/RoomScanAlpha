@@ -64,10 +64,6 @@ final class VideoFrameWriter {
     /// Whether startWriting() has been called on the asset writer.
     private var isWriting = false
 
-    /// Tracks pending depth writes for backpressure detection.
-    private var pendingDepthWrites: Int = 0
-    private let maxPendingDepthWrites = 10
-
     // MARK: - Depth Sidecar Header
 
     /// 16-byte header: "DPTH" magic (4) + version uint32 (4) + frame count uint32 (4) + bytes per frame uint32 (4).
@@ -179,9 +175,7 @@ final class VideoFrameWriter {
         writePoseEntry(index: frameCount, timestamp: timestamp, transform: transform, intrinsics: intrinsics)
 
         // Write depth on background queue every Nth frame.
-        // Skip if the queue has too many pending writes (backpressure).
-        if let depthMap = depthMap, frameCount % depthInterval == 0,
-           pendingDepthWrites < maxPendingDepthWrites {
+        if let depthMap = depthMap, frameCount % depthInterval == 0 {
             let depthCopy = copyDepthBuffer(depthMap)
             if let depthCopy = depthCopy {
                 depthByteOffset += depthCopy.count
@@ -195,10 +189,8 @@ final class VideoFrameWriter {
                     patchDepthBytesPerFrame(UInt32(depthCopy.count))
                 }
 
-                pendingDepthWrites += 1
                 depthQueue.async { [weak self] in
                     self?.depthFileHandle?.write(depthCopy)
-                    self?.pendingDepthWrites -= 1
                 }
             }
         }
