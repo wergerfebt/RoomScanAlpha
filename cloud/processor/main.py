@@ -1592,6 +1592,23 @@ async def process_supplemental(request: Request) -> dict:
             send_fcm_notification(scan_id, "failed")
             return {"status": "failed", "error": msg}
 
+        # Step 2b: Extract HEVC frames if needed (both original and supplemental)
+        for label, root in [("original", orig_root), ("supplemental", supp_root)]:
+            meta_path = os.path.join(root, "metadata.json")
+            with open(meta_path) as f:
+                meta = json.load(f)
+            if meta.get("capture_format") == "hevc":
+                print(f"[Processor] Extracting HEVC frames from {label} scan")
+                result = extract_frames_from_hevc(root)
+                meta["keyframe_count"] = result["frame_count"]
+                meta["keyframes"] = [
+                    {"index": i, "filename": f"frame_{i:04d}.jpg"}
+                    for i in range(result["frame_count"])
+                ]
+                with open(meta_path, "w") as f:
+                    json.dump(meta, f, indent=2)
+                print(f"[Processor] Extracted {result['frame_count']} frames from {label}")
+
         # Step 3: Merge meshes + frames
         try:
             merged_metadata = _merge_supplemental(orig_root, supp_root, merged_dir)
