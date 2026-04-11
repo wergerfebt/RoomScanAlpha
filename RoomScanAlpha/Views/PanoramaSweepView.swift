@@ -40,7 +40,6 @@ struct PanoramaSweepView: View {
             }
         }
         .onAppear {
-            sessionManager.frameCaptureManager.resetPanoramicState()
             sessionManager.onPanoramicFrameCaptured = { count, yaw in
                 frameCount = count
                 currentYaw = yaw
