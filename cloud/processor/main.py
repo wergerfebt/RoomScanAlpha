@@ -444,6 +444,15 @@ async def process_texture(request: Request) -> dict:
         with open(metadata_path, "r") as f:
             metadata = json.load(f)
 
+        # HEVC scans need frame extraction before texturing.
+        if metadata.get("capture_format") == "hevc":
+            result = extract_frames_from_hevc(scan_root)
+            metadata["keyframe_count"] = result["frame_count"]
+            metadata["keyframes"] = [
+                {"index": i, "filename": f"frame_{i:04d}.jpg"}
+                for i in range(result["frame_count"])
+            ]
+
         try:
             from pipeline.openmvs_texture import texture_scan
 
@@ -612,6 +621,13 @@ def validate_structure(scan_root: str, scan_id: str) -> None:
             {"index": i, "filename": f"frame_{i:04d}.jpg"}
             for i in range(result["frame_count"])
         ]
+
+        # Write updated metadata back to disk so downstream steps (texture_scan,
+        # process_texture) see the keyframes manifest when they re-read metadata.json.
+        metadata_path = os.path.join(scan_root, "metadata.json")
+        with open(metadata_path, "w") as f:
+            json.dump(metadata, f, indent=2)
+
         _validate_keyframes(scan_root, metadata)
         _validate_depth_files(scan_root)
     else:
