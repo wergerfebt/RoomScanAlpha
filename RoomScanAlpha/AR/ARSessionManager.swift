@@ -172,12 +172,8 @@ final class ARSessionManager: NSObject, ARSessionDelegate {
     // MARK: - ARSessionDelegate
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
-        // Panoramic capture mode
+        // Panoramic capture mode (legacy — not used in HEVC path)
         if isPanoramicCapture {
-            if let result = frameCaptureManager.processPanoramicFrame(frame, startTransform: panoramaStartTransform) {
-                panoramicFrames.append(result.frame)
-                onPanoramicFrameCaptured?(panoramicFrames.count, result.yawDegrees)
-            }
             return
         }
 

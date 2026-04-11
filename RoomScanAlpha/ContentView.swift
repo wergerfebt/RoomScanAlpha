@@ -189,9 +189,6 @@ struct ContentView: View {
         sessionManager.snapshotMeshAnchors()
         // Go straight to annotation (matching original working flow)
         viewModel.state = .annotatingCorners
-
-        // Kick off frame selection in background while user annotates
-        sessionManager.frameCaptureManager.selectBestFrames()
     }
 
     private func handleRedoScan() {
@@ -207,9 +204,7 @@ struct ContentView: View {
         // Denser walk-around capture replaces panorama — go straight to labeling
         sessionManager.pauseSession()
         saveWorldMapInBackground()
-        waitForFrameSelectionThen {
-            advanceToLabelingOrWarning()
-        }
+        advanceToLabelingOrWarning()
     }
 
     private func handleAnnotationSkip() {
@@ -217,9 +212,7 @@ struct ContentView: View {
         sessionManager.snapshotMeshAnchors()
         sessionManager.pauseSession()
         saveWorldMapInBackground()
-        waitForFrameSelectionThen {
-            advanceToLabelingOrWarning()
-        }
+        advanceToLabelingOrWarning()
     }
 
     private func checkCoverageAutomatically(scanId: String, rfqId: String) {
@@ -366,18 +359,6 @@ struct ContentView: View {
                 try await sessionManager.saveWorldMap(to: url)
             } catch {
                 print("[RoomScanAlpha] World map save failed: \(error.localizedDescription)")
-            }
-        }
-    }
-
-    /// Wait for post-scan frame selection to finish before calling the continuation.
-    private func waitForFrameSelectionThen(then: @escaping () -> Void) {
-        let fcm = sessionManager.frameCaptureManager
-        if fcm.selectionComplete || !fcm.isSelecting {
-            then()
-        } else {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                waitForFrameSelectionThen(then: then)
             }
         }
     }
