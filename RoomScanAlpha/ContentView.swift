@@ -264,14 +264,21 @@ struct ContentView: View {
         viewModel.uploadProgress = 0.0
         viewModel.uploadError = nil
 
-        let keyframes = sessionManager.frameCaptureManager.capturedFrames
+        let captureManager = sessionManager.frameCaptureManager
         let meshAnchors = sessionManager.lastMeshAnchors
 
         Task.detached {
             do {
-                let result = try ScanPackager.packageSupplemental(
-                    keyframes: keyframes,
+                guard let captureResult = await captureManager.finalizeCapture() else {
+                    throw ScanPackager.PackageError.captureFinalizationFailed
+                }
+
+                let result = try ScanPackager.package(
+                    captureResult: captureResult,
                     meshAnchors: meshAnchors,
+                    scanDuration: 0,
+                    rfqContext: nil,
+                    cornerAnnotation: nil,
                     onProgress: { message in
                         Task { @MainActor in
                             viewModel.uploadStatus = message
@@ -397,9 +404,6 @@ struct ContentView: View {
         let rfqContext = viewModel.rfqContext
         let cornerAnnotation = viewModel.cornerAnnotation
         let roomScope = viewModel.roomScope
-        let panoramicFrames = sessionManager.panoramicFrames
-        let panoramaStartTransform = viewModel.panoramaStartTransform
-
         Task.detached {
             do {
                 // Finalize the HEVC video + sidecar files before packaging.
@@ -414,8 +418,6 @@ struct ContentView: View {
                     rfqContext: rfqContext,
                     cornerAnnotation: cornerAnnotation,
                     roomScope: roomScope,
-                    panoramicFrames: panoramicFrames,
-                    panoramaStartTransform: panoramaStartTransform,
                     onProgress: { message in
                         Task { @MainActor in
                             viewModel.exportProgress = message

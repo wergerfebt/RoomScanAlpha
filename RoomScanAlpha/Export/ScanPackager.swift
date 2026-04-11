@@ -31,8 +31,6 @@ struct ScanPackager {
         rfqContext: RFQContext?,
         cornerAnnotation: CornerAnnotation?,
         roomScope: RoomScope? = nil,
-        panoramicFrames: [CapturedFrame] = [],
-        panoramaStartTransform: simd_float4x4? = nil,
         onProgress: @escaping (String) -> Void
     ) throws -> PackageResult {
         let timestamp = Int(Date().timeIntervalSince1970)
@@ -56,32 +54,6 @@ struct ScanPackager {
         try FileManager.default.copyItem(at: captureResult.poseSidecarURL, to: poseDestURL)
         try FileManager.default.copyItem(at: captureResult.depthSidecarURL, to: depthDestURL)
 
-        // 2b. Export panoramic frames (if available)
-        if !panoramicFrames.isEmpty {
-            onProgress("Exporting panoramic frames...")
-            let panoDir = scanDir.appendingPathComponent("panoramic")
-            let panoDepthDir = scanDir.appendingPathComponent("panoramic_depth")
-            try FileManager.default.createDirectory(at: panoDir, withIntermediateDirectories: true)
-            try FileManager.default.createDirectory(at: panoDepthDir, withIntermediateDirectories: true)
-
-            for frame in panoramicFrames {
-                let frameName = String(format: "pano_%03d", frame.index)
-
-                let jpegURL = panoDir.appendingPathComponent("\(frameName).jpg")
-                try frame.jpegData.write(to: jpegURL)
-
-                let frameJSON = FrameMetadata.from(frame)
-                let frameJSONURL = panoDir.appendingPathComponent("\(frameName).json")
-                let jsonData = try JSONEncoder.compact.encode(frameJSON)
-                try jsonData.write(to: frameJSONURL)
-
-                if let depthData = frame.depthData {
-                    let depthURL = panoDepthDir.appendingPathComponent("\(frameName).depth")
-                    try depthData.write(to: depthURL)
-                }
-            }
-        }
-
         // 3. Build metadata.json
         onProgress("Writing metadata...")
         let metadata = ScanMetadata.build(
@@ -91,9 +63,7 @@ struct ScanPackager {
             scanDuration: scanDuration,
             rfqContext: rfqContext,
             cornerAnnotation: cornerAnnotation,
-            roomScope: roomScope,
-            panoramicFrames: panoramicFrames,
-            panoramaStartTransform: panoramaStartTransform
+            roomScope: roomScope
         )
         let metadataData = try JSONEncoder.prettyPrinted.encode(metadata)
         let metadataURL = scanDir.appendingPathComponent("metadata.json")
@@ -103,23 +73,6 @@ struct ScanPackager {
         print("[RoomScanAlpha] Scan packaged at \(scanDir.path) — \(totalSize / 1024 / 1024)MB (\(captureResult.frameCount) HEVC frames)")
 
         return PackageResult(directoryURL: scanDir, totalSizeBytes: totalSize)
-    }
-
-    /// Package supplemental scan data (mesh + keyframes from gap re-scan).
-    /// Structurally identical to a regular scan package — same PLY + keyframe format.
-    static func packageSupplemental(
-        keyframes: [CapturedFrame],
-        meshAnchors: [ARMeshAnchor],
-        onProgress: @escaping (String) -> Void
-    ) throws -> PackageResult {
-        return try package(
-            keyframes: keyframes,
-            meshAnchors: meshAnchors,
-            scanDuration: 0,
-            rfqContext: nil,
-            cornerAnnotation: nil,
-            onProgress: onProgress
-        )
     }
 
     // MARK: - Private
@@ -170,11 +123,6 @@ struct ScanMetadata: Codable {
     // Scope of work
     let roomScope: RoomScope?
 
-    // Panoramic sweep data
-    let panoramicKeyframeCount: Int?
-    let panoramaStartTransform: [Float]?
-    let panoramicKeyframes: [KeyframeEntry]?
-
     enum CodingKeys: String, CodingKey {
         case captureFormat = "capture_format"
         case rfqId = "rfq_id"
@@ -198,9 +146,6 @@ struct ScanMetadata: Codable {
         case poseSidecarFilename = "pose_sidecar_filename"
         case depthSidecarFilename = "depth_sidecar_filename"
         case roomScope = "room_scope"
-        case panoramicKeyframeCount = "panoramic_keyframe_count"
-        case panoramaStartTransform = "panorama_start_transform"
-        case panoramicKeyframes = "panoramic_keyframes"
     }
 
     static func build(
@@ -210,22 +155,9 @@ struct ScanMetadata: Codable {
         scanDuration: TimeInterval,
         rfqContext: RFQContext?,
         cornerAnnotation: CornerAnnotation?,
-        roomScope: RoomScope? = nil,
-        panoramicFrames: [CapturedFrame] = [],
-        panoramaStartTransform: simd_float4x4? = nil
+        roomScope: RoomScope? = nil
     ) -> ScanMetadata {
         let device = UIDevice.current
-
-        // Flatten panorama start transform to 16-float array (column-major)
-        var startTransformArray: [Float]?
-        if let t = panoramaStartTransform {
-            startTransformArray = [
-                t.columns.0.x, t.columns.0.y, t.columns.0.z, t.columns.0.w,
-                t.columns.1.x, t.columns.1.y, t.columns.1.z, t.columns.1.w,
-                t.columns.2.x, t.columns.2.y, t.columns.2.z, t.columns.2.w,
-                t.columns.3.x, t.columns.3.y, t.columns.3.z, t.columns.3.w,
-            ]
-        }
 
         return ScanMetadata(
             captureFormat: "hevc",
@@ -257,20 +189,7 @@ struct ScanMetadata: Codable {
             videoFilename: "scan_video.mov",
             poseSidecarFilename: "poses.jsonl",
             depthSidecarFilename: "depth.bin",
-            roomScope: roomScope,
-            panoramicKeyframeCount: panoramicFrames.isEmpty ? nil : panoramicFrames.count,
-            panoramaStartTransform: startTransformArray,
-            panoramicKeyframes: panoramicFrames.isEmpty ? nil : panoramicFrames.map {
-                let name = String(format: "pano_%03d", $0.index)
-                let t = $0.cameraTransform
-                return KeyframeEntry(
-                    index: $0.index,
-                    filename: "\(name).jpg",
-                    depthFilename: "\(name).depth",
-                    timestamp: $0.timestamp,
-                    position: [t.columns.3.x, t.columns.3.y, t.columns.3.z]
-                )
-            }
+            roomScope: roomScope
         )
     }
 }
@@ -302,19 +221,6 @@ struct DepthFormat: Codable {
         case pixelFormat = "pixel_format"
         case width, height
         case byteOrder = "byte_order"
-    }
-}
-
-struct KeyframeEntry: Codable {
-    let index: Int
-    let filename: String
-    let depthFilename: String
-    let timestamp: TimeInterval
-    let position: [Float]?
-
-    enum CodingKeys: String, CodingKey {
-        case index, filename, timestamp, position
-        case depthFilename = "depth_filename"
     }
 }
 
