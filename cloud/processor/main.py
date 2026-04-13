@@ -741,16 +741,21 @@ def _validate_keyframes(scan_root: str, metadata: dict) -> None:
     if not os.path.isdir(keyframes_dir):
         raise ValueError("missing keyframes/ directory")
 
-    jpeg_files = sorted([f for f in os.listdir(keyframes_dir) if f.endswith(".jpg")])
-    json_files = sorted([f for f in os.listdir(keyframes_dir) if f.endswith(".json")])
-
-    if len(jpeg_files) != metadata["keyframe_count"]:
-        raise ValueError(f"keyframe count mismatch: expected {metadata['keyframe_count']}, found {len(jpeg_files)} JPEGs")
+    # Validate keyframes listed in metadata (not all files on disk, since frame
+    # selection may have reduced the manifest while extracted files remain).
+    keyframes_manifest = metadata.get("keyframes", [])
+    if keyframes_manifest:
+        jpeg_files = [kf["filename"] for kf in keyframes_manifest]
+    else:
+        jpeg_files = sorted([f for f in os.listdir(keyframes_dir) if f.endswith(".jpg")])
+    json_files = [f.replace(".jpg", ".json") for f in jpeg_files]
 
     # Validate JPEG headers — every JPEG starts with the SOI marker (0xFFD8)
     valid_jpegs = 0
     for jpg in jpeg_files:
         jpg_path = os.path.join(keyframes_dir, jpg)
+        if not os.path.exists(jpg_path):
+            raise ValueError(f"keyframe {jpg} listed in metadata but not found on disk")
         with open(jpg_path, "rb") as f:
             header = f.read(2)
             if header == b"\xff\xd8":
