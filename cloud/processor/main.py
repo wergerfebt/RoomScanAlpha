@@ -37,6 +37,7 @@ from pipeline.stage1 import (
     CLASSIFICATION_NAMES,
 )
 from pipeline.video_extract import extract_frames_from_hevc
+from pipeline.frame_selection import select_frames
 
 app = FastAPI(title="RoomScanAlpha Scan Processor (Stub)")
 
@@ -453,6 +454,9 @@ async def process_texture(request: Request) -> dict:
                 for i in range(result["frame_count"])
             ]
 
+        # Select best frames for texturing (no-op if <= 1500 frames)
+        _select_frames_for_texturing(scan_root, metadata)
+
         try:
             from pipeline.openmvs_texture import texture_scan
 
@@ -562,6 +566,24 @@ def _upload_to_gcs(local_path: str, blob_path: str) -> None:
     print(f"[Processor] Uploaded {blob_path} ({os.path.getsize(local_path)} bytes)")
 
 
+def _select_frames_for_texturing(scan_root: str, metadata: dict, max_frames: int = 1500) -> None:
+    """Select best frames for OpenMVS texturing if count exceeds max_frames.
+
+    Modifies metadata["keyframes"] and metadata["keyframe_count"] in-place.
+    No-op if frame count is already within budget or mesh is unavailable.
+    """
+    n = len(metadata.get("keyframes", []))
+    if n <= max_frames:
+        return
+    mesh_ply = os.path.join(scan_root, "mesh.ply")
+    if not os.path.exists(mesh_ply):
+        return
+    selected = select_frames(scan_root, metadata, mesh_ply, target_count=max_frames)
+    print(f"[Processor] Frame selection: {n} → {len(selected)} frames")
+    metadata["keyframes"] = selected
+    metadata["keyframe_count"] = len(selected)
+
+
 def _extract_zip(zip_path: str, extract_dir: str) -> None:
     """Validate and extract a zip archive."""
     if not zipfile.is_zipfile(zip_path):
@@ -621,6 +643,9 @@ def validate_structure(scan_root: str, scan_id: str) -> None:
             {"index": i, "filename": f"frame_{i:04d}.jpg"}
             for i in range(result["frame_count"])
         ]
+
+        # Select best frames for texturing (no-op if <= 1500 frames)
+        _select_frames_for_texturing(scan_root, metadata)
 
         # Write updated metadata back to disk so downstream steps (texture_scan,
         # process_texture) see the keyframes manifest when they re-read metadata.json.
@@ -1618,6 +1643,9 @@ async def process_supplemental(request: Request) -> dict:
             import traceback
             traceback.print_exc()
             return {"status": "failed", "error": str(e)}
+
+        # Step 3b: Select best frames from merged set (no-op if <= 1500)
+        _select_frames_for_texturing(merged_dir, merged_metadata)
 
         # Step 4: Re-texture with merged data
         texture_manifest = None
