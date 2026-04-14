@@ -310,31 +310,9 @@ def texture_scan(scan_root: str, metadata: dict, preview_faces: int = 0,
 
         # Decimate (0 = full mesh)
         if target_faces > 0 and original_faces > target_faces:
-            # Clean mesh topology before decimation — merged scans have overlapping
-            # geometry from supplemental merge that creates non-manifold edges.
-            # Without cleanup, quadric decimation tears holes at overlap boundaries.
-            dec_input = src_mesh.copy()
-            dec_input.merge_vertices()
-
-            # Remove degenerate faces (zero area)
-            nondeg_mask = dec_input.nondegenerate_faces()
-            if not nondeg_mask.all():
-                dec_input.update_faces(nondeg_mask)
-
-            # Remove duplicate faces (same vertices, any winding)
-            sorted_faces = np.sort(dec_input.faces, axis=1)
-            _, unique_idx = np.unique(sorted_faces, axis=0, return_index=True)
-            if len(unique_idx) < len(dec_input.faces):
-                dup_mask = np.zeros(len(dec_input.faces), dtype=bool)
-                dup_mask[unique_idx] = True
-                dec_input.update_faces(dup_mask)
-
-            cleaned = len(dec_input.faces)
-            if cleaned != original_faces:
-                print(f"[OpenMVS] [{level_name}] Cleaned: {original_faces} → {cleaned} faces before decimation")
-            dec = dec_input.simplify_quadric_decimation(face_count=target_faces)
+            dec = src_mesh.simplify_quadric_decimation(face_count=target_faces)
             dec.export(mesh_ply)
-            print(f"[OpenMVS] [{level_name}] Decimated: {cleaned} → {len(dec.faces)} faces")
+            print(f"[OpenMVS] [{level_name}] Decimated: {original_faces} → {len(dec.faces)} faces")
         else:
             src_mesh.export(mesh_ply)
             print(f"[OpenMVS] [{level_name}] Full mesh: {original_faces} faces")
