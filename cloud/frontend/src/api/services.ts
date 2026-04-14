@@ -1,0 +1,16 @@
+export const SERVICES = [
+  "Kitchen Remodel",
+  "Bathroom Remodel",
+  "Basement Finish",
+  "Flooring & Tile",
+  "Paint & Finish",
+  "Deck & Patio",
+  "Siding & Roof",
+  "Insulation & Drywall",
+  "Water Damage Restoration",
+  "Plumbing",
+  "Electrical",
+  "HVAC",
+  "Window & Door",
+  "General Renovation",
+];

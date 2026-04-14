@@ -39,8 +39,9 @@ cloud/processor/models/
 # Firebase hosting cache
 .firebase/
 
-# Node
+# Node / Vite
 node_modules/
+cloud/frontend/dist/
 
 # Test output from supplemental merge prototype
 cloud/processor/tests/local_scan/merged_*
