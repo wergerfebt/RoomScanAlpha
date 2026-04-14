@@ -54,6 +54,9 @@ a:hover { text-decoration: underline; }
 .badge-active, .badge-scan_ready { background: #d4edda; color: #155724; }
 .badge-complete, .badge-completed { background: #cce5ff; color: #004085; }
 .badge-error { background: #f8d7da; color: #721c24; }
+.badge-info { background: #cce5ff; color: #004085; }
+.badge-won { background: #d4edda; color: #155724; }
+.badge-lost { background: #e8e8ed; color: #6e6e73; }
 
 /* Forms */
 .form-input {

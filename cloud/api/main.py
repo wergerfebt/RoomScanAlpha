@@ -883,38 +883,91 @@ def list_bids(rfq_id: str, token: str = None, authorization: Optional[str] = Hea
         if not token_ok and not jwt_ok:
             raise HTTPException(status_code=403, detail="Invalid or missing authorization")
 
+        # Prefer org data if available, fall back to contractor data
         cursor.execute(
             """SELECT b.id, b.price_cents, b.description, b.pdf_url, b.received_at,
                       c.id AS contractor_id, c.name, c.icon_url, c.yelp_url,
-                      c.google_reviews_url, c.review_rating, c.review_count
+                      c.google_reviews_url, c.review_rating, c.review_count,
+                      o.id AS org_id, o.name AS org_name, o.icon_url AS org_icon,
+                      o.yelp_url AS org_yelp, o.google_reviews_url AS org_google,
+                      o.avg_rating AS org_rating, o.description AS org_description
                FROM bids b
                JOIN contractors c ON c.id = b.contractor_id
+               LEFT JOIN organizations o ON o.id = b.org_id
                WHERE b.rfq_id = %s
                ORDER BY b.price_cents ASC""",
             (rfq_id,),
         )
         rows = cursor.fetchall()
+
+        # Collect org IDs to batch-fetch gallery images
+        org_ids = [row[12] for row in rows if row[12]]
+        gallery_by_org = {}
+        if org_ids:
+            placeholders = ",".join(["%s"] * len(org_ids))
+            cursor.execute(
+                f"""SELECT org_id, id, image_url, before_image_url, image_type, caption
+                    FROM org_work_images
+                    WHERE org_id IN ({placeholders})
+                    ORDER BY sort_order, created_at
+                    LIMIT 50""",
+                org_ids,
+            )
+            for g_row in cursor.fetchall():
+                g_org_id = str(g_row[0])
+                if g_org_id not in gallery_by_org:
+                    gallery_by_org[g_org_id] = []
+                gallery_by_org[g_org_id].append({
+                    "id": str(g_row[1]),
+                    "image_url": g_row[2],
+                    "before_image_url": g_row[3],
+                    "image_type": g_row[4],
+                    "caption": g_row[5],
+                })
     finally:
         conn.close()
 
+    # Sign gallery image URLs
+    if gallery_by_org:
+        _credentials.refresh(_auth_request)
+        _bucket = storage_client.bucket(BUCKET_NAME)
+        _prefix = f"https://storage.googleapis.com/{BUCKET_NAME}/"
+        for org_key in gallery_by_org:
+            for img in gallery_by_org[org_key]:
+                for field in ("image_url", "before_image_url"):
+                    val = img.get(field)
+                    if val:
+                        blob_path = val.replace(_prefix, "") if val.startswith("http") else val
+                        img[field] = _bucket.blob(blob_path).generate_signed_url(
+                            version="v4", expiration=datetime.timedelta(days=7), method="GET",
+                            service_account_email=SIGNING_SA_EMAIL, access_token=_credentials.token,
+                        )
+
     bids = []
     for row in rows:
-        bid_id, price_cents, desc, pdf_url, received_at, c_id, c_name, c_icon, c_yelp, c_google, c_rating, c_count = row
+        (bid_id, price_cents, desc, pdf_url, received_at,
+         c_id, c_name, c_icon, c_yelp, c_google, c_rating, c_count,
+         org_id, org_name, org_icon, org_yelp, org_google, org_rating, org_desc) = row
+
+        # Use org data when available, fall back to contractor data
+        contractor = {
+            "id": str(org_id or c_id),
+            "name": org_name or c_name,
+            "icon_url": org_icon or c_icon,
+            "yelp_url": org_yelp or c_yelp,
+            "google_reviews_url": org_google or c_google,
+            "review_rating": float(org_rating) if org_rating else (float(c_rating) if c_rating else None),
+            "review_count": c_count,
+            "description": org_desc,
+            "gallery": gallery_by_org.get(str(org_id), [])[:3] if org_id else [],
+        }
         bids.append({
             "id": str(bid_id),
             "price_cents": price_cents,
             "description": desc,
             "pdf_url": pdf_url,
             "received_at": received_at.isoformat() if received_at else None,
-            "contractor": {
-                "id": str(c_id),
-                "name": c_name,
-                "icon_url": c_icon,
-                "yelp_url": c_yelp,
-                "google_reviews_url": c_google,
-                "review_rating": float(c_rating) if c_rating else None,
-                "review_count": c_count,
-            },
+            "contractor": contractor,
         })
 
     return {
@@ -1168,6 +1221,1126 @@ async def update_polygon(rfq_id: str, scan_id: str, request: Request, authorizat
         "perimeter_linear_ft": perimeter_ft,
         "ceiling_height_ft": avg_height_ft,
     }
+
+
+# --- Account endpoints ---
+
+@app.get("/api/account")
+def get_account(authorization: str = Header(None)) -> dict:
+    """Get or auto-create the current user's account."""
+    decoded = verify_firebase_token(authorization)
+    uid = decoded["uid"]
+    email = decoded.get("email", f"{uid}@unknown")
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """INSERT INTO accounts (firebase_uid, email, type)
+               VALUES (%s, %s, 'homeowner')
+               ON CONFLICT (firebase_uid) DO UPDATE SET firebase_uid = EXCLUDED.firebase_uid
+               RETURNING id, firebase_uid, email, name, phone, type, icon_url, address,
+                         notification_preferences""",
+            (uid, email),
+        )
+        row = cursor.fetchone()
+        conn.commit()
+
+        # Check if user belongs to an org
+        cursor.execute(
+            """SELECT o.id, o.name, om.role FROM org_members om
+               JOIN organizations o ON o.id = om.org_id
+               JOIN accounts a ON a.id = om.account_id
+               WHERE a.firebase_uid = %s AND o.deleted_at IS NULL
+               LIMIT 1""",
+            (uid,),
+        )
+        org_row = cursor.fetchone()
+    finally:
+        conn.close()
+
+    return {
+        "id": str(row[0]),
+        "email": row[2],
+        "name": row[3],
+        "phone": row[4],
+        "account_type": row[5],
+        "icon_url": _sign_icon_url(row[6]),
+        "address": row[7],
+        "notification_preferences": row[8] or {},
+        "org": {"id": str(org_row[0]), "name": org_row[1], "role": org_row[2]} if org_row else None,
+    }
+
+
+@app.put("/api/account")
+async def update_account(request: Request, authorization: str = Header(None)) -> dict:
+    """Update the current user's account profile."""
+    decoded = verify_firebase_token(authorization)
+    uid = decoded["uid"]
+    body = await request.json()
+
+    allowed = {"name", "phone", "icon_url", "address", "notification_preferences"}
+    updates = {k: v for k, v in body.items() if k in allowed}
+    if not updates:
+        raise HTTPException(400, "No valid fields to update")
+
+    set_clauses = ", ".join(f"{k} = %s" for k in updates)
+    values = list(updates.values())
+    # Serialize JSONB fields
+    if "notification_preferences" in updates:
+        idx = list(updates.keys()).index("notification_preferences")
+        values[idx] = json.dumps(values[idx])
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"UPDATE accounts SET {set_clauses} WHERE firebase_uid = %s RETURNING id",
+            values + [uid],
+        )
+        if not cursor.fetchone():
+            raise HTTPException(404, "Account not found")
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"status": "updated"}
+
+
+@app.get("/api/account/icon-upload-url")
+def account_icon_upload_url(content_type: str = "image/jpeg", authorization: str = Header(None)) -> dict:
+    """Get a signed GCS URL for uploading an account profile picture."""
+    decoded = verify_firebase_token(authorization)
+    uid = decoded["uid"]
+
+    allowed_types = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
+    if content_type not in allowed_types:
+        raise HTTPException(400, f"Unsupported content type. Allowed: {', '.join(allowed_types)}")
+
+    ext = allowed_types[content_type]
+    blob_path = f"accounts/{uid}/icon{ext}"
+
+    _credentials.refresh(_auth_request)
+    bucket = storage_client.bucket(BUCKET_NAME)
+    blob = bucket.blob(blob_path)
+    url = blob.generate_signed_url(
+        version="v4",
+        expiration=datetime.timedelta(minutes=SIGNED_URL_EXPIRY_MINUTES),
+        method="PUT",
+        content_type=content_type,
+        service_account_email=SIGNING_SA_EMAIL,
+        access_token=_credentials.token,
+    )
+
+    return {"upload_url": url, "blob_path": blob_path, "content_type": content_type}
+
+
+@app.get("/api/org/icon-upload-url")
+def org_icon_upload_url(content_type: str = "image/jpeg", authorization: str = Header(None)) -> dict:
+    """Get a signed GCS URL for uploading an org profile picture."""
+    decoded = verify_firebase_token(authorization)
+
+    allowed_types = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
+    if content_type not in allowed_types:
+        raise HTTPException(400, f"Unsupported content type. Allowed: {', '.join(allowed_types)}")
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        org_id, role = _get_user_org(cursor, decoded["uid"])
+        if role != "admin":
+            raise HTTPException(403, "Admin role required")
+    finally:
+        conn.close()
+
+    ext = allowed_types[content_type]
+    blob_path = f"orgs/{org_id}/icon{ext}"
+
+    _credentials.refresh(_auth_request)
+    bucket = storage_client.bucket(BUCKET_NAME)
+    blob = bucket.blob(blob_path)
+    url = blob.generate_signed_url(
+        version="v4",
+        expiration=datetime.timedelta(minutes=SIGNED_URL_EXPIRY_MINUTES),
+        method="PUT",
+        content_type=content_type,
+        service_account_email=SIGNING_SA_EMAIL,
+        access_token=_credentials.token,
+    )
+
+    return {"upload_url": url, "blob_path": blob_path, "content_type": content_type}
+
+
+@app.post("/api/account/request-org")
+async def request_org(request: Request, authorization: str = Header(None)) -> dict:
+    """Request creation of a contractor organization. Sends notification email."""
+    decoded = verify_firebase_token(authorization)
+    uid = decoded["uid"]
+    body = await request.json()
+    org_name = body.get("org_name", "").strip()
+    if not org_name:
+        raise HTTPException(400, "org_name is required")
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, email, name, phone, address FROM accounts WHERE firebase_uid = %s",
+            (uid,),
+        )
+        account = cursor.fetchone()
+        if not account:
+            raise HTTPException(404, "Account not found")
+
+        account_id, acct_email, acct_name, acct_phone, acct_address = account
+
+        cursor.execute(
+            "INSERT INTO org_requests (account_id, org_name) VALUES (%s, %s) RETURNING id",
+            (account_id, org_name),
+        )
+        req_id = cursor.fetchone()[0]
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Send emails
+    _send_org_request_emails(req_id, org_name, acct_email, acct_name, acct_phone, acct_address)
+
+    return {"request_id": str(req_id), "status": "pending"}
+
+
+def _send_org_request_emails(req_id, org_name, acct_email, acct_name, acct_phone, acct_address):
+    """Send request confirmation to requester + approval notification to admin."""
+    sendgrid_key = os.environ.get("SENDGRID_API_KEY", "")
+    if not sendgrid_key:
+        return
+    try:
+        from sendgrid import SendGridAPIClient
+        from sendgrid.helpers.mail import Mail
+
+        sg = SendGridAPIClient(sendgrid_key)
+        base_url = os.environ.get("SERVICE_URL", "https://scan-api-839349778883.us-central1.run.app")
+        approve_url = f"{base_url}/admin/approve-org/{req_id}"
+
+        # 1. Confirmation email to the requester
+        requester_html = f"""
+<h2>We received your request!</h2>
+<p style="font-size:15px;color:#333;line-height:1.6">
+  Hi {acct_name or 'there'},<br><br>
+  Your request to create a contractor account for <strong>{org_name}</strong> has been submitted.
+  We'll review it shortly and you'll receive an email once approved.
+</p>
+<p style="font-size:13px;color:#888;margin-top:24px">— The Quoterra Team</p>
+"""
+        sg.send(Mail(
+            from_email="notifications@roomscanalpha.com",
+            to_emails=acct_email,
+            subject=f"Request received: {org_name}",
+            html_content=requester_html,
+        ))
+
+        # 2. Approval email to admin
+        admin_html = f"""
+<h2>New Contractor Account Request</h2>
+<table style="border-collapse:collapse;font-size:15px;margin:16px 0">
+  <tr><td style="padding:6px 16px 6px 0;font-weight:600;color:#555">Company</td><td style="padding:6px 0">{org_name}</td></tr>
+  <tr><td style="padding:6px 16px 6px 0;font-weight:600;color:#555">Name</td><td style="padding:6px 0">{acct_name or 'Not provided'}</td></tr>
+  <tr><td style="padding:6px 16px 6px 0;font-weight:600;color:#555">Email</td><td style="padding:6px 0">{acct_email}</td></tr>
+  <tr><td style="padding:6px 16px 6px 0;font-weight:600;color:#555">Phone</td><td style="padding:6px 0">{acct_phone or 'Not provided'}</td></tr>
+  <tr><td style="padding:6px 16px 6px 0;font-weight:600;color:#555">Address</td><td style="padding:6px 0">{acct_address or 'Not provided'}</td></tr>
+</table>
+<a href="{approve_url}" style="display:inline-block;padding:14px 32px;background:#0055cc;color:#fff;
+   text-decoration:none;font-weight:700;font-size:16px;border-radius:8px;margin-top:8px">
+  Approve Contractor Account
+</a>
+<p style="margin-top:16px;font-size:13px;color:#888">Request ID: {req_id}</p>
+"""
+        sg.send(Mail(
+            from_email="notifications@roomscanalpha.com",
+            to_emails="jake@roomscanalpha.com",
+            subject=f"Contractor Request: {org_name}",
+            html_content=admin_html,
+        ))
+    except Exception as e:
+        print(f"[Email] Failed to send org request emails: {e}")
+
+
+@app.get("/admin/approve-org/{request_id}", response_class=HTMLResponse)
+def approve_org_request(request_id: str) -> str:
+    """Approve a contractor org request. Creates org, migrates account, links membership.
+
+    This is accessed via the approval link in the admin notification email.
+    The request UUID serves as the auth token (unguessable).
+    """
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+
+        # Look up the request
+        cursor.execute(
+            """SELECT r.id, r.account_id, r.org_name, r.status,
+                      a.email, a.name, a.phone, a.address
+               FROM org_requests r
+               JOIN accounts a ON a.id = r.account_id
+               WHERE r.id = %s""",
+            (request_id,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return _approval_page("Request Not Found", "This request does not exist.", error=True)
+
+        req_id, account_id, org_name, status, email, name, phone, address = row
+
+        if status == "approved":
+            return _approval_page("Already Approved",
+                f"{org_name} ({email}) was already approved.")
+
+        if status == "rejected":
+            return _approval_page("Already Rejected",
+                f"This request was previously rejected.", error=True)
+
+        # Create the organization
+        cursor.execute(
+            """INSERT INTO organizations (name) VALUES (%s) RETURNING id""",
+            (org_name,),
+        )
+        org_id = cursor.fetchone()[0]
+
+        # Link account to org as admin
+        cursor.execute(
+            """INSERT INTO org_members (org_id, account_id, role, invite_status)
+               VALUES (%s, %s, 'admin', 'accepted')
+               ON CONFLICT (org_id, account_id) DO NOTHING""",
+            (org_id, account_id),
+        )
+
+        # Update account type to contractor
+        cursor.execute(
+            "UPDATE accounts SET type = 'contractor' WHERE id = %s",
+            (account_id,),
+        )
+
+        # Mark request as approved
+        cursor.execute(
+            "UPDATE org_requests SET status = 'approved', resolved_at = now() WHERE id = %s",
+            (req_id,),
+        )
+
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Send approval email to the requester
+    sendgrid_key = os.environ.get("SENDGRID_API_KEY", "")
+    if sendgrid_key:
+        try:
+            from sendgrid import SendGridAPIClient
+            from sendgrid.helpers.mail import Mail
+
+            base_url = os.environ.get("SERVICE_URL", "https://scan-api-839349778883.us-central1.run.app")
+            org_url = f"{base_url}/org"
+
+            approval_html = f"""
+<h2>You're approved!</h2>
+<p style="font-size:15px;color:#333;line-height:1.6">
+  Hi {name or 'there'},<br><br>
+  Your contractor account for <strong>{org_name}</strong> has been approved.
+  You can now set up your organization profile, upload portfolio images, and start submitting bids.
+</p>
+<a href="{org_url}" style="display:inline-block;padding:14px 32px;background:#34c759;color:#fff;
+   text-decoration:none;font-weight:700;font-size:16px;border-radius:8px;margin-top:16px">
+  Go to Org Dashboard
+</a>
+<p style="font-size:13px;color:#888;margin-top:24px">— The Quoterra Team</p>
+"""
+            sg = SendGridAPIClient(sendgrid_key)
+            sg.send(Mail(
+                from_email="notifications@roomscanalpha.com",
+                to_emails=email,
+                subject=f"Approved: {org_name} is ready!",
+                html_content=approval_html,
+            ))
+        except Exception as e:
+            print(f"[Email] Failed to send approval notification: {e}")
+
+    return _approval_page("Approved!",
+        f"<strong>{org_name}</strong> has been created for {name or email}.<br>"
+        f"They've been notified by email and can now access the Org Dashboard.")
+
+
+def _approval_page(title: str, message: str, error: bool = False) -> str:
+    color = "#ff3b30" if error else "#34c759"
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{title} — Quoterra</title>
+<style>
+  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+         display: flex; align-items: center; justify-content: center; min-height: 100vh;
+         background: #f2f4f8; margin: 0; }}
+  .card {{ background: #fff; border-radius: 12px; padding: 40px; max-width: 480px;
+           text-align: center; box-shadow: 0 2px 12px rgba(0,0,0,0.08); }}
+  h1 {{ font-size: 24px; margin-bottom: 12px; color: {color}; }}
+  p {{ font-size: 15px; color: #555; line-height: 1.6; }}
+</style></head>
+<body><div class="card"><h1>{title}</h1><p>{message}</p></div></body></html>"""
+
+
+# --- Organization endpoints ---
+
+def _sign_icon_url(icon_url: str | None) -> str | None:
+    """Generate a signed read URL for an icon stored in GCS. Returns None if no icon."""
+    if not icon_url:
+        return None
+    prefix = f"https://storage.googleapis.com/{BUCKET_NAME}/"
+    blob_path = icon_url.replace(prefix, "") if icon_url.startswith("http") else icon_url
+    _credentials.refresh(_auth_request)
+    bucket = storage_client.bucket(BUCKET_NAME)
+    return bucket.blob(blob_path).generate_signed_url(
+        version="v4", expiration=datetime.timedelta(days=7), method="GET",
+        service_account_email=SIGNING_SA_EMAIL, access_token=_credentials.token,
+    )
+
+
+def _get_user_org(cursor, uid: str):
+    """Look up the org and role for a Firebase UID. Returns (org_id, role) or raises 403."""
+    cursor.execute(
+        """SELECT o.id, om.role FROM org_members om
+           JOIN organizations o ON o.id = om.org_id
+           JOIN accounts a ON a.id = om.account_id
+           WHERE a.firebase_uid = %s AND o.deleted_at IS NULL
+           LIMIT 1""",
+        (uid,),
+    )
+    row = cursor.fetchone()
+    if not row:
+        raise HTTPException(403, "Not a member of any organization")
+    return row[0], row[1]
+
+
+@app.get("/api/org")
+def get_org(authorization: str = Header(None)) -> dict:
+    """Get the current user's organization."""
+    decoded = verify_firebase_token(authorization)
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        org_id, role = _get_user_org(cursor, decoded["uid"])
+        cursor.execute(
+            """SELECT id, name, description, address, icon_url, website_url,
+                      yelp_url, google_reviews_url, avg_rating,
+                      service_lat, service_lng, service_radius_miles
+               FROM organizations WHERE id = %s""",
+            (org_id,),
+        )
+        row = cursor.fetchone()
+    finally:
+        conn.close()
+
+    return {
+        "id": str(row[0]),
+        "name": row[1],
+        "description": row[2],
+        "address": row[3],
+        "icon_url": _sign_icon_url(row[4]),
+        "website_url": row[5],
+        "yelp_url": row[6],
+        "google_reviews_url": row[7],
+        "avg_rating": float(row[8]) if row[8] else None,
+        "service_lat": row[9],
+        "service_lng": row[10],
+        "service_radius_miles": row[11],
+        "role": role,
+    }
+
+
+@app.put("/api/org")
+async def update_org(request: Request, authorization: str = Header(None)) -> dict:
+    """Update organization profile. Requires admin role."""
+    decoded = verify_firebase_token(authorization)
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        org_id, role = _get_user_org(cursor, decoded["uid"])
+        if role != "admin":
+            raise HTTPException(403, "Admin role required")
+
+        body = await request.json()
+        allowed = {"name", "description", "address", "icon_url", "website_url",
+                    "yelp_url", "google_reviews_url", "service_radius_miles"}
+        updates = {k: v for k, v in body.items() if k in allowed}
+        if not updates:
+            raise HTTPException(400, "No valid fields to update")
+
+        set_clauses = ", ".join(f"{k} = %s" for k in updates)
+        values = list(updates.values())
+        cursor.execute(
+            f"UPDATE organizations SET {set_clauses} WHERE id = %s",
+            values + [org_id],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"status": "updated"}
+
+
+@app.get("/api/org/members")
+def list_org_members(authorization: str = Header(None)) -> dict:
+    """List members of the current user's org."""
+    decoded = verify_firebase_token(authorization)
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        org_id, _ = _get_user_org(cursor, decoded["uid"])
+        cursor.execute(
+            """SELECT om.id, a.name, a.email, a.icon_url, om.role, om.invite_status
+               FROM org_members om
+               JOIN accounts a ON a.id = om.account_id
+               WHERE om.org_id = %s
+               ORDER BY om.invited_at""",
+            (org_id,),
+        )
+        rows = cursor.fetchall()
+    finally:
+        conn.close()
+
+    return {
+        "members": [
+            {"id": str(r[0]), "name": r[1], "email": r[2], "icon_url": r[3],
+             "role": r[4], "invite_status": r[5]}
+            for r in rows
+        ]
+    }
+
+
+@app.post("/api/org/members/invite")
+async def invite_org_member(request: Request, authorization: str = Header(None)) -> dict:
+    """Invite a member to the org by email. Admin role required."""
+    decoded = verify_firebase_token(authorization)
+    body = await request.json()
+    invite_email = body.get("email", "").strip().lower()
+    invite_role = body.get("role", "user")
+    if not invite_email:
+        raise HTTPException(400, "email is required")
+    if invite_role not in ("admin", "user"):
+        raise HTTPException(400, "role must be 'admin' or 'user'")
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        org_id, role = _get_user_org(cursor, decoded["uid"])
+        if role != "admin":
+            raise HTTPException(403, "Admin role required")
+
+        # Check if this email has an account
+        cursor.execute("SELECT id FROM accounts WHERE email = %s", (invite_email,))
+        account_row = cursor.fetchone()
+
+        if account_row:
+            # Account exists — link directly
+            account_id = account_row[0]
+            cursor.execute(
+                """INSERT INTO org_members (org_id, account_id, role, invited_email, invite_status)
+                   VALUES (%s, %s, %s, %s, 'accepted')
+                   ON CONFLICT (org_id, account_id) DO NOTHING
+                   RETURNING invite_token""",
+                (org_id, account_id, invite_role, invite_email),
+            )
+        else:
+            # No account yet — create a pending invite (no placeholder account)
+            # We use a NULL account_id; accept-invite will fill it in
+            cursor.execute(
+                """INSERT INTO org_members (org_id, account_id, role, invited_email, invite_status)
+                   VALUES (%s, NULL, %s, %s, 'pending')
+                   RETURNING invite_token""",
+                (org_id, invite_role, invite_email),
+            )
+
+        token_row = cursor.fetchone()
+        invite_token = str(token_row[0]) if token_row else None
+
+        conn.commit()
+
+        # Get org name for email
+        cursor.execute("SELECT name FROM organizations WHERE id = %s", (org_id,))
+        org_name = cursor.fetchone()[0]
+    finally:
+        conn.close()
+
+    # Send invite email with deep link
+    sendgrid_key = os.environ.get("SENDGRID_API_KEY", "")
+    if sendgrid_key and invite_token:
+        try:
+            from sendgrid import SendGridAPIClient
+            from sendgrid.helpers.mail import Mail
+
+            base_url = os.environ.get("SERVICE_URL", "https://scan-api-839349778883.us-central1.run.app")
+            invite_url = f"{base_url}/invite?token={invite_token}"
+            invite_html = f"""
+<h2>You've been invited!</h2>
+<p style="font-size:15px;color:#333;line-height:1.6">
+  You've been invited to join <strong>{org_name}</strong> on Quoterra as a team member.
+  Click below to create an account (or sign in) and join the team.
+</p>
+<a href="{invite_url}" style="display:inline-block;padding:14px 32px;background:#0055cc;color:#fff;
+   text-decoration:none;font-weight:700;font-size:16px;border-radius:8px;margin-top:16px">
+  Accept Invitation
+</a>
+<p style="font-size:13px;color:#888;margin-top:24px">— The Quoterra Team</p>
+"""
+            sg = SendGridAPIClient(sendgrid_key)
+            sg.send(Mail(
+                from_email="notifications@roomscanalpha.com",
+                to_emails=invite_email,
+                subject=f"You're invited to {org_name} on Quoterra",
+                html_content=invite_html,
+            ))
+        except Exception as e:
+            print(f"[Email] Failed to send invite: {e}")
+
+    return {"status": "invited", "email": invite_email}
+
+
+@app.post("/api/org/accept-invite")
+async def accept_invite(request: Request, authorization: str = Header(None)) -> dict:
+    """Accept an org invite using a token. Links the authenticated user to the org."""
+    decoded = verify_firebase_token(authorization)
+    uid = decoded["uid"]
+    email = decoded.get("email", "")
+    body = await request.json()
+    token = body.get("token", "").strip()
+    if not token:
+        raise HTTPException(400, "token is required")
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+
+        # Look up the invite by token
+        cursor.execute(
+            """SELECT om.id, om.org_id, om.invited_email, om.invite_status, om.role, o.name
+               FROM org_members om
+               JOIN organizations o ON o.id = om.org_id
+               WHERE om.invite_token = %s""",
+            (token,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(404, "Invite not found or expired")
+
+        member_id, org_id, invited_email, status, invite_role, org_name = row
+
+        if status == "accepted":
+            return {"status": "already_accepted", "org_name": org_name}
+
+        # Ensure/create account for this Firebase user
+        cursor.execute(
+            """INSERT INTO accounts (firebase_uid, email, type)
+               VALUES (%s, %s, 'contractor')
+               ON CONFLICT (firebase_uid) DO UPDATE SET type = 'contractor'
+               RETURNING id""",
+            (uid, email),
+        )
+        account_id = cursor.fetchone()[0]
+
+        # Link the invite to this account
+        cursor.execute(
+            """UPDATE org_members
+               SET account_id = %s, invite_status = 'accepted', accepted_at = now()
+               WHERE id = %s""",
+            (account_id, member_id),
+        )
+
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"status": "accepted", "org_id": str(org_id), "org_name": org_name}
+
+
+@app.delete("/api/org/members/{member_id}")
+def remove_org_member(member_id: str, authorization: str = Header(None)) -> dict:
+    """Remove a member from the org. Admin role required. Cannot remove yourself."""
+    decoded = verify_firebase_token(authorization)
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        org_id, role = _get_user_org(cursor, decoded["uid"])
+        if role != "admin":
+            raise HTTPException(403, "Admin role required")
+
+        # Don't allow removing yourself
+        cursor.execute(
+            """SELECT om.account_id FROM org_members om
+               JOIN accounts a ON a.id = om.account_id
+               WHERE om.id = %s AND om.org_id = %s""",
+            (member_id, org_id),
+        )
+        target = cursor.fetchone()
+        if not target:
+            raise HTTPException(404, "Member not found")
+
+        cursor.execute("SELECT id FROM accounts WHERE firebase_uid = %s", (decoded["uid"],))
+        my_account = cursor.fetchone()
+        if my_account and target[0] == my_account[0]:
+            raise HTTPException(400, "Cannot remove yourself")
+
+        cursor.execute("DELETE FROM org_members WHERE id = %s AND org_id = %s", (member_id, org_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"status": "removed"}
+
+
+@app.delete("/api/org")
+def delete_org(authorization: str = Header(None)) -> dict:
+    """Soft-delete the organization. Admin role required."""
+    decoded = verify_firebase_token(authorization)
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        org_id, role = _get_user_org(cursor, decoded["uid"])
+        if role != "admin":
+            raise HTTPException(403, "Admin role required")
+
+        cursor.execute("UPDATE organizations SET deleted_at = now() WHERE id = %s", (org_id,))
+        cursor.execute("DELETE FROM org_members WHERE org_id = %s", (org_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"status": "deleted"}
+
+
+@app.delete("/api/account")
+def delete_account(authorization: str = Header(None)) -> dict:
+    """Delete the current user's account and remove org memberships."""
+    decoded = verify_firebase_token(authorization)
+    uid = decoded["uid"]
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM accounts WHERE firebase_uid = %s", (uid,))
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(404, "Account not found")
+        account_id = row[0]
+
+        # Remove org memberships
+        cursor.execute("DELETE FROM org_members WHERE account_id = %s", (account_id,))
+        # Delete account
+        cursor.execute("DELETE FROM accounts WHERE id = %s", (account_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"status": "deleted"}
+
+
+# --- Gallery endpoints ---
+
+@app.get("/api/org/gallery")
+def list_gallery(authorization: str = Header(None)) -> dict:
+    """List portfolio images for the current user's org."""
+    decoded = verify_firebase_token(authorization)
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        org_id, _ = _get_user_org(cursor, decoded["uid"])
+        cursor.execute(
+            """SELECT m.id, m.image_type, m.image_url, m.before_image_url, m.caption,
+                      m.sort_order, m.media_type, m.album_id,
+                      a.title AS album_title, a.service_id
+               FROM org_work_images m
+               LEFT JOIN albums a ON a.id = m.album_id
+               WHERE m.org_id = %s
+               ORDER BY m.sort_order, m.created_at""",
+            (org_id,),
+        )
+        media_rows = cursor.fetchall()
+
+        # Fetch albums for this org
+        cursor.execute(
+            """SELECT a.id, a.title, a.description, a.service_id, a.rfq_id, a.created_at,
+                      s.name AS service_name
+               FROM albums a
+               LEFT JOIN services s ON s.id = a.service_id
+               WHERE a.org_id = %s
+               ORDER BY a.created_at DESC""",
+            (org_id,),
+        )
+        album_rows = cursor.fetchall()
+    finally:
+        conn.close()
+
+    # Generate signed read URLs
+    _credentials.refresh(_auth_request)
+    bucket = storage_client.bucket(BUCKET_NAME)
+
+    def _sign_read(url_or_path):
+        if not url_or_path:
+            return None
+        prefix = f"https://storage.googleapis.com/{BUCKET_NAME}/"
+        blob_path = url_or_path.replace(prefix, "") if url_or_path.startswith("http") else url_or_path
+        return bucket.blob(blob_path).generate_signed_url(
+            version="v4", expiration=datetime.timedelta(days=7), method="GET",
+            service_account_email=SIGNING_SA_EMAIL, access_token=_credentials.token,
+        )
+
+    return {
+        "media": [
+            {"id": str(r[0]), "image_type": r[1], "image_url": _sign_read(r[2]),
+             "before_image_url": _sign_read(r[3]), "caption": r[4], "sort_order": r[5],
+             "media_type": r[6] or "image", "album_id": str(r[7]) if r[7] else None,
+             "album_title": r[8]}
+            for r in media_rows
+        ],
+        "albums": [
+            {"id": str(r[0]), "title": r[1], "description": r[2],
+             "service_id": str(r[3]) if r[3] else None, "rfq_id": str(r[4]) if r[4] else None,
+             "created_at": r[5].isoformat() if r[5] else None, "service_name": r[6]}
+            for r in album_rows
+        ],
+    }
+
+
+@app.get("/api/org/gallery/upload-url")
+def gallery_upload_url(content_type: str = "image/jpeg", authorization: str = Header(None)) -> dict:
+    """Get a signed GCS URL for uploading a portfolio image or video."""
+    decoded = verify_firebase_token(authorization)
+
+    allowed_types = {
+        "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp",
+        "video/mp4": ".mp4", "video/quicktime": ".mov", "video/webm": ".webm",
+    }
+    if content_type not in allowed_types:
+        raise HTTPException(400, f"Unsupported content type. Allowed: {', '.join(allowed_types)}")
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        org_id, role = _get_user_org(cursor, decoded["uid"])
+        if role != "admin":
+            raise HTTPException(403, "Admin role required")
+    finally:
+        conn.close()
+
+    image_id = str(uuid.uuid4())
+    ext = allowed_types[content_type]
+    blob_path = f"orgs/{org_id}/gallery/{image_id}{ext}"
+
+    _credentials.refresh(_auth_request)
+    bucket = storage_client.bucket(BUCKET_NAME)
+    blob = bucket.blob(blob_path)
+    url = blob.generate_signed_url(
+        version="v4",
+        expiration=datetime.timedelta(minutes=SIGNED_URL_EXPIRY_MINUTES),
+        method="PUT",
+        content_type=content_type,
+        service_account_email=SIGNING_SA_EMAIL,
+        access_token=_credentials.token,
+    )
+
+    return {"upload_url": url, "blob_path": blob_path, "image_id": image_id, "content_type": content_type}
+
+
+@app.post("/api/org/gallery")
+async def add_gallery_image(request: Request, authorization: str = Header(None)) -> dict:
+    """Save a portfolio media record after uploading to GCS."""
+    decoded = verify_firebase_token(authorization)
+    body = await request.json()
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        org_id, role = _get_user_org(cursor, decoded["uid"])
+        if role != "admin":
+            raise HTTPException(403, "Admin role required")
+
+        image_url = body.get("image_url", "")
+        image_type = body.get("image_type", "single")
+        before_image_url = body.get("before_image_url")
+        caption = body.get("caption", "")
+        media_type = body.get("media_type", "image")
+        album_id = body.get("album_id")
+
+        cursor.execute(
+            """INSERT INTO org_work_images (org_id, image_type, image_url, before_image_url, caption, media_type, album_id)
+               VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+            (org_id, image_type, image_url, before_image_url, caption, media_type, album_id),
+        )
+        image_id = cursor.fetchone()[0]
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"id": str(image_id), "status": "created"}
+
+
+@app.delete("/api/org/gallery/{image_id}")
+def delete_gallery_image(image_id: str, authorization: str = Header(None)) -> dict:
+    """Delete a portfolio image."""
+    decoded = verify_firebase_token(authorization)
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        org_id, role = _get_user_org(cursor, decoded["uid"])
+        if role != "admin":
+            raise HTTPException(403, "Admin role required")
+        cursor.execute(
+            "DELETE FROM org_work_images WHERE id = %s AND org_id = %s",
+            (image_id, org_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"status": "deleted"}
+
+
+# --- Album endpoints ---
+
+@app.post("/api/org/albums")
+async def create_album(request: Request, authorization: str = Header(None)) -> dict:
+    """Create a new album."""
+    decoded = verify_firebase_token(authorization)
+    body = await request.json()
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        org_id, role = _get_user_org(cursor, decoded["uid"])
+        if role != "admin":
+            raise HTTPException(403, "Admin role required")
+
+        title = body.get("title", "").strip()
+        if not title:
+            raise HTTPException(400, "title is required")
+
+        cursor.execute(
+            """INSERT INTO albums (org_id, title, description, service_id, rfq_id)
+               VALUES (%s, %s, %s, %s, %s) RETURNING id""",
+            (org_id, title, body.get("description"), body.get("service_id"), body.get("rfq_id")),
+        )
+        album_id = cursor.fetchone()[0]
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"id": str(album_id), "status": "created"}
+
+
+@app.put("/api/org/albums/{album_id}")
+async def update_album(album_id: str, request: Request, authorization: str = Header(None)) -> dict:
+    """Update album title, description, service, or job link."""
+    decoded = verify_firebase_token(authorization)
+    body = await request.json()
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        org_id, role = _get_user_org(cursor, decoded["uid"])
+        if role != "admin":
+            raise HTTPException(403, "Admin role required")
+
+        allowed = {"title", "description", "service_id", "rfq_id"}
+        updates = {k: v for k, v in body.items() if k in allowed}
+        if not updates:
+            raise HTTPException(400, "No valid fields")
+
+        set_clauses = ", ".join(f"{k} = %s" for k in updates)
+        values = list(updates.values())
+        cursor.execute(
+            f"UPDATE albums SET {set_clauses} WHERE id = %s AND org_id = %s",
+            values + [album_id, org_id],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"status": "updated"}
+
+
+@app.delete("/api/org/albums/{album_id}")
+def delete_album(album_id: str, authorization: str = Header(None)) -> dict:
+    """Delete an album. Media items are unlinked (not deleted)."""
+    decoded = verify_firebase_token(authorization)
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        org_id, role = _get_user_org(cursor, decoded["uid"])
+        if role != "admin":
+            raise HTTPException(403, "Admin role required")
+
+        # Unlink media from this album
+        cursor.execute("UPDATE org_work_images SET album_id = NULL WHERE album_id = %s AND org_id = %s", (album_id, org_id))
+        cursor.execute("DELETE FROM albums WHERE id = %s AND org_id = %s", (album_id, org_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"status": "deleted"}
+
+
+# --- Jobs endpoint (contractor view of RFQs) ---
+
+@app.get("/api/org/jobs")
+def list_org_jobs(authorization: str = Header(None)) -> dict:
+    """List RFQs relevant to this org: ones they've bid on + available new ones."""
+    decoded = verify_firebase_token(authorization)
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        org_id, _ = _get_user_org(cursor, decoded["uid"])
+
+        # 1. RFQs this org has bid on (pending/won/lost)
+        cursor.execute(
+            """SELECT r.id, r.title, r.description, r.address, r.status, r.created_at,
+                      b.id AS bid_id, b.price_cents, b.status AS bid_status, b.received_at,
+                      a.name AS homeowner_name, a.icon_url AS homeowner_icon
+               FROM bids b
+               JOIN rfqs r ON r.id = b.rfq_id
+               LEFT JOIN accounts a ON a.id = r.homeowner_account_id
+               WHERE b.org_id = %s
+               ORDER BY b.received_at DESC""",
+            (org_id,),
+        )
+        bid_rows = cursor.fetchall()
+        bid_rfq_ids = {str(row[0]) for row in bid_rows}
+
+        # 2. Available RFQs this org hasn't bid on (status = scan_ready)
+        cursor.execute(
+            """SELECT r.id, r.title, r.description, r.address, r.status, r.created_at,
+                      a.name AS homeowner_name, a.icon_url AS homeowner_icon
+               FROM rfqs r
+               LEFT JOIN accounts a ON a.id = r.homeowner_account_id
+               WHERE r.status = 'scan_ready'
+               ORDER BY r.created_at DESC
+               LIMIT 50""",
+        )
+        avail_rows = cursor.fetchall()
+    finally:
+        conn.close()
+
+    jobs = []
+
+    # Add bid-based jobs
+    for row in bid_rows:
+        rfq_id, title, desc, addr, rfq_status, created, bid_id, price, bid_status, received, ho_name, ho_icon = row
+        job_status = "pending"
+        if bid_status == "accepted":
+            job_status = "won"
+        elif bid_status == "rejected":
+            job_status = "lost"
+
+        jobs.append({
+            "rfq_id": str(rfq_id),
+            "title": title or "Untitled Project",
+            "description": desc,
+            "address": addr,
+            "created_at": created.isoformat() if created else None,
+            "homeowner": {"name": ho_name, "icon_url": ho_icon},
+            "bid": {
+                "id": str(bid_id),
+                "price_cents": price,
+                "status": bid_status or "pending",
+                "received_at": received.isoformat() if received else None,
+            },
+            "job_status": job_status,
+        })
+
+    # Add available (new) jobs
+    for row in avail_rows:
+        rfq_id, title, desc, addr, rfq_status, created, ho_name, ho_icon = row
+        if str(rfq_id) in bid_rfq_ids:
+            continue  # Already have a bid on this one
+
+        jobs.append({
+            "rfq_id": str(rfq_id),
+            "title": title or "Untitled Project",
+            "description": desc,
+            "address": addr,
+            "created_at": created.isoformat() if created else None,
+            "homeowner": {"name": ho_name, "icon_url": ho_icon},
+            "bid": None,
+            "job_status": "new",
+        })
+
+    return {"jobs": jobs}
+
+
+# --- Services endpoint ---
+
+@app.get("/api/services")
+def list_services() -> dict:
+    """List all active services. Public endpoint."""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, name, description, icon_url FROM services WHERE is_active = TRUE ORDER BY name")
+        rows = cursor.fetchall()
+    finally:
+        conn.close()
+
+    return {
+        "services": [
+            {"id": str(r[0]), "name": r[1], "description": r[2], "icon_url": r[3]}
+            for r in rows
+        ]
+    }
+
+
+@app.get("/api/org/services")
+def get_org_services(authorization: str = Header(None)) -> dict:
+    """List services declared by the current user's org."""
+    decoded = verify_firebase_token(authorization)
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        org_id, _ = _get_user_org(cursor, decoded["uid"])
+        cursor.execute(
+            """SELECT s.id, s.name, os.years_experience
+               FROM org_services os
+               JOIN services s ON s.id = os.service_id
+               WHERE os.org_id = %s
+               ORDER BY s.name""",
+            (org_id,),
+        )
+        rows = cursor.fetchall()
+    finally:
+        conn.close()
+
+    return {
+        "services": [
+            {"id": str(r[0]), "name": r[1], "years_experience": r[2]}
+            for r in rows
+        ]
+    }
+
+
+@app.put("/api/org/services")
+async def update_org_services(request: Request, authorization: str = Header(None)) -> dict:
+    """Update org's declared services. Body: { service_ids: [uuid, ...] }"""
+    decoded = verify_firebase_token(authorization)
+    body = await request.json()
+    service_ids = body.get("service_ids", [])
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        org_id, role = _get_user_org(cursor, decoded["uid"])
+        if role != "admin":
+            raise HTTPException(403, "Admin role required")
+
+        cursor.execute("DELETE FROM org_services WHERE org_id = %s", (org_id,))
+        for sid in service_ids:
+            cursor.execute(
+                "INSERT INTO org_services (org_id, service_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                (org_id, sid),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"status": "updated", "count": len(service_ids)}
 
 
 @app.get("/health")
