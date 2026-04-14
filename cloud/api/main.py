@@ -1248,7 +1248,7 @@ def get_account(authorization: str = Header(None)) -> dict:
 
         # Check if user belongs to an org
         cursor.execute(
-            """SELECT o.id, o.name, om.role FROM org_members om
+            """SELECT o.id, o.name, om.role, o.icon_url FROM org_members om
                JOIN organizations o ON o.id = om.org_id
                JOIN accounts a ON a.id = om.account_id
                WHERE a.firebase_uid = %s AND o.deleted_at IS NULL
@@ -1268,7 +1268,10 @@ def get_account(authorization: str = Header(None)) -> dict:
         "icon_url": _sign_icon_url(row[6]),
         "address": row[7],
         "notification_preferences": row[8] or {},
-        "org": {"id": str(org_row[0]), "name": org_row[1], "role": org_row[2]} if org_row else None,
+        "org": {
+            "id": str(org_row[0]), "name": org_row[1], "role": org_row[2],
+            "icon_url": _sign_icon_url(org_row[3]),
+        } if org_row else None,
     }
 
 
@@ -1628,7 +1631,8 @@ def get_org(authorization: str = Header(None)) -> dict:
         cursor.execute(
             """SELECT id, name, description, address, icon_url, website_url,
                       yelp_url, google_reviews_url, avg_rating,
-                      service_lat, service_lng, service_radius_miles
+                      service_lat, service_lng, service_radius_miles,
+                      banner_image_url, business_hours
                FROM organizations WHERE id = %s""",
             (org_id,),
         )
@@ -1649,6 +1653,8 @@ def get_org(authorization: str = Header(None)) -> dict:
         "service_lat": row[9],
         "service_lng": row[10],
         "service_radius_miles": row[11],
+        "banner_image_url": _sign_icon_url(row[12]),
+        "business_hours": row[13] or {},
         "role": role,
     }
 
@@ -1666,10 +1672,19 @@ async def update_org(request: Request, authorization: str = Header(None)) -> dic
 
         body = await request.json()
         allowed = {"name", "description", "address", "icon_url", "website_url",
-                    "yelp_url", "google_reviews_url", "service_radius_miles"}
+                    "yelp_url", "google_reviews_url", "service_radius_miles",
+                    "banner_image_url", "business_hours",
+                    "service_lat", "service_lng"}
         updates = {k: v for k, v in body.items() if k in allowed}
         if not updates:
             raise HTTPException(400, "No valid fields to update")
+
+        # Serialize JSONB fields
+        if "business_hours" in updates:
+            idx = list(updates.keys()).index("business_hours")
+            values_list = list(updates.values())
+            values_list[idx] = json.dumps(values_list[idx])
+            updates = dict(zip(updates.keys(), values_list))
 
         set_clauses = ", ".join(f"{k} = %s" for k in updates)
         values = list(updates.values())
@@ -2178,6 +2193,136 @@ def delete_album(album_id: str, authorization: str = Header(None)) -> dict:
         conn.close()
 
     return {"status": "deleted"}
+
+
+# --- Public org profile ---
+
+@app.get("/api/orgs/{org_id}")
+def get_public_org(org_id: str) -> dict:
+    """Public org profile page data. No auth required."""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """SELECT id, name, description, address, icon_url, website_url,
+                      yelp_url, google_reviews_url, avg_rating,
+                      service_lat, service_lng, service_radius_miles,
+                      banner_image_url, business_hours
+               FROM organizations WHERE id = %s AND deleted_at IS NULL""",
+            (org_id,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(404, "Organization not found")
+
+        # Services
+        cursor.execute(
+            """SELECT s.id, s.name FROM org_services os
+               JOIN services s ON s.id = os.service_id
+               WHERE os.org_id = %s ORDER BY s.name""",
+            (org_id,),
+        )
+        svc_rows = cursor.fetchall()
+
+        # Gallery (all media, grouped by album)
+        cursor.execute(
+            """SELECT m.id, m.image_url, m.before_image_url, m.caption,
+                      m.media_type, m.album_id, a.title AS album_title,
+                      a.service_id, s.name AS service_name
+               FROM org_work_images m
+               LEFT JOIN albums a ON a.id = m.album_id
+               LEFT JOIN services s ON s.id = a.service_id
+               WHERE m.org_id = %s
+               ORDER BY m.sort_order, m.created_at""",
+            (org_id,),
+        )
+        media_rows = cursor.fetchall()
+
+        # Members (names only)
+        cursor.execute(
+            """SELECT a.name, a.icon_url, om.role FROM org_members om
+               JOIN accounts a ON a.id = om.account_id
+               WHERE om.org_id = %s AND om.invite_status = 'accepted'
+               ORDER BY om.invited_at""",
+            (org_id,),
+        )
+        member_rows = cursor.fetchall()
+    finally:
+        conn.close()
+
+    # Sign image URLs
+    _credentials.refresh(_auth_request)
+    _bucket = storage_client.bucket(BUCKET_NAME)
+    _prefix = f"https://storage.googleapis.com/{BUCKET_NAME}/"
+
+    def _sign(val):
+        if not val:
+            return None
+        blob_path = val.replace(_prefix, "") if val.startswith("http") else val
+        return _bucket.blob(blob_path).generate_signed_url(
+            version="v4", expiration=datetime.timedelta(days=7), method="GET",
+            service_account_email=SIGNING_SA_EMAIL, access_token=_credentials.token,
+        )
+
+    return {
+        "id": str(row[0]),
+        "name": row[1],
+        "description": row[2],
+        "address": row[3],
+        "icon_url": _sign(row[4]),
+        "website_url": row[5],
+        "yelp_url": row[6],
+        "google_reviews_url": row[7],
+        "avg_rating": float(row[8]) if row[8] else None,
+        "service_lat": row[9],
+        "service_lng": row[10],
+        "service_radius_miles": row[11],
+        "banner_image_url": _sign(row[12]),
+        "business_hours": row[13] or {},
+        "services": [{"id": str(r[0]), "name": r[1]} for r in svc_rows],
+        "gallery": [
+            {"id": str(r[0]), "image_url": _sign(r[1]), "before_image_url": _sign(r[2]),
+             "caption": r[3], "media_type": r[4] or "image",
+             "album_title": r[5], "service_name": r[8]}
+            for r in media_rows
+        ],
+        "team": [
+            {"name": r[0], "icon_url": _sign(r[1]), "role": r[2]}
+            for r in member_rows
+        ],
+    }
+
+
+@app.get("/api/org/banner-upload-url")
+def org_banner_upload_url(content_type: str = "image/jpeg", authorization: str = Header(None)) -> dict:
+    """Get a signed GCS URL for uploading an org banner image."""
+    decoded = verify_firebase_token(authorization)
+    allowed_types = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
+    if content_type not in allowed_types:
+        raise HTTPException(400, "Unsupported content type")
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        org_id, role = _get_user_org(cursor, decoded["uid"])
+        if role != "admin":
+            raise HTTPException(403, "Admin role required")
+    finally:
+        conn.close()
+
+    ext = allowed_types[content_type]
+    blob_path = f"orgs/{org_id}/banner{ext}"
+
+    _credentials.refresh(_auth_request)
+    bucket = storage_client.bucket(BUCKET_NAME)
+    blob = bucket.blob(blob_path)
+    url = blob.generate_signed_url(
+        version="v4", expiration=datetime.timedelta(minutes=SIGNED_URL_EXPIRY_MINUTES),
+        method="PUT", content_type=content_type,
+        service_account_email=SIGNING_SA_EMAIL, access_token=_credentials.token,
+    )
+
+    return {"upload_url": url, "blob_path": blob_path, "content_type": content_type}
 
 
 # --- Jobs endpoint (contractor view of RFQs) ---

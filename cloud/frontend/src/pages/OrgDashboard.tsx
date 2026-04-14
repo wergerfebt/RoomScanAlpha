@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
+import { useSearchParams } from "react-router-dom";
 import Layout from "../components/Layout";
 import JobCard, { type Job } from "../components/JobCard";
 import { apiFetch } from "../api/client";
@@ -13,6 +14,11 @@ interface OrgData {
   yelp_url: string | null;
   google_reviews_url: string | null;
   avg_rating: number | null;
+  service_lat: number | null;
+  service_lng: number | null;
+  service_radius_miles: number | null;
+  banner_image_url: string | null;
+  business_hours: Record<string, string>;
   role: string;
 }
 
@@ -65,7 +71,8 @@ export default function OrgDashboard() {
   const [org, setOrg] = useState<OrgData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [tab, setTab] = useState<Tab>("jobs");
+  const [params] = useSearchParams();
+  const tab = (params.get("tab") || "jobs") as Tab;
 
   useEffect(() => {
     apiFetch<OrgData>("/api/org")
@@ -89,48 +96,9 @@ export default function OrgDashboard() {
     );
   }
 
-  const tabs: { key: Tab; label: string }[] = [
-    { key: "jobs", label: "Jobs" },
-    { key: "settings", label: "Settings" },
-    { key: "gallery", label: "Gallery" },
-    { key: "members", label: "Members" },
-    { key: "services", label: "Services" },
-  ];
-
   return (
     <Layout>
       <div style={{ maxWidth: 800, margin: "0 auto", padding: "32px 24px 60px" }}>
-        <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 8 }}>{org.name}</h1>
-        {org.avg_rating && (
-          <p style={{ fontSize: 14, color: "var(--color-text-secondary)", marginBottom: 24 }}>
-            <span style={{ color: "#f5a623", fontWeight: 700 }}>{org.avg_rating.toFixed(1)} &#9733;</span>
-          </p>
-        )}
-
-        {/* Tabs */}
-        <div style={{ display: "flex", gap: 0, borderBottom: "2px solid var(--color-border)", marginBottom: 24 }}>
-          {tabs.map((t) => (
-            <button
-              key={t.key}
-              onClick={() => setTab(t.key)}
-              style={{
-                padding: "10px 20px",
-                fontSize: 14,
-                fontWeight: 600,
-                fontFamily: "inherit",
-                background: "none",
-                border: "none",
-                borderBottom: tab === t.key ? "2px solid var(--color-primary)" : "2px solid transparent",
-                color: tab === t.key ? "var(--color-primary)" : "var(--color-text-muted)",
-                cursor: "pointer",
-                marginBottom: -2,
-              }}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-
         {tab === "jobs" && <OrgJobs />}
         {tab === "settings" && <OrgSettings org={org} onUpdate={setOrg} />}
         {tab === "gallery" && <OrgGallery />}
@@ -211,6 +179,8 @@ function OrgJobs() {
 }
 
 
+const DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+
 function OrgSettings({ org, onUpdate }: { org: OrgData; onUpdate: (o: OrgData) => void }) {
   const [name, setName] = useState(org.name);
   const [description, setDescription] = useState(org.description || "");
@@ -218,8 +188,12 @@ function OrgSettings({ org, onUpdate }: { org: OrgData; onUpdate: (o: OrgData) =
   const [website, setWebsite] = useState(org.website_url || "");
   const [yelp, setYelp] = useState(org.yelp_url || "");
   const [google, setGoogle] = useState(org.google_reviews_url || "");
+  const [radius, setRadius] = useState(String(org.service_radius_miles || ""));
+  const [hours, setHours] = useState<Record<string, string>>(org.business_hours || {});
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
+  const [iconUrl, setIconUrl] = useState(org.icon_url);
+  const [bannerUrl, setBannerUrl] = useState(org.banner_image_url);
 
   async function handleSave(e: FormEvent) {
     e.preventDefault();
@@ -231,9 +205,12 @@ function OrgSettings({ org, onUpdate }: { org: OrgData; onUpdate: (o: OrgData) =
         body: JSON.stringify({
           name, description, address,
           website_url: website, yelp_url: yelp, google_reviews_url: google,
+          service_radius_miles: radius ? parseFloat(radius) : null,
+          business_hours: hours,
         }),
       });
-      onUpdate({ ...org, name, description, address, website_url: website, yelp_url: yelp, google_reviews_url: google });
+      const updated = await apiFetch<OrgData>("/api/org");
+      onUpdate(updated);
       setMessage("Saved");
       setTimeout(() => setMessage(""), 2000);
     } catch {
@@ -243,90 +220,118 @@ function OrgSettings({ org, onUpdate }: { org: OrgData; onUpdate: (o: OrgData) =
     }
   }
 
+  async function uploadImage(endpoint: string, file: File, onDone: (url: string) => void, saveField: string) {
+    const fileType = file.type || "image/jpeg";
+    const { upload_url, blob_path, content_type } = await apiFetch<{
+      upload_url: string; blob_path: string; content_type: string;
+    }>(`${endpoint}?content_type=${encodeURIComponent(fileType)}`);
+    await fetch(upload_url, { method: "PUT", headers: { "Content-Type": content_type }, body: file });
+    await apiFetch("/api/org", { method: "PUT", body: JSON.stringify({ [saveField]: blob_path }) });
+    const updated = await apiFetch<OrgData>("/api/org");
+    onDone(saveField === "icon_url" ? updated.icon_url! : updated.banner_image_url!);
+    onUpdate(updated);
+  }
+
   const fieldStyle = { marginBottom: 14 };
   const labelStyle = { display: "block" as const, fontSize: 13, fontWeight: 600, color: "var(--color-text-secondary)", marginBottom: 4 };
 
-  const [iconUrl, setIconUrl] = useState(org.icon_url);
-
   return (
-    <div className="card" style={{ padding: 24 }}>
-      {/* Org profile picture */}
-      <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 20 }}>
+    <div>
+      {/* Banner */}
+      <div className="card" style={{ overflow: "hidden", marginBottom: 20 }}>
         <div style={{
-          width: 72, height: 72, borderRadius: 12, background: "var(--color-info-bg)",
-          display: "flex", alignItems: "center", justifyContent: "center",
-          fontSize: 24, fontWeight: 700, color: "var(--color-primary)", overflow: "hidden",
-          flexShrink: 0,
+          height: 140, background: bannerUrl
+            ? `url(${bannerUrl}) center/cover no-repeat`
+            : "linear-gradient(135deg, #0055cc 0%, #0088ff 100%)",
+          display: "flex", alignItems: "flex-end", justifyContent: "flex-end", padding: 12,
         }}>
-          {iconUrl
-            ? <img src={iconUrl} alt="" style={{ width: 72, height: 72, objectFit: "cover" }} />
-            : org.name[0].toUpperCase()
-          }
-        </div>
-        <div>
-          <label
-            className="btn"
-            style={{ fontSize: 13, padding: "6px 14px", cursor: "pointer" }}
-          >
-            Change Logo
-            <input
-              type="file"
-              accept="image/*"
-              style={{ display: "none" }}
+          <label className="btn" style={{ fontSize: 12, padding: "4px 12px", cursor: "pointer", background: "rgba(255,255,255,0.9)" }}>
+            Change Banner
+            <input type="file" accept="image/*" style={{ display: "none" }}
               onChange={async (e) => {
-                const file = e.target.files?.[0];
-                if (!file) return;
-                try {
-                  const fileType = file.type || "image/jpeg";
-                  const { upload_url, blob_path, content_type } = await apiFetch<{
-                    upload_url: string; blob_path: string; content_type: string;
-                  }>(`/api/org/icon-upload-url?content_type=${encodeURIComponent(fileType)}`);
-                  await fetch(upload_url, { method: "PUT", headers: { "Content-Type": content_type }, body: file });
-                  await apiFetch("/api/org", { method: "PUT", body: JSON.stringify({ icon_url: blob_path }) });
-                  const updated = await apiFetch<OrgData>("/api/org");
-                  setIconUrl(updated.icon_url);
-                  onUpdate(updated);
-                } catch { setMessage("Logo upload failed"); }
+                const f = e.target.files?.[0]; if (!f) return;
+                try { await uploadImage("/api/org/banner-upload-url", f, setBannerUrl, "banner_image_url"); }
+                catch { setMessage("Banner upload failed"); }
                 e.target.value = "";
-              }}
-            />
+              }} />
           </label>
-          <p style={{ fontSize: 12, color: "var(--color-text-muted)", marginTop: 4 }}>JPG, PNG, or WebP</p>
+        </div>
+
+        {/* Logo */}
+        <div style={{ display: "flex", alignItems: "center", gap: 16, padding: "16px 24px" }}>
+          <div style={{
+            width: 72, height: 72, borderRadius: 12, background: "var(--color-info-bg)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: 24, fontWeight: 700, color: "var(--color-primary)", overflow: "hidden", flexShrink: 0,
+          }}>
+            {iconUrl ? <img src={iconUrl} alt="" style={{ width: 72, height: 72, objectFit: "cover" }} /> : org.name[0].toUpperCase()}
+          </div>
+          <div>
+            <label className="btn" style={{ fontSize: 13, padding: "6px 14px", cursor: "pointer" }}>
+              Change Logo
+              <input type="file" accept="image/*" style={{ display: "none" }}
+                onChange={async (e) => {
+                  const f = e.target.files?.[0]; if (!f) return;
+                  try { await uploadImage("/api/org/icon-upload-url", f, setIconUrl, "icon_url"); }
+                  catch { setMessage("Logo upload failed"); }
+                  e.target.value = "";
+                }} />
+            </label>
+            <p style={{ fontSize: 12, color: "var(--color-text-muted)", marginTop: 4 }}>JPG, PNG, or WebP</p>
+          </div>
         </div>
       </div>
 
-      <form onSubmit={handleSave}>
-        <div style={fieldStyle}>
-          <label style={labelStyle}>Company Name</label>
-          <input className="form-input" value={name} onChange={(e) => setName(e.target.value)} />
-        </div>
-        <div style={fieldStyle}>
-          <label style={labelStyle}>Description</label>
-          <textarea className="form-input" value={description} onChange={(e) => setDescription(e.target.value)} rows={3} style={{ resize: "vertical" }} />
-        </div>
-        <div style={fieldStyle}>
-          <label style={labelStyle}>Address</label>
-          <input className="form-input" value={address} onChange={(e) => setAddress(e.target.value)} placeholder="Business address" />
-        </div>
-        <div style={fieldStyle}>
-          <label style={labelStyle}>Website</label>
-          <input className="form-input" value={website} onChange={(e) => setWebsite(e.target.value)} placeholder="https://..." />
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, ...fieldStyle }}>
-          <div>
-            <label style={labelStyle}>Yelp URL</label>
-            <input className="form-input" value={yelp} onChange={(e) => setYelp(e.target.value)} placeholder="Yelp page" />
+      {/* Profile form */}
+      <div className="card" style={{ padding: 24, marginBottom: 20 }}>
+        <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 16 }}>Profile</h3>
+        <form onSubmit={handleSave}>
+          <div style={fieldStyle}>
+            <label style={labelStyle}>Company Name</label>
+            <input className="form-input" value={name} onChange={(e) => setName(e.target.value)} />
           </div>
-          <div>
-            <label style={labelStyle}>Google Reviews URL</label>
-            <input className="form-input" value={google} onChange={(e) => setGoogle(e.target.value)} placeholder="Google reviews" />
+          <div style={fieldStyle}>
+            <label style={labelStyle}>About / Description</label>
+            <textarea className="form-input" value={description} onChange={(e) => setDescription(e.target.value)} rows={4} style={{ resize: "vertical" }} />
           </div>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <button className="btn btn-primary" type="submit" disabled={saving}>{saving ? "Saving..." : "Save"}</button>
-          {message && <span style={{ fontSize: 13, fontWeight: 600, color: message === "Saved" ? "var(--color-success)" : "var(--color-danger)" }}>{message}</span>}
-        </div>
-      </form>
+          <div style={fieldStyle}>
+            <label style={labelStyle}>Website</label>
+            <input className="form-input" value={website} onChange={(e) => setWebsite(e.target.value)} placeholder="https://..." />
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, ...fieldStyle }}>
+            <div><label style={labelStyle}>Yelp URL</label><input className="form-input" value={yelp} onChange={(e) => setYelp(e.target.value)} placeholder="Yelp page" /></div>
+            <div><label style={labelStyle}>Google Reviews URL</label><input className="form-input" value={google} onChange={(e) => setGoogle(e.target.value)} placeholder="Google reviews" /></div>
+          </div>
+
+          <h3 style={{ fontSize: 16, fontWeight: 700, margin: "24px 0 16px" }}>Location & Service Area</h3>
+          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 14, ...fieldStyle }}>
+            <div><label style={labelStyle}>Address</label><input className="form-input" value={address} onChange={(e) => setAddress(e.target.value)} placeholder="Business address" /></div>
+            <div><label style={labelStyle}>Job Radius (miles)</label><input className="form-input" type="number" value={radius} onChange={(e) => setRadius(e.target.value)} placeholder="e.g. 30" /></div>
+          </div>
+
+          <h3 style={{ fontSize: 16, fontWeight: 700, margin: "24px 0 16px" }}>Business Hours</h3>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, ...fieldStyle }}>
+            {DAYS.map((day) => (
+              <div key={day} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ width: 80, fontSize: 13, textTransform: "capitalize", color: "var(--color-text-secondary)" }}>{day}</span>
+                <input className="form-input" value={hours[day] || ""} onChange={(e) => setHours({ ...hours, [day]: e.target.value })}
+                  placeholder="e.g. 8AM - 5PM" style={{ flex: 1, padding: "6px 10px", fontSize: 13 }} />
+              </div>
+            ))}
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 8 }}>
+            <button className="btn btn-primary" type="submit" disabled={saving}>{saving ? "Saving..." : "Save"}</button>
+            {message && <span style={{ fontSize: 13, fontWeight: 600, color: message === "Saved" ? "var(--color-success)" : "var(--color-danger)" }}>{message}</span>}
+          </div>
+
+          <div style={{ marginTop: 12 }}>
+            <a href={`/contractors/${org.id}`} target="_blank" style={{ fontSize: 13, fontWeight: 600 }}>
+              View public profile &rarr;
+            </a>
+          </div>
+        </form>
+      </div>
 
       {/* Delete org */}
       <div style={{ borderTop: "1px solid var(--color-border-light)", marginTop: 24, paddingTop: 24 }}>

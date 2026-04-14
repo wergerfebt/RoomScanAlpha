@@ -6,6 +6,7 @@ import ProjectQuotes from "./pages/ProjectQuotes";
 import Search from "./pages/Search";
 import Account from "./pages/Account";
 import OrgDashboard from "./pages/OrgDashboard";
+import OrgProfile from "./pages/OrgProfile";
 import Invite from "./pages/Invite";
 import ProtectedRoute from "./components/ProtectedRoute";
 
@@ -16,6 +17,7 @@ export default function App() {
       <Route path="/login" element={<Login />} />
       <Route path="/search" element={<Search />} />
       <Route path="/invite" element={<Invite />} />
+      <Route path="/contractors/:orgId" element={<OrgProfile />} />
       <Route
         path="/projects"
         element={
