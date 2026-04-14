@@ -1,5 +1,13 @@
 import { useState } from "react";
 
+export interface GalleryImage {
+  id: string;
+  image_url: string | null;
+  before_image_url: string | null;
+  image_type: string;
+  caption: string | null;
+}
+
 export interface Contractor {
   id: string;
   name: string;
@@ -8,6 +16,8 @@ export interface Contractor {
   google_reviews_url: string | null;
   review_rating: number | null;
   review_count: number | null;
+  description?: string | null;
+  gallery?: GalleryImage[];
 }
 
 export interface Bid {
@@ -138,6 +148,29 @@ export default function ContractorCard({
               </a>
             )}
           </div>
+
+          {/* Gallery thumbnails */}
+          {c.gallery && c.gallery.length > 0 && (
+            <div style={{
+              display: "flex", gap: 8, marginBottom: 14, overflowX: "auto",
+              paddingBottom: 4,
+            }}>
+              {c.gallery.map((img) => (
+                <div key={img.id} style={{
+                  flexShrink: 0, width: 120, height: 90, borderRadius: 8,
+                  overflow: "hidden", background: "var(--color-border-light)",
+                }}>
+                  {img.image_url && (
+                    <img
+                      src={img.image_url}
+                      alt={img.caption || ""}
+                      style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                    />
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* Bid description */}
           {bid?.description && (
