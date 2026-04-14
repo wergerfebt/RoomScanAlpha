@@ -308,17 +308,9 @@ def texture_scan(scan_root: str, metadata: dict, preview_faces: int = 0,
         mesh_ply = os.path.join(level_dir, "mesh.ply")
         os.makedirs(level_dir, exist_ok=True)
 
-        # Decimate (0 = full mesh). Use fast_simplification with low aggressiveness
-        # to preserve mesh boundaries and avoid creating holes in thin geometry.
+        # Decimate (0 = full mesh)
         if target_faces > 0 and original_faces > target_faces:
-            import fast_simplification
-            verts_dec, faces_dec = fast_simplification.simplify(
-                np.array(src_mesh.vertices, dtype=np.float64),
-                np.array(src_mesh.faces, dtype=np.int64),
-                target_count=target_faces,
-                agg=5,  # moderate — reaches target count while preserving boundaries
-            )
-            dec = trimesh.Trimesh(vertices=verts_dec, faces=faces_dec, process=False)
+            dec = src_mesh.simplify_quadric_decimation(face_count=target_faces)
             dec.export(mesh_ply)
             print(f"[OpenMVS] [{level_name}] Decimated: {original_faces} → {len(dec.faces)} faces")
         else:
@@ -326,7 +318,7 @@ def texture_scan(scan_root: str, metadata: dict, preview_faces: int = 0,
             print(f"[OpenMVS] [{level_name}] Full mesh: {original_faces} faces")
 
         atlas_size = 8192
-        level_timeout = 600 if level_name == "standard" else 180
+        level_timeout = 600 if level_name == "standard" else 300
         level_result = _run_texture_mesh(
             scene_mvs, mesh_ply, level_dir, prefix="textured",
             max_texture_size=atlas_size,

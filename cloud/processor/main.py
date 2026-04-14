@@ -1658,9 +1658,9 @@ async def process_supplemental(request: Request) -> dict:
             from pipeline.openmvs_texture import texture_scan
 
             # Merged scans need both preview (for coverage) and standard (for web viewer).
-            # Use higher preview target (100K) to avoid decimation artifacts on merged geometry.
+            # Use higher preview target (200K) to reduce decimation holes on merged geometry.
             tex_output = texture_scan(merged_dir, merged_metadata,
-                                      preview_faces=100000,
+                                      preview_faces=200000,
                                       levels=["preview", "standard"])
 
             # Upload textured outputs to GCS (overwrite previous)
