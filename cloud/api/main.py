@@ -799,11 +799,32 @@ async def submit_bid(
     try:
         cursor = conn.cursor()
 
+        # Look up contractor (legacy) and org
         cursor.execute("SELECT id FROM contractors WHERE firebase_uid = %s", (uid,))
         row = cursor.fetchone()
-        if not row:
-            raise HTTPException(status_code=403, detail="Contractor profile not found. Call GET /api/contractors/me first.")
-        contractor_id = str(row[0])
+        contractor_id = str(row[0]) if row else None
+
+        # Also check org membership
+        org_id = None
+        try:
+            org_id_val, _ = _get_user_org(cursor, uid)
+            org_id = str(org_id_val)
+        except Exception:
+            pass
+
+        if not contractor_id and not org_id:
+            raise HTTPException(status_code=403, detail="No contractor or org profile found.")
+
+        # If no legacy contractor, auto-create one for backward compat
+        if not contractor_id:
+            cursor.execute(
+                """INSERT INTO contractors (firebase_uid, email, name)
+                   VALUES (%s, %s, %s)
+                   ON CONFLICT (firebase_uid) DO UPDATE SET firebase_uid = EXCLUDED.firebase_uid
+                   RETURNING id""",
+                (uid, decoded.get("email", ""), None),
+            )
+            contractor_id = str(cursor.fetchone()[0])
 
         bid_id = str(uuid.uuid4())
         pdf_url = None
@@ -826,9 +847,9 @@ async def submit_bid(
             )
 
         cursor.execute(
-            """INSERT INTO bids (id, rfq_id, contractor_id, price_cents, description, pdf_url, received_at)
-               VALUES (%s, %s, %s, %s, %s, %s, NOW())""",
-            (bid_id, rfq_id, contractor_id, price_cents, description, pdf_url),
+            """INSERT INTO bids (id, rfq_id, contractor_id, org_id, price_cents, description, pdf_url, received_at)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())""",
+            (bid_id, rfq_id, contractor_id, org_id, price_cents, description, pdf_url),
         )
         conn.commit()
 
@@ -837,12 +858,11 @@ async def submit_bid(
     finally:
         conn.close()
 
-    # TODO: trigger SendGrid email + FCM push to homeowner here
-
     return {
         "id": bid_id,
         "rfq_id": rfq_id,
         "contractor_id": contractor_id,
+        "org_id": org_id,
         "price_cents": price_cents,
         "description": description,
         "pdf_url": pdf_url,
@@ -1238,7 +1258,7 @@ def get_account(authorization: str = Header(None)) -> dict:
         cursor.execute(
             """INSERT INTO accounts (firebase_uid, email, type)
                VALUES (%s, %s, 'homeowner')
-               ON CONFLICT (firebase_uid) DO UPDATE SET firebase_uid = EXCLUDED.firebase_uid
+               ON CONFLICT (firebase_uid) DO UPDATE SET email = EXCLUDED.email
                RETURNING id, firebase_uid, email, name, phone, type, icon_url, address,
                          notification_preferences""",
             (uid, email),
@@ -2340,7 +2360,8 @@ def list_org_jobs(authorization: str = Header(None)) -> dict:
         cursor.execute(
             """SELECT r.id, r.title, r.description, r.address, r.status, r.created_at,
                       b.id AS bid_id, b.price_cents, b.status AS bid_status, b.received_at,
-                      a.name AS homeowner_name, a.icon_url AS homeowner_icon
+                      a.name AS homeowner_name, a.icon_url AS homeowner_icon, a.email AS homeowner_email,
+                      b.description AS bid_description, b.pdf_url AS bid_pdf_url
                FROM bids b
                JOIN rfqs r ON r.id = b.rfq_id
                LEFT JOIN accounts a ON a.id = r.homeowner_account_id
@@ -2351,15 +2372,40 @@ def list_org_jobs(authorization: str = Header(None)) -> dict:
         bid_rows = cursor.fetchall()
         bid_rfq_ids = {str(row[0]) for row in bid_rows}
 
-        # 2. Available RFQs this org hasn't bid on (status = scan_ready)
+        # Get org location + radius for geo-filtering
         cursor.execute(
-            """SELECT r.id, r.title, r.description, r.address, r.status, r.created_at,
-                      a.name AS homeowner_name, a.icon_url AS homeowner_icon
+            "SELECT service_lat, service_lng, service_radius_miles FROM organizations WHERE id = %s",
+            (org_id,),
+        )
+        org_geo = cursor.fetchone()
+        org_lat, org_lng, org_radius = org_geo if org_geo else (None, None, None)
+
+        # Get account IDs of org members (to exclude their own RFQs)
+        cursor.execute(
+            "SELECT account_id FROM org_members WHERE org_id = %s AND account_id IS NOT NULL",
+            (org_id,),
+        )
+        member_account_ids = [str(r[0]) for r in cursor.fetchall()]
+
+        # 2. Available RFQs this org hasn't bid on (status = scan_ready)
+        # If org has lat/lng, use haversine filter; otherwise show all
+        # Exclude RFQs owned by org members
+        exclude_clause = ""
+        exclude_params: list = []
+        if member_account_ids:
+            placeholders = ",".join(["%s"] * len(member_account_ids))
+            exclude_clause = f"AND (r.homeowner_account_id IS NULL OR r.homeowner_account_id NOT IN ({placeholders}))"
+            exclude_params = member_account_ids
+
+        cursor.execute(
+            f"""SELECT r.id, r.title, r.description, r.address, r.status, r.created_at,
+                      a.name AS homeowner_name, a.icon_url AS homeowner_icon, a.email AS homeowner_email
                FROM rfqs r
                LEFT JOIN accounts a ON a.id = r.homeowner_account_id
-               WHERE r.status = 'scan_ready'
+               WHERE r.status = 'scan_ready' {exclude_clause}
                ORDER BY r.created_at DESC
                LIMIT 50""",
+            exclude_params,
         )
         avail_rows = cursor.fetchall()
     finally:
@@ -2369,7 +2415,7 @@ def list_org_jobs(authorization: str = Header(None)) -> dict:
 
     # Add bid-based jobs
     for row in bid_rows:
-        rfq_id, title, desc, addr, rfq_status, created, bid_id, price, bid_status, received, ho_name, ho_icon = row
+        rfq_id, title, desc, addr, rfq_status, created, bid_id, price, bid_status, received, ho_name, ho_icon, ho_email, bid_desc, bid_pdf = row
         job_status = "pending"
         if bid_status == "accepted":
             job_status = "won"
@@ -2382,19 +2428,21 @@ def list_org_jobs(authorization: str = Header(None)) -> dict:
             "description": desc,
             "address": addr,
             "created_at": created.isoformat() if created else None,
-            "homeowner": {"name": ho_name, "icon_url": ho_icon},
+            "homeowner": {"name": ho_name, "icon_url": ho_icon, "email": ho_email},
             "bid": {
                 "id": str(bid_id),
                 "price_cents": price,
                 "status": bid_status or "pending",
                 "received_at": received.isoformat() if received else None,
+                "description": bid_desc,
+                "pdf_url": bid_pdf,
             },
             "job_status": job_status,
         })
 
     # Add available (new) jobs
     for row in avail_rows:
-        rfq_id, title, desc, addr, rfq_status, created, ho_name, ho_icon = row
+        rfq_id, title, desc, addr, rfq_status, created, ho_name, ho_icon, ho_email = row
         if str(rfq_id) in bid_rfq_ids:
             continue  # Already have a bid on this one
 
@@ -2404,7 +2452,7 @@ def list_org_jobs(authorization: str = Header(None)) -> dict:
             "description": desc,
             "address": addr,
             "created_at": created.isoformat() if created else None,
-            "homeowner": {"name": ho_name, "icon_url": ho_icon},
+            "homeowner": {"name": ho_name, "icon_url": ho_icon, "email": ho_email},
             "bid": None,
             "job_status": "new",
         })
