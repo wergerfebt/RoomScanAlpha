@@ -316,7 +316,7 @@ def texture_scan(scan_root: str, metadata: dict, preview_faces: int = 0,
                 np.array(src_mesh.vertices, dtype=np.float64),
                 np.array(src_mesh.faces, dtype=np.int64),
                 target_count=target_faces,
-                agg=1,  # least aggressive — best boundary preservation
+                agg=5,  # moderate — reaches target count while preserving boundaries
             )
             dec = trimesh.Trimesh(vertices=verts_dec, faces=faces_dec, process=False)
             dec.export(mesh_ply)
