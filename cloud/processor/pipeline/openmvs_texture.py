@@ -318,7 +318,7 @@ def texture_scan(scan_root: str, metadata: dict, preview_faces: int = 0,
             print(f"[OpenMVS] [{level_name}] Full mesh: {original_faces} faces")
 
         atlas_size = 8192
-        level_timeout = 600 if level_name == "standard" else 300
+        level_timeout = 600 if level_name == "standard" else 180
         level_result = _run_texture_mesh(
             scene_mvs, mesh_ply, level_dir, prefix="textured",
             max_texture_size=atlas_size,
