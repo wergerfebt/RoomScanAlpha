@@ -1,6 +1,6 @@
 {
   "hosting": {
-    "public": "frontend",
+    "public": "cloud/frontend/dist",
     "ignore": [
       "firebase.json",
       "**/.*",
@@ -17,13 +17,37 @@
     ],
     "rewrites": [
       {
-        "source": "/api/signup",
-        "function": "signup"
+        "source": "/api/**",
+        "run": {
+          "serviceId": "scan-api",
+          "region": "us-central1"
+        }
+      },
+      {
+        "source": "/quote/**",
+        "run": {
+          "serviceId": "scan-api",
+          "region": "us-central1"
+        }
+      },
+      {
+        "source": "/bids/**",
+        "run": {
+          "serviceId": "scan-api",
+          "region": "us-central1"
+        }
+      },
+      {
+        "source": "/admin/**",
+        "run": {
+          "serviceId": "scan-api",
+          "region": "us-central1"
+        }
+      },
+      {
+        "source": "**",
+        "destination": "/index.html"
       }
     ]
-  },
-  "functions": {
-    "source": "functions",
-    "runtime": "nodejs20"
   }
 }
