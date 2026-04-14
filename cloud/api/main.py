@@ -21,6 +21,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException, Request, UploadFile, File, Form
 from fastapi.responses import JSONResponse, HTMLResponse, FileResponse, Response
+from fastapi.staticfiles import StaticFiles
 from google.cloud import storage, tasks_v2
 from google.cloud.sql.connector import Connector
 from google.auth import default as default_credentials, compute_engine
@@ -132,21 +133,29 @@ def list_rfqs(authorization: str = Header(None)) -> dict:
     try:
         cursor = conn.cursor()
         cursor.execute(
-            f"""SELECT id, title, description, status, created_at, address
-                FROM rfqs WHERE user_id = %s ORDER BY created_at DESC LIMIT {MAX_RFQS_PER_PAGE}""",
+            f"""SELECT r.id, r.title, r.description, r.status, r.created_at, r.address,
+                       r.bid_view_token,
+                       (SELECT count(*) FROM scanned_rooms sr WHERE sr.rfq_id = r.id) AS scan_count,
+                       (SELECT count(*) FROM bids b WHERE b.rfq_id = r.id) AS bid_count
+                FROM rfqs r WHERE r.user_id = %s ORDER BY r.created_at DESC LIMIT {MAX_RFQS_PER_PAGE}""",
             (uid,),
         )
         rows = cursor.fetchall()
     finally:
         conn.close()
 
-    columns = ["id", "title", "description", "status", "created_at", "address"]
     return {
         "rfqs": [
             {
-                **_row_to_dict(columns, row),
                 "id": str(row[0]),
+                "title": row[1],
+                "description": row[2],
+                "status": row[3],
                 "created_at": row[4].isoformat() if row[4] else None,
+                "address": row[5],
+                "bid_view_token": row[6],
+                "scan_count": row[7],
+                "bid_count": row[8],
             }
             for row in rows
         ]
@@ -842,23 +851,37 @@ async def submit_bid(
 
 
 @app.get("/api/rfqs/{rfq_id}/bids")
-def list_bids(rfq_id: str, token: str = None) -> dict:
-    """Return all bids for an RFQ with nested contractor profiles. Auth via bid_view_token."""
+def list_bids(rfq_id: str, token: str = None, authorization: Optional[str] = Header(None)) -> dict:
+    """Return all bids for an RFQ with nested contractor profiles.
+
+    Auth: either a valid bid_view_token query param OR a Firebase JWT
+    belonging to the RFQ owner.
+    """
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
 
         cursor.execute(
-            "SELECT description, bid_view_token FROM rfqs WHERE id = %s",
+            "SELECT description, bid_view_token, user_id FROM rfqs WHERE id = %s",
             (rfq_id,),
         )
         rfq_row = cursor.fetchone()
         if not rfq_row:
             raise HTTPException(status_code=404, detail="RFQ not found")
 
-        project_description, bid_view_token = rfq_row
-        if not token or str(bid_view_token) != token:
-            raise HTTPException(status_code=403, detail="Invalid or missing bid view token")
+        project_description, bid_view_token, rfq_owner_uid = rfq_row
+
+        # Auth check: token-based OR JWT owner
+        token_ok = token and str(bid_view_token) == token
+        jwt_ok = False
+        if authorization and not token_ok:
+            try:
+                decoded = verify_firebase_token(authorization)
+                jwt_ok = decoded["uid"] == rfq_owner_uid
+            except Exception:
+                pass
+        if not token_ok and not jwt_ok:
+            raise HTTPException(status_code=403, detail="Invalid or missing authorization")
 
         cursor.execute(
             """SELECT b.id, b.price_cents, b.description, b.pdf_url, b.received_at,
@@ -1151,3 +1174,24 @@ async def update_polygon(rfq_id: str, scan_id: str, request: Request, authorizat
 def health() -> dict:
     """Health check endpoint for Cloud Run readiness/liveness probes."""
     return {"status": "ok"}
+
+
+# --- React SPA serving ---
+# Vite build output is copied to spa/ during Docker build.
+# Mount static assets (JS/CSS bundles) and add a catch-all for client-side routing.
+_spa_dir = Path(__file__).parent / "spa"
+if _spa_dir.exists() and (_spa_dir / "assets").exists():
+    app.mount("/assets", StaticFiles(directory=_spa_dir / "assets"), name="spa-assets")
+
+
+@app.get("/{path:path}", response_class=HTMLResponse)
+def serve_spa(path: str) -> str:
+    """Catch-all: serve the React SPA index.html for client-side routing.
+
+    This MUST be defined after all other routes so that API endpoints,
+    legacy HTML pages (/quote, /bids, /admin), and static assets take priority.
+    """
+    index_path = _spa_dir / "index.html"
+    if index_path.exists():
+        return index_path.read_text()
+    raise HTTPException(status_code=404, detail="Not found")
