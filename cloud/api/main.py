@@ -137,7 +137,7 @@ def list_rfqs(authorization: str = Header(None)) -> dict:
                        r.bid_view_token,
                        (SELECT count(*) FROM scanned_rooms sr WHERE sr.rfq_id = r.id) AS scan_count,
                        (SELECT count(*) FROM bids b WHERE b.rfq_id = r.id) AS bid_count
-                FROM rfqs r WHERE r.user_id = %s ORDER BY r.created_at DESC LIMIT {MAX_RFQS_PER_PAGE}""",
+                FROM rfqs r WHERE r.user_id = %s AND r.deleted_at IS NULL ORDER BY r.created_at DESC LIMIT {MAX_RFQS_PER_PAGE}""",
             (uid,),
         )
         rows = cursor.fetchall()
@@ -576,6 +576,48 @@ def get_scan_file(rfq_id: str, scan_id: str, filepath: str):
         raise HTTPException(status_code=404, detail=f"File not found: {filepath}")
 
 
+@app.put("/api/rfqs/{rfq_id}")
+async def update_rfq(rfq_id: str, request: Request, authorization: str = Header(None)) -> dict:
+    """Update RFQ title, address, or description. Flags pending bids as modified."""
+    decoded = verify_firebase_token(authorization)
+    uid = decoded["uid"]
+    body = await request.json()
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+
+        # Verify ownership
+        cursor.execute("SELECT user_id FROM rfqs WHERE id = %s", (rfq_id,))
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(404, "RFQ not found")
+        if row[0] != uid:
+            raise HTTPException(403, "Not the owner of this RFQ")
+
+        allowed = {"title", "description", "address"}
+        updates = {k: v for k, v in body.items() if k in allowed}
+        if not updates:
+            raise HTTPException(400, "No valid fields to update")
+
+        set_clauses = ", ".join(f"{k} = %s" for k in updates)
+        values = list(updates.values())
+        cursor.execute(f"UPDATE rfqs SET {set_clauses} WHERE id = %s", values + [rfq_id])
+
+        # Flag pending bids that the project has changed
+        cursor.execute(
+            "UPDATE bids SET rfq_modified_after_bid = TRUE WHERE rfq_id = %s AND status = 'pending'",
+            (rfq_id,),
+        )
+        flagged = cursor.rowcount
+
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"status": "updated", "bids_flagged": flagged}
+
+
 @app.delete("/api/rfqs/{rfq_id}")
 def delete_rfq(rfq_id: str, authorization: str = Header(None)) -> dict:
     """Soft-delete an RFQ and all its scans.
@@ -588,21 +630,17 @@ def delete_rfq(rfq_id: str, authorization: str = Header(None)) -> dict:
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
-        # Soft-delete all scans for this RFQ
+
+        # Soft-delete the RFQ (preserves all data, bids stay visible to contractors)
         cursor.execute(
-            """UPDATE scanned_rooms
-               SET scan_status = 'deleted'
-               WHERE rfq_id = %s AND scan_status != 'deleted'""",
+            "UPDATE rfqs SET deleted_at = now() WHERE id = %s AND deleted_at IS NULL",
             (rfq_id,),
         )
-        deleted_scans = cursor.rowcount
-
-        # Delete the RFQ itself
-        cursor.execute("DELETE FROM rfqs WHERE id = %s", (rfq_id,))
         if cursor.rowcount == 0:
             conn.rollback()
             raise HTTPException(status_code=404, detail="RFQ not found")
 
+        deleted_scans = 0
         conn.commit()
     finally:
         conn.close()
@@ -973,7 +1011,7 @@ def list_bids(rfq_id: str, token: str = None, authorization: Optional[str] = Hea
         contractor = {
             "id": str(org_id or c_id),
             "name": org_name or c_name,
-            "icon_url": org_icon or c_icon,
+            "icon_url": _sign_icon_url(org_icon or c_icon),
             "yelp_url": org_yelp or c_yelp,
             "google_reviews_url": org_google or c_google,
             "review_rating": float(org_rating) if org_rating else (float(c_rating) if c_rating else None),
@@ -2345,6 +2383,238 @@ def org_banner_upload_url(content_type: str = "image/jpeg", authorization: str =
     return {"upload_url": url, "blob_path": blob_path, "content_type": content_type}
 
 
+# --- Hire / Accept bid ---
+
+@app.post("/api/rfqs/{rfq_id}/accept-bid")
+async def accept_bid(rfq_id: str, request: Request, authorization: str = Header(None)) -> dict:
+    """Accept a bid. Sets bid status to 'accepted', rejects others, updates RFQ."""
+    decoded = verify_firebase_token(authorization)
+    uid = decoded["uid"]
+    body = await request.json()
+    bid_id = body.get("bid_id")
+    if not bid_id:
+        raise HTTPException(400, "bid_id is required")
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+
+        # Verify the user owns this RFQ
+        cursor.execute("SELECT user_id, homeowner_account_id FROM rfqs WHERE id = %s", (rfq_id,))
+        rfq_row = cursor.fetchone()
+        if not rfq_row:
+            raise HTTPException(404, "RFQ not found")
+
+        rfq_uid, rfq_account_id = rfq_row
+        # Check ownership via Firebase UID or account
+        if rfq_uid != uid:
+            cursor.execute("SELECT id FROM accounts WHERE firebase_uid = %s", (uid,))
+            acct = cursor.fetchone()
+            if not acct or (rfq_account_id and acct[0] != rfq_account_id):
+                raise HTTPException(403, "Not the owner of this RFQ")
+
+        # Accept the chosen bid, reject all others
+        cursor.execute("UPDATE bids SET status = 'accepted' WHERE id = %s AND rfq_id = %s", (bid_id, rfq_id))
+        cursor.execute("UPDATE bids SET status = 'rejected' WHERE rfq_id = %s AND id != %s AND status = 'pending'", (rfq_id, bid_id))
+        cursor.execute("UPDATE rfqs SET hired_bid_id = %s, status = 'completed' WHERE id = %s", (bid_id, rfq_id))
+        conn.commit()
+
+        # Fetch data for notification emails
+        cursor.execute(
+            """SELECT b.price_cents, b.description, b.pdf_url, b.received_at, b.org_id,
+                      r.title, r.description AS rfq_desc, r.address, r.created_at,
+                      ha.name AS ho_name, ha.email AS ho_email, ha.phone AS ho_phone,
+                      o.name AS org_name
+               FROM bids b
+               JOIN rfqs r ON r.id = b.rfq_id
+               LEFT JOIN accounts ha ON ha.id = r.homeowner_account_id
+               LEFT JOIN organizations o ON o.id = b.org_id
+               WHERE b.id = %s""",
+            (bid_id,),
+        )
+        email_row = cursor.fetchone()
+
+        # Get winning org member emails
+        winning_emails = []
+        if email_row and email_row[4]:
+            cursor.execute(
+                """SELECT a.email FROM org_members om
+                   JOIN accounts a ON a.id = om.account_id
+                   WHERE om.org_id = %s AND om.invite_status = 'accepted' AND a.email IS NOT NULL""",
+                (email_row[4],),
+            )
+            winning_emails = [r[0] for r in cursor.fetchall() if r[0] and "@unknown" not in r[0]]
+
+        # Get losing org member emails (grouped by org)
+        cursor.execute(
+            """SELECT DISTINCT b2.org_id FROM bids b2
+               WHERE b2.rfq_id = %s AND b2.id != %s AND b2.org_id IS NOT NULL AND b2.status = 'rejected'""",
+            (rfq_id, bid_id),
+        )
+        losing_org_ids = [str(r[0]) for r in cursor.fetchall()]
+        losing_emails = []
+        for lo_id in losing_org_ids:
+            cursor.execute(
+                """SELECT a.email FROM org_members om
+                   JOIN accounts a ON a.id = om.account_id
+                   WHERE om.org_id = %s AND om.invite_status = 'accepted' AND a.email IS NOT NULL""",
+                (lo_id,),
+            )
+            losing_emails.extend([r[0] for r in cursor.fetchall() if r[0] and "@unknown" not in r[0]])
+    finally:
+        conn.close()
+
+    # Send notification emails
+    if email_row:
+        price_cents, bid_desc, bid_pdf, bid_received, org_id_val, \
+            rfq_title, rfq_desc, rfq_addr, rfq_created, \
+            ho_name, ho_email, ho_phone, org_name = email_row
+
+        _send_bid_accepted_emails(
+            rfq_id=rfq_id,
+            rfq_title=rfq_title or "Project",
+            rfq_desc=rfq_desc,
+            rfq_addr=rfq_addr,
+            rfq_created=rfq_created,
+            price_cents=price_cents,
+            bid_desc=bid_desc,
+            bid_pdf=bid_pdf,
+            bid_received=bid_received,
+            ho_name=ho_name,
+            ho_email=ho_email,
+            ho_phone=ho_phone,
+            org_name=org_name or "Contractor",
+            winning_emails=winning_emails,
+            losing_emails=losing_emails,
+        )
+
+    return {"status": "accepted", "bid_id": bid_id}
+
+
+def _send_bid_accepted_emails(*, rfq_id, rfq_title, rfq_desc, rfq_addr, rfq_created,
+                               price_cents, bid_desc, bid_pdf, bid_received,
+                               ho_name, ho_email, ho_phone, org_name,
+                               winning_emails, losing_emails):
+    """Send bid acceptance notifications to winner, homeowner, and losers."""
+    sendgrid_key = os.environ.get("SENDGRID_API_KEY", "")
+    if not sendgrid_key:
+        return
+    try:
+        from sendgrid import SendGridAPIClient
+        from sendgrid.helpers.mail import Mail
+
+        sg = SendGridAPIClient(sendgrid_key)
+        base_url = os.environ.get("SERVICE_URL", "https://scan-api-839349778883.us-central1.run.app")
+        scan_url = f"{base_url}/quote/{rfq_id}"
+        price_str = f"${price_cents / 100:,.0f}" if price_cents else "N/A"
+        now_str = datetime.datetime.now().strftime("%B %d, %Y")
+        posted_str = rfq_created.strftime("%B %d, %Y") if rfq_created else "N/A"
+        bid_date_str = bid_received.strftime("%B %d, %Y") if bid_received else "N/A"
+
+        detail_rows = f"""
+<tr><td style="padding:6px 16px 6px 0;font-weight:600;color:#555">Project</td><td style="padding:6px 0">{rfq_title}</td></tr>
+<tr><td style="padding:6px 16px 6px 0;font-weight:600;color:#555">Address</td><td style="padding:6px 0">{rfq_addr or 'N/A'}</td></tr>
+<tr><td style="padding:6px 16px 6px 0;font-weight:600;color:#555">Total Price</td><td style="padding:6px 0;font-size:18px;font-weight:700">{price_str}</td></tr>
+<tr><td style="padding:6px 16px 6px 0;font-weight:600;color:#555">Posted</td><td style="padding:6px 0">{posted_str}</td></tr>
+<tr><td style="padding:6px 16px 6px 0;font-weight:600;color:#555">Quote Submitted</td><td style="padding:6px 0">{bid_date_str}</td></tr>
+<tr><td style="padding:6px 16px 6px 0;font-weight:600;color:#555">Accepted</td><td style="padding:6px 0">{now_str}</td></tr>"""
+
+        if rfq_desc:
+            detail_rows += f'\n<tr><td style="padding:6px 16px 6px 0;font-weight:600;color:#555">Project Description</td><td style="padding:6px 0">{rfq_desc}</td></tr>'
+        if bid_desc:
+            detail_rows += f'\n<tr><td style="padding:6px 16px 6px 0;font-weight:600;color:#555">Work Description</td><td style="padding:6px 0">{bid_desc}</td></tr>'
+
+        pdf_link = ""
+        if bid_pdf:
+            pdf_link = f'<p style="margin-top:12px"><a href="{bid_pdf}" style="color:#0055cc;font-weight:600">View Attached Quote (PDF)</a></p>'
+
+        # 1. Email to winning contractor org members
+        for email_addr in winning_emails:
+            winner_html = f"""
+<h2 style="color:#34c759">You won the job!</h2>
+<p style="font-size:15px;color:#333;line-height:1.6">
+  Congratulations! Your quote for <strong>{rfq_title}</strong> has been accepted.
+</p>
+<h3 style="margin-top:20px;font-size:14px;color:#555">Homeowner Contact</h3>
+<table style="border-collapse:collapse;font-size:15px;margin:8px 0">
+  <tr><td style="padding:4px 16px 4px 0;font-weight:600;color:#555">Name</td><td style="padding:4px 0">{ho_name or 'N/A'}</td></tr>
+  <tr><td style="padding:4px 16px 4px 0;font-weight:600;color:#555">Email</td><td style="padding:4px 0"><a href="mailto:{ho_email}" style="color:#0055cc">{ho_email or 'N/A'}</a></td></tr>
+  <tr><td style="padding:4px 16px 4px 0;font-weight:600;color:#555">Phone</td><td style="padding:4px 0">{ho_phone or 'N/A'}</td></tr>
+</table>
+<h3 style="margin-top:20px;font-size:14px;color:#555">Job Details</h3>
+<table style="border-collapse:collapse;font-size:15px;margin:8px 0">
+  {detail_rows}
+</table>
+{pdf_link}
+<a href="{scan_url}" style="display:inline-block;padding:14px 32px;background:#0055cc;color:#fff;
+   text-decoration:none;font-weight:700;font-size:16px;border-radius:8px;margin-top:20px">
+  View 3D Scan
+</a>
+<p style="font-size:13px;color:#888;margin-top:24px">&mdash; The Quoterra Team</p>
+"""
+            sg.send(Mail(
+                from_email="notifications@roomscanalpha.com",
+                to_emails=email_addr,
+                subject=f"You won the job: {rfq_title}",
+                html_content=winner_html,
+            ))
+
+        # 2. Email to homeowner
+        if ho_email and "@unknown" not in ho_email:
+            homeowner_html = f"""
+<h2>You hired {org_name}!</h2>
+<p style="font-size:15px;color:#333;line-height:1.6">
+  Great news! You've selected <strong>{org_name}</strong> for your project <strong>{rfq_title}</strong>.
+  They'll be in touch soon to get started.
+</p>
+<h3 style="margin-top:20px;font-size:14px;color:#555">Contractor</h3>
+<table style="border-collapse:collapse;font-size:15px;margin:8px 0">
+  <tr><td style="padding:4px 16px 4px 0;font-weight:600;color:#555">Company</td><td style="padding:4px 0">{org_name}</td></tr>
+</table>
+<h3 style="margin-top:20px;font-size:14px;color:#555">Job Details</h3>
+<table style="border-collapse:collapse;font-size:15px;margin:8px 0">
+  {detail_rows}
+</table>
+{pdf_link}
+<a href="{scan_url}" style="display:inline-block;padding:14px 32px;background:#0055cc;color:#fff;
+   text-decoration:none;font-weight:700;font-size:16px;border-radius:8px;margin-top:20px">
+  View Project
+</a>
+<p style="font-size:13px;color:#888;margin-top:24px">&mdash; The Quoterra Team</p>
+"""
+            sg.send(Mail(
+                from_email="notifications@roomscanalpha.com",
+                to_emails=ho_email,
+                subject=f"You hired {org_name} for {rfq_title}",
+                html_content=homeowner_html,
+            ))
+
+        # 3. Emails to losing contractors
+        for email_addr in losing_emails:
+            loser_html = f"""
+<h2>Update on {rfq_title}</h2>
+<p style="font-size:15px;color:#333;line-height:1.6">
+  The homeowner has selected another contractor for <strong>{rfq_title}</strong>
+  at <strong>{rfq_addr or 'the project address'}</strong>.
+  Thank you for submitting your quote &mdash; we appreciate your time and look forward to connecting you with future opportunities.
+</p>
+<a href="{base_url}/org?tab=jobs" style="display:inline-block;padding:14px 32px;background:#0055cc;color:#fff;
+   text-decoration:none;font-weight:700;font-size:16px;border-radius:8px;margin-top:16px">
+  View Jobs
+</a>
+<p style="font-size:13px;color:#888;margin-top:24px">&mdash; The Quoterra Team</p>
+"""
+            sg.send(Mail(
+                from_email="notifications@roomscanalpha.com",
+                to_emails=email_addr,
+                subject=f"Update on {rfq_title}",
+                html_content=loser_html,
+            ))
+
+    except Exception as e:
+        print(f"[Email] Failed to send bid acceptance emails: {e}")
+
+
 # --- Jobs endpoint (contractor view of RFQs) ---
 
 @app.get("/api/org/jobs")
@@ -2361,7 +2631,8 @@ def list_org_jobs(authorization: str = Header(None)) -> dict:
             """SELECT r.id, r.title, r.description, r.address, r.status, r.created_at,
                       b.id AS bid_id, b.price_cents, b.status AS bid_status, b.received_at,
                       a.name AS homeowner_name, a.icon_url AS homeowner_icon, a.email AS homeowner_email,
-                      b.description AS bid_description, b.pdf_url AS bid_pdf_url
+                      b.description AS bid_description, b.pdf_url AS bid_pdf_url,
+                      b.rfq_modified_after_bid, r.deleted_at AS rfq_deleted_at
                FROM bids b
                JOIN rfqs r ON r.id = b.rfq_id
                LEFT JOIN accounts a ON a.id = r.homeowner_account_id
@@ -2402,7 +2673,7 @@ def list_org_jobs(authorization: str = Header(None)) -> dict:
                       a.name AS homeowner_name, a.icon_url AS homeowner_icon, a.email AS homeowner_email
                FROM rfqs r
                LEFT JOIN accounts a ON a.id = r.homeowner_account_id
-               WHERE r.status = 'scan_ready' {exclude_clause}
+               WHERE r.status = 'scan_ready' AND r.deleted_at IS NULL {exclude_clause}
                ORDER BY r.created_at DESC
                LIMIT 50""",
             exclude_params,
@@ -2415,7 +2686,7 @@ def list_org_jobs(authorization: str = Header(None)) -> dict:
 
     # Add bid-based jobs
     for row in bid_rows:
-        rfq_id, title, desc, addr, rfq_status, created, bid_id, price, bid_status, received, ho_name, ho_icon, ho_email, bid_desc, bid_pdf = row
+        rfq_id, title, desc, addr, rfq_status, created, bid_id, price, bid_status, received, ho_name, ho_icon, ho_email, bid_desc, bid_pdf, bid_modified_flag, rfq_deleted_at = row
         job_status = "pending"
         if bid_status == "accepted":
             job_status = "won"
@@ -2436,8 +2707,10 @@ def list_org_jobs(authorization: str = Header(None)) -> dict:
                 "received_at": received.isoformat() if received else None,
                 "description": bid_desc,
                 "pdf_url": bid_pdf,
+                "rfq_modified_after_bid": bool(bid_modified_flag),
             },
             "job_status": job_status,
+            "rfq_deleted": rfq_deleted_at is not None,
         })
 
     # Add available (new) jobs

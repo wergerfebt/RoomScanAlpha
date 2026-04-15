@@ -14,9 +14,15 @@ All work branches from and merges into **`mvp-alpha`**, not `master`/`main`. The
 cd cloud/processor
 gcloud run deploy scan-processor --source . --region us-central1 --project roomscanalpha
 
-# API
+# API (includes SendGrid secret)
 cd cloud/api
-gcloud run deploy scan-api --source . --region us-central1 --project roomscanalpha
+gcloud run deploy scan-api --source . --region us-central1 --project roomscanalpha \
+  --set-secrets="SENDGRID_API_KEY=SENDGRID_API_KEY:latest"
+
+# Frontend (Firebase Hosting — fast, no API rebuild)
+cd cloud/frontend
+npm run build
+firebase deploy --only hosting
 
 # Reprocess a scan
 cd cloud/processor
@@ -56,6 +62,14 @@ Cloud Run: scan-api (public)
   → Generates signed GCS URLs for OBJ meshes
   → Proxies MTL + atlas files via /api/rfqs/{rfq_id}/scans/{scan_id}/files/{path}
   → Proxies to processor for coverage checks
+
+React SPA (Firebase Hosting: roomscanalpha.com / roomscanalpha.web.app)
+  → Vite + React + TypeScript frontend
+  → Firebase Auth (email/password + Google OAuth)
+  → Shared components: TopBar, SearchBar, AuthModal, FilterSidebar, ContractorCard, JobCard
+  → Pages: Landing, Login, Projects, ProjectQuotes, Search, Account, OrgDashboard, OrgProfile, Invite
+  → Persistent org sidebar for contractor accounts
+  → /api/* proxied to Cloud Run scan-api via Firebase Hosting rewrites
 ```
 
 ### Services
@@ -64,9 +78,11 @@ Cloud Run: scan-api (public)
 |---------|-----|------|---------|
 | scan-api | `https://scan-api-839349778883.us-central1.run.app` | Firebase JWT | REST API + web viewer |
 | scan-processor | `https://scan-processor-839349778883.us-central1.run.app` | OIDC (Cloud Tasks) | Scan processing + OpenMVS |
+| Firebase Hosting | `https://roomscanalpha.com` / `https://roomscanalpha.web.app` | — | React SPA frontend |
 | Cloud SQL | `roomscanalpha:us-central1:roomscanalpha-db` | IAM | PostgreSQL (db: `quoterra`) |
-| GCS | `gs://roomscanalpha-scans/` | IAM | Scan storage |
+| GCS | `gs://roomscanalpha-scans/` | IAM | Scan storage + portfolio images |
 | Artifact Registry | `us-central1-docker.pkg.dev/roomscanalpha/cloud-run-source-deploy` | IAM | Container images |
+| SendGrid | — | API key (Secret Manager) | Email notifications |
 
 ### Texture Pipeline (Production)
 
@@ -113,6 +129,77 @@ Cloud Run: scan-api (public)
 | PUT | `/api/admin/rfqs/{rfq_id}/scans/{scan_id}/polygon` | Update room polygon + recompute dimensions |
 
 **Planned**: Merge features into room polygon so door frames/openings connect to wall edges for segment-level measurements (trim linear feet). See `docs/ML_ARCHITECTURE.md` for the full ML training pipeline plan.
+
+## React Frontend (Quoterra Platform)
+
+### Tech Stack
+- **Framework**: React 18 + TypeScript + Vite
+- **Auth**: Firebase Auth (email/password + Google OAuth)
+- **Hosting**: Firebase Hosting (roomscanalpha.com) with Cloud Run rewrites for `/api/*`
+- **State**: React Context (AuthProvider, AccountProvider)
+- **Styling**: CSS custom properties (tokens.css) + inline styles
+
+### Deploy
+```bash
+cd cloud/frontend
+npm run build
+firebase deploy --only hosting    # ~10 seconds, no API rebuild needed
+```
+
+### Key Files
+| File | Purpose |
+|------|---------|
+| `cloud/frontend/src/App.tsx` | Route definitions |
+| `cloud/frontend/src/api/firebase.ts` | Firebase singleton + auth helpers |
+| `cloud/frontend/src/api/client.ts` | `apiFetch()` with JWT injection |
+| `cloud/frontend/src/hooks/useAuth.ts` | Auth context (user, signIn, signOut) |
+| `cloud/frontend/src/hooks/useAccount.ts` | Account/org context for sidebar |
+| `cloud/frontend/src/components/TopBar.tsx` | Shared nav bar |
+| `cloud/frontend/src/components/SearchBar.tsx` | Two-field search (service + location) with mobile overlay |
+| `cloud/frontend/src/components/AuthModal.tsx` | Sign in/create account/Google/forgot password |
+| `cloud/frontend/src/components/FilterSidebar.tsx` | Price histogram, rating, service filters |
+| `cloud/frontend/src/components/ContractorCard.tsx` | Expandable bid card with gallery + hire |
+| `cloud/frontend/src/components/JobCard.tsx` | Expandable RFQ card for contractors with floor plan |
+| `cloud/frontend/src/components/FloorPlan.tsx` | Canvas-rendered room polygon floor plan |
+| `cloud/frontend/src/components/SubmitQuoteForm.tsx` | Inline quote submission (price + desc + PDF) |
+| `cloud/frontend/src/components/OrgSidebar.tsx` | Persistent left sidebar for org members |
+
+### Pages
+| Path | Page | Auth | Purpose |
+|------|------|------|---------|
+| `/` | Landing | Public | Hero + search + how it works |
+| `/login` | Login | Public | Firebase auth (email/password + Google) |
+| `/search` | Search | Public | Contractor discovery with filters |
+| `/contractors/{orgId}` | OrgProfile | Public | Public org profile with gallery, map, hours |
+| `/projects` | Projects | Auth | Homeowner RFQ list with expandable details, edit, delete |
+| `/projects/{rfqId}/quotes` | ProjectQuotes | Auth | Bid comparison with filters, hire button |
+| `/account` | Account | Auth | Profile editor, contractor request |
+| `/org` | OrgDashboard | Auth+Org | Tabs: Jobs, Settings, Gallery, Members, Services |
+| `/invite` | Invite | Public | Token-based org invite acceptance |
+| `/info` | (static) | Public | Original marketing landing page |
+
+### Marketplace Database (implemented)
+| Table | Purpose |
+|-------|---------|
+| `accounts` | Unified user accounts (homeowner/contractor) |
+| `organizations` | Contractor orgs with profile, address, geo, hours |
+| `org_members` | Account-to-org links with roles (admin/user) |
+| `org_requests` | Org creation approval workflow |
+| `org_work_images` | Portfolio gallery (images + videos, albums) |
+| `albums` | Groups media with service tags + job links |
+| `services` | 14 service categories (Kitchen Remodel, etc.) |
+| `org_services` | Org-to-service links |
+| `bids.org_id` | Links bids to orgs (added to existing bids table) |
+| `bids.status` | pending/accepted/rejected |
+| `bids.rfq_modified_after_bid` | Flag when homeowner edits project after bid |
+| `rfqs.homeowner_account_id` | Links RFQs to account system |
+| `rfqs.deleted_at` | Soft-delete (preserves bids for contractors) |
+
+### Email Notifications (SendGrid via `notifications@roomscanalpha.com`)
+- **Contractor request**: Confirmation to requester + approval link to admin (jake@roomscanalpha.com)
+- **Org approval**: One-click approve URL → auto-creates org + welcome email with dashboard link
+- **Member invite**: Deep link token → `/invite?token=...` → sign in + auto-join org
+- **Bid accepted**: Winner gets full project details + homeowner contact; homeowner gets contractor info; losers get brief notification
 
 ## iOS App
 

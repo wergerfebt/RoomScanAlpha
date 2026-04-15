@@ -16,8 +16,10 @@ export interface Job {
     received_at: string | null;
     description?: string | null;
     pdf_url?: string | null;
+    rfq_modified_after_bid?: boolean;
   } | null;
   job_status: "new" | "pending" | "won" | "lost";
+  rfq_deleted?: boolean;
 }
 
 interface Room {
@@ -118,6 +120,7 @@ export default function JobCard({ job: initialJob }: { job: Job }) {
           <div className="contractor-card-meta">
             {job.address && <span>{job.address}</span>}
             <span className={`badge ${cfg.className}`}>{cfg.label}</span>
+            {job.rfq_deleted && <span className="badge badge-error">Cancelled</span>}
           </div>
         </div>
 
@@ -154,11 +157,42 @@ export default function JobCard({ job: initialJob }: { job: Job }) {
             </div>
           )}
 
+          {/* Project deleted warning */}
+          {job.rfq_deleted && (
+            <div style={{
+              marginBottom: 16, padding: 12, borderRadius: "var(--radius-md)",
+              border: "1px solid var(--color-danger)", background: "#fef2f2",
+              display: "flex", alignItems: "center", gap: 10,
+            }}>
+              <span style={{ fontSize: 18 }}>&#10060;</span>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#721c24" }}>Project Cancelled</div>
+                <div style={{ fontSize: 12, color: "#721c24" }}>The homeowner has removed this project from the platform.</div>
+              </div>
+            </div>
+          )}
+
+          {/* Project modified warning */}
+          {job.bid?.rfq_modified_after_bid && !job.rfq_deleted && (
+            <div style={{
+              marginBottom: 16, padding: 12, borderRadius: "var(--radius-md)",
+              border: "1px solid #ffc107", background: "#fff8e1",
+              display: "flex", alignItems: "center", gap: 10,
+            }}>
+              <span style={{ fontSize: 18 }}>&#9888;</span>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#856404" }}>Project Updated</div>
+                <div style={{ fontSize: 12, color: "#856404" }}>The homeowner modified this project after you submitted your quote. Review the changes above.</div>
+              </div>
+            </div>
+          )}
+
           {/* Your bid (for pending/won/lost) */}
           {job.bid && (
             <div style={{
               marginBottom: 16, padding: 14, borderRadius: "var(--radius-md)",
-              border: "1px solid var(--color-border-light)", background: "#fafbfc",
+              border: `1px solid ${job.bid.rfq_modified_after_bid ? "#ffc107" : "var(--color-border-light)"}`,
+              background: job.bid.rfq_modified_after_bid ? "#fffdf5" : "#fafbfc",
             }}>
               <h4 style={{ fontSize: 13, fontWeight: 700, color: "var(--color-text-secondary)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.5px" }}>Your Quote</h4>
               <div style={{ display: "flex", gap: 16, alignItems: "baseline", marginBottom: 8 }}>
