@@ -13,7 +13,7 @@ import {
 
 const FIREBASE_CONFIG = {
   apiKey: "AIzaSyCW1KBTi5nuNCpJjZG48gQThaSaeK6h6gg",
-  authDomain: "roomscanalpha.firebaseapp.com",
+  authDomain: "roomscanalpha.com",
   projectId: "roomscanalpha",
 };
 

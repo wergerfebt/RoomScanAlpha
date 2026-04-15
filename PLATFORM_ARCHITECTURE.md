@@ -18,20 +18,21 @@ Quoterra is expanding from an alpha iOS scanning app + simple web viewer into a 
 | Status | Path | Purpose |
 |--------|------|---------|
 | EXISTS | `/quote/{rfqId}` | Contractor RFQ view -- 3D viewer + bid modal (`contractor_view.html`) |
-| EXISTS | `/bids/{rfqId}?token=` | Homeowner bid comparison (`bids.html`, token-gated) |
-| NEW | `/` | Landing / contractor search (public) |
-| NEW | `/login` | Sign in (email/password, Google, Apple) |
-| NEW | `/signup` | Create account |
-| NEW | `/account` | Account settings (name, email, icon, address, notifications) |
-| NEW | `/projects` | My Projects (homeowner list view) |
-| NEW | `/projects/{rfqId}` | Project detail (room scans, scope, bid status) |
-| NEW | `/org` | Org dashboard (contractor admin/user) |
-| NEW | `/org/settings` | Org profile editor (admin only) |
-| NEW | `/org/members` | Member management (admin only) |
-| NEW | `/org/gallery` | Portfolio / work images (admin only) |
-| NEW | `/org/bids` | Active bids (all org members) |
-| NEW | `/org/won` | Won jobs + map (all org members) |
-| NEW | `/search` | Contractor search/browse (public) |
+| EXISTS | `/bids/{rfqId}?token=` | Homeowner bid comparison (`bids.html`, token-gated, legacy) |
+| DONE | `/` | Landing page with two-field search (service + location) |
+| DONE | `/login` | Sign in (email/password, Google) |
+| DONE | `/account` | Account settings (name, phone, address, icon upload, contractor request) |
+| DONE | `/projects` | My Projects (expandable cards with floor plan, rooms, edit, delete) |
+| DONE | `/projects/{rfqId}/quotes` | Bid comparison with price filters, hire button |
+| DONE | `/org?tab=jobs` | Contractor jobs view (new/pending/won/lost with inline quote submission) |
+| DONE | `/org?tab=settings` | Org profile editor (banner, logo, hours, address, radius, review links) |
+| DONE | `/org?tab=members` | Member management (invite by email with deep links) |
+| DONE | `/org?tab=gallery` | Portfolio gallery (albums, videos, multi-upload, service tags, lightbox) |
+| DONE | `/org?tab=services` | Service selection from 14 categories |
+| DONE | `/contractors/{orgId}` | Public org profile (banner, gallery, map with radius, hours, services, team) |
+| DONE | `/search` | Contractor search/browse with filters (demo data, needs real API) |
+| DONE | `/invite?token=` | Token-based org invite acceptance |
+| DONE | `/info` | Original marketing landing page (static HTML) |
 
 ---
 
@@ -88,7 +89,7 @@ Homeowner (Web or App)
 
 ### Flow 3: Bid Submission & Acceptance
 
-> **Status: PARTIALLY IMPLEMENTED** -- Bid submission works (amount + description + optional PDF). Bid listing works (token-gated). Missing: bid status tracking, acceptance/rejection flow, org-based bidding, notifications.
+> **Status: IMPLEMENTED** -- Bid submission works via inline form in Jobs tab or quote viewer modal (price + description + optional PDF). Bids are org-based (bids.org_id). Homeowners can accept a bid (POST /api/rfqs/{rfq_id}/accept-bid) which rejects all others, sends email notifications to winner/homeowner/losers. Bid status: pending/accepted/rejected. RFQ modification after bid submission flags bids with `rfq_modified_after_bid`. Soft-delete on RFQs shows "Cancelled" to contractors.
 
 Current state:
 ```
