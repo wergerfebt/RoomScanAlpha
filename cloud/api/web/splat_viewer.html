@@ -408,11 +408,14 @@ function renderSidebar(data) {
   }
   html += '</div>';
 
-  if (data.rooms?.some(r => r.room_polygon_ft))
+  // Only show floor plan and rooms that have splat data
+  const splatRooms = (data.rooms || []).filter(r => r.has_splat);
+  if (splatRooms.some(r => r.room_polygon_ft))
     html += `<div class="floor-plan-section"><div class="fp-header"><h3>Floor Plan</h3><button class="fp-expand-btn" onclick="openFpFullscreen()">Expand</button></div><div class="floor-plan-canvas-wrap"><canvas id="fp-canvas"></canvas></div></div>`;
 
   html += '<div class="room-list"><h3>Rooms</h3>';
   (data.rooms || []).forEach((room, i) => {
+    if (!room.has_splat) return; // Hide rooms without splats
     const area = room.floor_area_sqft ? `${Math.round(room.floor_area_sqft)} sq ft` : '';
     html += `<div class="room-item" id="room-${i}" onclick="window._selectRoom(${i})">
       <div class="name">${esc(room.room_label || `Room ${i + 1}`)}</div>
@@ -510,6 +513,7 @@ function drawFloorPlan(data, canvasId, opts) {
   let cursorX = 0;
   (data.rooms || []).forEach((r, i) => {
     if (singleRoom !== undefined && i !== singleRoom) return;
+    if (!r.has_splat) return; // Only show rooms with splat data in floor plan
     if (!r.room_polygon_ft || r.room_polygon_ft.length < 3) return;
     const poly = r.room_polygon_ft;
     let rMinX = Infinity, rMaxX = -Infinity, rMinY = Infinity, rMaxY = -Infinity;

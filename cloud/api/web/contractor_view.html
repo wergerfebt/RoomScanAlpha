@@ -239,6 +239,7 @@
       <button class="btn btn-toggle active" id="btn-measures" onclick="toggleMeasurements()">Hide Measurements</button>
       <button class="btn btn-toggle" id="btn-view-mode" onclick="toggleViewMode()" style="display:none">Birds Eye View</button>
       <button class="btn btn-toggle" id="btn-hd" onclick="toggleHD()" style="display:none">HD</button>
+      <a class="btn btn-primary" id="btn-splat" href="#" target="_blank" style="display:none;text-decoration:none">View Splat</a>
       <div id="quote-section"></div>
     </div>
     <div class="viewer-container" id="viewer-container">
@@ -1156,6 +1157,15 @@ async function loadRoom(index) {
 
   const hdBtn = document.getElementById('btn-hd');
   hdBtn.style.display = (hasOBJ && textureUrls.obj_standard) ? '' : 'none';
+
+  // Show "View Splat" button if this room has a .splat file
+  const splatBtn = document.getElementById('btn-splat');
+  if (room.has_splat) {
+    splatBtn.style.display = '';
+    splatBtn.href = `${window.location.origin}/splat/${getRfqId()}`;
+  } else {
+    splatBtn.style.display = 'none';
+  }
 
   // Show view mode toggle and reset to 360 Tour when switching rooms
   document.getElementById('btn-view-mode').style.display = '';

@@ -776,6 +776,13 @@ def contractor_view(rfq_id: str) -> dict:
         except Exception:
             room["features"] = []
 
+        # Check if a Gaussian Splat file exists for this room
+        try:
+            splat_blob = bucket.blob(f"scans/{rfq_id}/{scan_id}/room_scan_glomap.splat")
+            room["has_splat"] = splat_blob.exists()
+        except Exception:
+            room["has_splat"] = False
+
         rooms.append(room)
 
     return {
