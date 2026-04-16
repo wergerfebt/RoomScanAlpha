@@ -60,8 +60,9 @@ Cloud Run: scan-processor (OIDC-protected, 8 vCPU / 16GB / concurrency=1)
 Cloud Run: scan-api (public)
   → Firebase Auth JWT on all endpoints
   → Serves contractor_view.html (Three.js OBJ viewer with HD toggle, MTLLoader for multi-atlas)
+  → Serves splat_viewer.html (Gaussian Splatting viewer with 2D covariance projection)
   → Generates signed GCS URLs for OBJ meshes
-  → Proxies MTL + atlas files via /api/rfqs/{rfq_id}/scans/{scan_id}/files/{path}
+  → Proxies MTL + atlas + splat files via /api/rfqs/{rfq_id}/scans/{scan_id}/files/{path}
   → Proxies to processor for coverage checks
 
 React SPA (Firebase Hosting: roomscanalpha.com / roomscanalpha.web.app)
@@ -108,6 +109,17 @@ React SPA (Firebase Hosting: roomscanalpha.com / roomscanalpha.web.app)
 **Two rendering paths** (contractor_view.html):
 1. **OBJ Mesh** (primary): Loads `textured.obj` via signed URL + MTL/atlas via file proxy (`MTLLoader` + `OBJLoader`). "HD On" toggles to `standard_textured.obj` with multi-atlas support. File proxy: `GET /api/rfqs/{rfq_id}/scans/{scan_id}/files/{path}` — maps `standard/` prefix to `standard_` prefixed GCS blobs.
 2. **Quad Room** (fallback): Builds rectangular walls from annotation polygon, applies per-surface JPEGs
+
+### Gaussian Splat Viewer
+
+**3D Gaussian Splatting viewer** (`splat_viewer.html`) at `/splat/{rfq_id}` for viewing `.splat` files as an alternative to OBJ meshes. Uses proper 3DGS rendering math for photorealistic room visualization.
+
+- **Rendering**: Three.js `RawShaderMaterial` (GLSL ES 1.00) with instanced billboards. Vertex shader builds 3D covariance from quaternion + scale, projects to 2D via Jacobian, computes eigenvalues for billboard sizing. Fragment shader uses Mahalanobis distance (conic) for elliptical Gaussian falloff. Premultiplied alpha blending (`ONE, ONE_MINUS_SRC_ALPHA`).
+- **Scale detection**: Auto-detects linear vs log-encoded scales (GLOMAP outputs linear, standard 3DGS uses log). Filters outlier splats (position >50 units, scale >1.0, alpha <10).
+- **Depth sorting**: Web Worker with O(n) counting sort (16-bit quantized). Worker receives camera matrix, sorts + reorders all attribute buffers off main thread, transfers results back. Main thread only does buffer upload (~5ms), never blocks on sort.
+- **Room alignment**: Cyan wireframe overlay of room polygon in the 3D scene. Orientation controls (rotation, translation, scale) to align splat with room geometry. "Snap to Center" aligns splat bbox center to room polygon centroid. Values persist to localStorage.
+- **Features**: Locked to single room per splat. Same sidebar (job info, floor plan, metrics), isometric 3D model thumbnail, bird's eye view, WASD/arrow movement, measurements toggle.
+- **File proxy**: `.splat` files served via the same proxy endpoint as OBJ/MTL. Splats stored in GCS at `scans/{rfq_id}/{scan_id}/room_scan_glomap.splat`.
 
 ### Admin Component Annotator
 
@@ -280,7 +292,8 @@ gs://roomscanalpha-scans/scans/{rfq_id}/{scan_id}/
   ├── supplemental_scan.zip                 # Uploaded from iOS (gap re-scan)
   ├── mesh.ply                              # Uploaded by processor
   ├── textured.obj / .mtl / _material_00_map_Kd.jpg    # OpenMVS preview (50K faces)
-  └── standard_textured.obj / .mtl / ...jpg             # OpenMVS HD (300K faces, may have multiple atlases)
+  ├── standard_textured.obj / .mtl / ...jpg             # OpenMVS HD (300K faces, may have multiple atlases)
+  └── room_scan_glomap.splat                            # Gaussian Splat (optional, from GLOMAP pipeline)
 ```
 
 ## Dead Code & Known Issues
