@@ -12,12 +12,13 @@ All work branches from and merges into **`mvp-alpha`**, not `master`/`main`. The
 ```bash
 # Processor (uses pinned base image with OpenMVS binaries)
 cd cloud/processor
-gcloud run deploy scan-processor --source . --region us-central1 --project roomscanalpha
+gcloud run deploy scan-processor --source . --region us-central1 --project roomscanalpha \
+  --set-secrets="DB_PASS=db-password:latest"
 
-# API (includes SendGrid secret)
+# API (includes SendGrid + DB secrets)
 cd cloud/api
 gcloud run deploy scan-api --source . --region us-central1 --project roomscanalpha \
-  --set-secrets="SENDGRID_API_KEY=SENDGRID_API_KEY:latest"
+  --set-secrets="SENDGRID_API_KEY=SENDGRID_API_KEY:latest,DB_PASS=db-password:latest"
 
 # Frontend (Firebase Hosting — fast, no API rebuild)
 cd cloud/frontend
@@ -301,7 +302,7 @@ gs://roomscanalpha-scans/scans/{rfq_id}/{scan_id}/
 - **ARFrame retention warnings** — ARSCNView delegate retains 11-13 frames during annotation. Caused by multiple ARSCNView instances sharing one session. Needs shared ARSCNView architecture (planned).
 - **"Attempting to enable an already-enabled session"** — ARSCNView auto-runs the session when `scnView.session` is set, conflicting with `startSession()`. Harmless warning.
 - **Supplemental merge deployed** — Full pipeline working: iOS packages/uploads supplemental data, cloud merges meshes + frames, re-textures with OpenMVS, viewer renders multi-atlas results via MTLLoader.
-- **DB_PASS deployment** — Cloud Run services use plain env var for DB_PASS (not Secret Manager) after a secret reference broke during redeploy. Should be migrated back to Secret Manager.
+- **DB_PASS deployment** — Both Cloud Run services use `db-password` from Secret Manager via `--set-secrets`. Always include `--set-secrets` in deploy commands.
 
 ## Remaining Docs (current)
 

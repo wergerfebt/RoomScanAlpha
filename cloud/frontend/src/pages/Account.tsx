@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import Layout from "../components/Layout";
 import { apiFetch } from "../api/client";
+import AddressAutocomplete from "../components/AddressAutocomplete";
 
 interface AccountData {
   id: string;
@@ -166,7 +167,7 @@ export default function Account() {
               <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "var(--color-text-secondary)", marginBottom: 4 }}>
                 Address
               </label>
-              <input className="form-input" value={address} onChange={(e) => setAddress(e.target.value)} placeholder="Your address" />
+              <AddressAutocomplete value={address} onChange={setAddress} placeholder="Your address" />
             </div>
 
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>

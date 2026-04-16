@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 
 export interface GalleryImage {
   id: string;
@@ -17,6 +18,8 @@ export interface Contractor {
   review_rating: number | null;
   review_count: number | null;
   description?: string | null;
+  address?: string | null;
+  website_url?: string | null;
   gallery?: GalleryImage[];
 }
 
@@ -73,14 +76,19 @@ export default function ContractorCard({
     <>
       <div className={`contractor-card${expanded ? " expanded" : ""}`}>
         <div className="contractor-card-header" onClick={() => setExpanded(!expanded)}>
-          {/* Icon */}
-          <div className="contractor-card-icon">
+          {/* Icon — links to profile */}
+          <Link
+            to={`/contractors/${c.id}`}
+            className="contractor-card-icon"
+            onClick={(e) => e.stopPropagation()}
+            style={{ textDecoration: "none" }}
+          >
             {c.icon_url ? (
               <img src={c.icon_url} alt="" />
             ) : (
               <span className="contractor-card-initials">{getInitials(c.name)}</span>
             )}
-          </div>
+          </Link>
 
           {/* Summary */}
           <div className="contractor-card-summary">
@@ -127,6 +135,43 @@ export default function ContractorCard({
         {/* Expanded detail */}
         {expanded && (
           <div className="contractor-card-detail">
+            {/* Description */}
+            {c.description && (
+              <p style={{
+                fontSize: 14, lineHeight: 1.6, color: "var(--color-text-secondary)",
+                paddingTop: 12, marginBottom: 14, whiteSpace: "pre-wrap",
+              }}>
+                {c.description}
+              </p>
+            )}
+
+            {/* Address & Website */}
+            {(c.address || c.website_url) && (
+              <div style={{
+                display: "flex", gap: 16, flexWrap: "wrap", fontSize: 13,
+                marginBottom: 14, color: "var(--color-text-secondary)",
+              }}>
+                {c.address && (
+                  <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="var(--color-text-muted)">
+                      <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5a2.5 2.5 0 010-5 2.5 2.5 0 010 5z" />
+                    </svg>
+                    {c.address}
+                  </span>
+                )}
+                {c.website_url && (
+                  <a href={c.website_url} target="_blank" rel="noopener noreferrer"
+                    onClick={(e) => e.stopPropagation()}
+                    style={{ display: "flex", alignItems: "center", gap: 4, color: "var(--color-primary)", fontWeight: 600 }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="var(--color-primary)">
+                      <path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zm6.93 6h-2.95a15.65 15.65 0 00-1.38-3.56A8.03 8.03 0 0118.92 8zM12 4.04c.83 1.2 1.48 2.53 1.91 3.96h-3.82c.43-1.43 1.08-2.76 1.91-3.96zM4.26 14C4.1 13.36 4 12.69 4 12s.1-1.36.26-2h3.38c-.08.66-.14 1.32-.14 2s.06 1.34.14 2H4.26zm.82 2h2.95c.32 1.25.78 2.45 1.38 3.56A7.987 7.987 0 015.08 16zm2.95-8H5.08a7.987 7.987 0 014.33-3.56A15.65 15.65 0 008.03 8zM12 19.96c-.83-1.2-1.48-2.53-1.91-3.96h3.82c-.43 1.43-1.08 2.76-1.91 3.96zM14.34 14H9.66c-.09-.66-.16-1.32-.16-2s.07-1.35.16-2h4.68c.09.65.16 1.32.16 2s-.07 1.34-.16 2zm.25 5.56c.6-1.11 1.06-2.31 1.38-3.56h2.95a8.03 8.03 0 01-4.33 3.56zM16.36 14c.08-.66.14-1.32.14-2s-.06-1.34-.14-2h3.38c.16.64.26 1.31.26 2s-.1 1.36-.26 2h-3.38z" />
+                    </svg>
+                    Website
+                  </a>
+                )}
+              </div>
+            )}
+
             {/* Review links */}
             <div className="contractor-card-reviews">
               {c.review_rating && (
@@ -140,12 +185,14 @@ export default function ContractorCard({
                 </span>
               )}
               {c.yelp_url && (
-                <a href={c.yelp_url} target="_blank" rel="noopener noreferrer" className="contractor-card-review-link">
+                <a href={c.yelp_url} target="_blank" rel="noopener noreferrer" className="contractor-card-review-link"
+                  onClick={(e) => e.stopPropagation()}>
                   Yelp
                 </a>
               )}
               {c.google_reviews_url && (
-                <a href={c.google_reviews_url} target="_blank" rel="noopener noreferrer" className="contractor-card-review-link">
+                <a href={c.google_reviews_url} target="_blank" rel="noopener noreferrer" className="contractor-card-review-link"
+                  onClick={(e) => e.stopPropagation()}>
                   Google
                 </a>
               )}
@@ -194,6 +241,7 @@ export default function ContractorCard({
                 target="_blank"
                 rel="noopener noreferrer"
                 className="contractor-card-pdf"
+                onClick={(e) => e.stopPropagation()}
               >
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="var(--color-primary)">
                   <path d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm-1 2l5 5h-5V4zm-3 9v2H8v-2h2zm6 0v2h-4v-2h4zm-6 4v2H8v-2h2zm6 0v2h-4v-2h4z" />
@@ -216,6 +264,16 @@ export default function ContractorCard({
                 Hire {c.name || "Contractor"}
               </button>
             )}
+
+            {/* View profile link */}
+            <Link
+              to={`/contractors/${c.id}`}
+              className="btn btn-full"
+              onClick={(e) => e.stopPropagation()}
+              style={{ marginTop: 10, fontSize: 13, textAlign: "center", textDecoration: "none" }}
+            >
+              View Full Profile
+            </Link>
 
             {/* Collapse */}
             <button

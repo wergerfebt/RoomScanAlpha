@@ -541,7 +541,7 @@ def get_scan_file(rfq_id: str, scan_id: str, filepath: str):
       standard/textured.mtl     → scans/{rfq_id}/{scan_id}/standard_textured.mtl
       standard/textured_material_00_map_Kd.jpg → standard_textured_material_00_map_Kd.jpg
     """
-    ALLOWED_EXTENSIONS = {".obj", ".mtl", ".jpg", ".jpeg", ".png", ".ply"}
+    ALLOWED_EXTENSIONS = {".obj", ".mtl", ".jpg", ".jpeg", ".png", ".ply", ".splat"}
     CONTENT_TYPES = {
         ".obj": "text/plain",
         ".mtl": "text/plain",
@@ -549,6 +549,7 @@ def get_scan_file(rfq_id: str, scan_id: str, filepath: str):
         ".jpeg": "image/jpeg",
         ".png": "image/png",
         ".ply": "application/octet-stream",
+        ".splat": "application/octet-stream",
     }
 
     ext = os.path.splitext(filepath)[1].lower()
@@ -1045,6 +1046,19 @@ def serve_contractor_page(rfq_id: str) -> str:
     html_path = Path(__file__).parent / "web" / "contractor_view.html"
     if not html_path.exists():
         raise HTTPException(status_code=500, detail="Contractor view page not found")
+    return html_path.read_text()
+
+
+@app.get("/splat/{rfq_id}", response_class=HTMLResponse)
+def serve_splat_viewer(rfq_id: str) -> str:
+    """Serve the Gaussian Splat viewer HTML page.
+
+    Displays a .splat file instead of the OBJ mesh. The splat URL can be
+    passed via ?splat=URL query param or defaults to the file proxy path.
+    """
+    html_path = Path(__file__).parent / "web" / "splat_viewer.html"
+    if not html_path.exists():
+        raise HTTPException(status_code=500, detail="Splat viewer page not found")
     return html_path.read_text()
 
 

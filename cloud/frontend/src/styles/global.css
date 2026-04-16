@@ -14,6 +14,9 @@ body {
 a { color: var(--color-primary); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
+/* Google Places Autocomplete dropdown — must sit above overlays */
+.pac-container { z-index: 1200 !important; }
+
 /* Buttons */
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
@@ -184,7 +187,8 @@ a:hover { text-decoration: underline; }
   .org-sidebar-nav {
     display: flex; gap: 0; padding: 0 8px 8px; overflow-x: auto; white-space: nowrap;
   }
-  .org-sidebar-item { padding: 6px 12px; font-size: 13px; flex-shrink: 0; }
+  .org-sidebar-item { padding: 6px 10px; font-size: 13px; flex-shrink: 0; gap: 6px; }
+  .org-sidebar-item svg { display: none; }
 }
 
 /* ===== Filter Sidebar ===== */
@@ -359,4 +363,59 @@ a:hover { text-decoration: underline; }
 
 @media (max-width: 768px) {
   .list-page-layout { flex-direction: column; padding: 12px; }
+}
+
+/* ===== Org Profile ===== */
+.org-profile-banner {
+  height: 260px; background-size: cover; background-position: center; background-repeat: no-repeat;
+  position: relative;
+}
+
+.org-profile-header-wrap {
+  max-width: 1060px; margin: 0 auto; padding: 0 24px; position: relative;
+}
+
+.org-profile-header {
+  display: flex; gap: 20px; align-items: flex-end; margin-top: -36px; padding-top: 8px;
+  padding-bottom: 4px;
+}
+
+.org-profile-icon {
+  width: 100px; height: 100px; border-radius: 16px; background: var(--color-surface);
+  border: 4px solid var(--color-surface); overflow: hidden; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 36px; font-weight: 800; color: var(--color-primary);
+}
+.org-profile-icon img { width: 100%; height: 100%; object-fit: cover; }
+
+.org-profile-info { padding-bottom: 8px; padding-top: 16px; flex: 1; }
+.org-profile-name { font-size: 28px; font-weight: 800; margin-bottom: 6px; margin-top: 4px; }
+.org-profile-meta {
+  display: flex; gap: 12px; flex-wrap: wrap; align-items: center; font-size: 14px;
+}
+
+.org-profile-links { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+
+.org-profile-body {
+  max-width: 1060px; margin: 0 auto; padding: 32px 24px 60px;
+  display: grid; grid-template-columns: 1fr 360px; gap: 28px; align-items: flex-start;
+}
+
+@media (max-width: 768px) {
+  .org-profile-banner { height: 160px; }
+  .org-profile-header-wrap { padding: 0 16px; }
+  .org-profile-header {
+    margin-top: -30px; gap: 12px;
+  }
+  .org-profile-icon {
+    width: 64px; height: 64px; border-radius: 12px; font-size: 24px;
+    border-width: 3px;
+  }
+  .org-profile-info { padding-bottom: 0; padding-top: 4px; }
+  .org-profile-name { font-size: 20px; margin-bottom: 4px; }
+  .org-profile-meta { font-size: 13px; gap: 8px; }
+  .org-profile-links { margin-top: 12px; }
+  .org-profile-body {
+    grid-template-columns: 1fr; padding: 20px 16px 40px; gap: 20px;
+  }
 }

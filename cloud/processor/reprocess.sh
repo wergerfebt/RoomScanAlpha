@@ -34,10 +34,21 @@ fi
 
 reprocess_one() {
     local sid="$1"
-    echo "Reprocessing scan ${sid}..."
-    RESULT=$(curl -s --max-time 300 -X POST "http://localhost:${PORT}/process" \
-        -H "Content-Type: application/json" \
-        -d "{\"scan_id\":\"${sid}\",\"rfq_id\":\"${RFQ_ID}\",\"blob_path\":\"scans/${RFQ_ID}/${sid}/scan.zip\"}")
+    local base_path="scans/${RFQ_ID}/${sid}"
+    local supp_gcs="gs://roomscanalpha-scans/${base_path}/supplemental_scan.zip"
+
+    # Check if supplemental scan exists — route to merge endpoint if so
+    if gsutil ls "${supp_gcs}" >/dev/null 2>&1; then
+        echo "Reprocessing scan ${sid} (with supplemental merge)..."
+        RESULT=$(curl -s --max-time 900 -X POST "http://localhost:${PORT}/process-supplemental" \
+            -H "Content-Type: application/json" \
+            -d "{\"scan_id\":\"${sid}\",\"rfq_id\":\"${RFQ_ID}\",\"original_blob_path\":\"${base_path}/scan.zip\",\"supplemental_blob_path\":\"${base_path}/supplemental_scan.zip\"}")
+    else
+        echo "Reprocessing scan ${sid}..."
+        RESULT=$(curl -s --max-time 300 -X POST "http://localhost:${PORT}/process" \
+            -H "Content-Type: application/json" \
+            -d "{\"scan_id\":\"${sid}\",\"rfq_id\":\"${RFQ_ID}\",\"blob_path\":\"${base_path}/scan.zip\"}")
+    fi
     echo "  ${RESULT}"
 }
 

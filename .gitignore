@@ -52,3 +52,4 @@ cloud/processor/tests/local_scan/merged_frames_only
 # Real test data (downloaded from GCS + merge outputs)
 cloud/processor/tests/local_scan/real_test/
 
+cloud/frontend/.env

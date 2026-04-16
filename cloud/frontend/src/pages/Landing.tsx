@@ -1,6 +1,20 @@
+import { useState, useRef, useCallback, useEffect } from "react";
 import { Link } from "react-router-dom";
 import Layout from "../components/Layout";
 import SearchBar from "../components/SearchBar";
+
+function useIsMobile(breakpoint = 768) {
+  const [mobile, setMobile] = useState(
+    () => typeof window !== "undefined" && window.innerWidth <= breakpoint,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${breakpoint}px)`);
+    const handler = (e: MediaQueryListEvent) => setMobile(e.matches);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, [breakpoint]);
+  return mobile;
+}
 
 const steps = [
   {
@@ -26,13 +40,26 @@ const steps = [
 ];
 
 export default function Landing() {
+  const isMobile = useIsMobile();
+  const [activeStep, setActiveStep] = useState(0);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const scrollLeft = el.scrollLeft;
+    const cardWidth = el.offsetWidth * 0.78 + 12; // width + gap
+    const idx = Math.round(scrollLeft / cardWidth);
+    setActiveStep(Math.max(0, Math.min(steps.length - 1, idx)));
+  }, []);
+
   return (
     <Layout>
       {/* Hero */}
       <section
         style={{
           background: "linear-gradient(180deg, #f0f4ff 0%, var(--color-bg) 100%)",
-          padding: "80px 24px 60px",
+          padding: isMobile ? "32px 16px 24px" : "80px 24px 60px",
           textAlign: "center",
         }}
       >
@@ -41,7 +68,7 @@ export default function Landing() {
             fontSize: "clamp(1.8rem, 4vw, 2.8rem)",
             fontWeight: 800,
             lineHeight: 1.15,
-            marginBottom: 16,
+            marginBottom: isMobile ? 10 : 16,
             letterSpacing: "-0.5px",
           }}
         >
@@ -51,10 +78,10 @@ export default function Landing() {
         </h1>
         <p
           style={{
-            fontSize: 18,
+            fontSize: isMobile ? 15 : 18,
             color: "var(--color-text-secondary)",
             maxWidth: 520,
-            margin: "0 auto 36px",
+            margin: isMobile ? "0 auto 20px" : "0 auto 36px",
           }}
         >
           Scan your room with your iPhone. Get competing bids from vetted local contractors.
@@ -71,55 +98,120 @@ export default function Landing() {
         style={{
           maxWidth: "var(--max-width)",
           margin: "0 auto",
-          padding: "60px 24px",
+          padding: isMobile ? "24px 16px" : "60px 24px",
         }}
       >
         <h2
           style={{
-            fontSize: 24,
+            fontSize: isMobile ? 20 : 24,
             fontWeight: 700,
             textAlign: "center",
-            marginBottom: 40,
+            marginBottom: isMobile ? 16 : 40,
           }}
         >
           How Quoterra Works
         </h2>
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-            gap: 24,
-          }}
-        >
-          {steps.map((step, i) => (
+        {isMobile ? (
+          <>
             <div
-              key={i}
-              className="card"
+              ref={scrollRef}
+              onScroll={handleScroll}
               style={{
-                padding: 24,
-                textAlign: "center",
+                display: "flex",
+                gap: 12,
+                overflowX: "auto",
+                scrollSnapType: "x mandatory",
+                WebkitOverflowScrolling: "touch",
+                paddingBottom: 8,
+                msOverflowStyle: "none",
+                scrollbarWidth: "none",
               }}
             >
-              <div style={{ fontSize: 36, marginBottom: 12 }}>{step.icon}</div>
+              {steps.map((step, i) => (
+                <div
+                  key={i}
+                  className="card"
+                  style={{
+                    padding: 24,
+                    textAlign: "center",
+                    flex: "0 0 78%",
+                    scrollSnapAlign: "center",
+                  }}
+                >
+                  <div style={{ fontSize: 36, marginBottom: 12 }}>{step.icon}</div>
+                  <div
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 700,
+                      color: "var(--color-primary)",
+                      marginBottom: 8,
+                      textTransform: "uppercase",
+                      letterSpacing: "0.5px",
+                    }}
+                  >
+                    Step {i + 1}
+                  </div>
+                  <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>{step.title}</h3>
+                  <p style={{ fontSize: 14, color: "var(--color-text-secondary)", lineHeight: 1.5 }}>
+                    {step.desc}
+                  </p>
+                </div>
+              ))}
+            </div>
+            {/* Dot indicators */}
+            <div style={{ display: "flex", justifyContent: "center", gap: 8, marginTop: 16 }}>
+              {steps.map((_, i) => (
+                <div
+                  key={i}
+                  style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: "50%",
+                    background: i === activeStep ? "var(--color-primary)" : "var(--color-border)",
+                    transition: "background 0.2s",
+                  }}
+                />
+              ))}
+            </div>
+          </>
+        ) : (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+              gap: 24,
+            }}
+          >
+            {steps.map((step, i) => (
               <div
+                key={i}
+                className="card"
                 style={{
-                  fontSize: 12,
-                  fontWeight: 700,
-                  color: "var(--color-primary)",
-                  marginBottom: 8,
-                  textTransform: "uppercase",
-                  letterSpacing: "0.5px",
+                  padding: 24,
+                  textAlign: "center",
                 }}
               >
-                Step {i + 1}
+                <div style={{ fontSize: 36, marginBottom: 12 }}>{step.icon}</div>
+                <div
+                  style={{
+                    fontSize: 12,
+                    fontWeight: 700,
+                    color: "var(--color-primary)",
+                    marginBottom: 8,
+                    textTransform: "uppercase",
+                    letterSpacing: "0.5px",
+                  }}
+                >
+                  Step {i + 1}
+                </div>
+                <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>{step.title}</h3>
+                <p style={{ fontSize: 14, color: "var(--color-text-secondary)", lineHeight: 1.5 }}>
+                  {step.desc}
+                </p>
               </div>
-              <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>{step.title}</h3>
-              <p style={{ fontSize: 14, color: "var(--color-text-secondary)", lineHeight: 1.5 }}>
-                {step.desc}
-              </p>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </section>
 
       {/* CTA */}
@@ -127,7 +219,7 @@ export default function Landing() {
         style={{
           background: "var(--color-surface)",
           borderTop: "1px solid var(--color-border)",
-          padding: "60px 24px",
+          padding: isMobile ? "32px 16px" : "60px 24px",
           textAlign: "center",
         }}
       >

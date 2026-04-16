@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { SERVICES } from "../api/services";
+import AddressAutocomplete from "./AddressAutocomplete";
 
 interface SearchOverlayProps {
   onClose: () => void;
@@ -51,9 +52,12 @@ export default function SearchOverlay({ onClose }: SearchOverlayProps) {
     <div
       style={{
         position: "fixed",
-        inset: 0,
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
         background: "var(--color-surface)",
-        zIndex: 1000,
+        zIndex: 1100,
         display: "flex",
         flexDirection: "column",
         animation: "overlay-slide-up 0.25s ease",
@@ -92,6 +96,7 @@ export default function SearchOverlay({ onClose }: SearchOverlayProps) {
         onSubmit={handleSubmit}
         style={{
           flex: 1,
+          minHeight: 0,
           display: "flex",
           flexDirection: "column",
           overflow: "hidden",
@@ -139,18 +144,18 @@ export default function SearchOverlay({ onClose }: SearchOverlayProps) {
                 height: 18,
                 fill: "var(--color-text-muted)",
                 pointerEvents: "none",
+                zIndex: 1,
               }}
               viewBox="0 0 24 24"
             >
               <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5a2.5 2.5 0 010-5 2.5 2.5 0 010 5z" />
             </svg>
-            <input
-              type="text"
-              placeholder="Zip code or city"
+            <AddressAutocomplete
               value={location}
-              onChange={(e) => setLocation(e.target.value)}
-              className="form-input"
+              onChange={setLocation}
+              placeholder="Zip code or city"
               style={{ paddingLeft: 42 }}
+              types={["(regions)"]}
             />
           </div>
         </div>
@@ -159,7 +164,9 @@ export default function SearchOverlay({ onClose }: SearchOverlayProps) {
         <div
           style={{
             flex: 1,
+            minHeight: 0,
             overflowY: "auto",
+            WebkitOverflowScrolling: "touch",
             padding: "0 20px",
             borderTop: "1px solid var(--color-border-light)",
           }}

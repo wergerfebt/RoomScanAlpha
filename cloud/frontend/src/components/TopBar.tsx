@@ -14,7 +14,7 @@ export default function TopBar() {
         padding: "10px 24px",
         position: "sticky",
         top: 0,
-        zIndex: 100,
+        zIndex: 500,
       }}
     >
       <div

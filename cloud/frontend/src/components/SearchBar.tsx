@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { SERVICES } from "../api/services";
 import SearchOverlay from "./SearchOverlay";
+import AddressAutocomplete from "./AddressAutocomplete";
 
 interface SearchBarProps {
   size?: "compact" | "large";
@@ -245,11 +246,11 @@ export default function SearchBar({ size = "compact" }: SearchBarProps) {
         >
           <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5a2.5 2.5 0 010-5 2.5 2.5 0 010 5z" />
         </svg>
-        <input
-          type="text"
-          placeholder="Zip code or city"
+        <AddressAutocomplete
           value={location}
-          onChange={(e) => setLocation(e.target.value)}
+          onChange={setLocation}
+          placeholder="Zip code or city"
+          className=""
           style={{
             width: "100%",
             padding: inputPad,
@@ -260,6 +261,7 @@ export default function SearchBar({ size = "compact" }: SearchBarProps) {
             outline: "none",
             color: "var(--color-text)",
           }}
+          types={["(regions)"]}
         />
       </div>
 

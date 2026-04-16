@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import Layout from "../components/Layout";
 import JobCard, { type Job } from "../components/JobCard";
 import { apiFetch } from "../api/client";
+import AddressAutocomplete from "../components/AddressAutocomplete";
 
 interface OrgData {
   id: string;
@@ -305,7 +306,7 @@ function OrgSettings({ org, onUpdate }: { org: OrgData; onUpdate: (o: OrgData) =
 
           <h3 style={{ fontSize: 16, fontWeight: 700, margin: "24px 0 16px" }}>Location & Service Area</h3>
           <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 14, ...fieldStyle }}>
-            <div><label style={labelStyle}>Address</label><input className="form-input" value={address} onChange={(e) => setAddress(e.target.value)} placeholder="Business address" /></div>
+            <div><label style={labelStyle}>Address</label><AddressAutocomplete value={address} onChange={setAddress} placeholder="Business address" types={["address"]} /></div>
             <div><label style={labelStyle}>Job Radius (miles)</label><input className="form-input" type="number" value={radius} onChange={(e) => setRadius(e.target.value)} placeholder="e.g. 30" /></div>
           </div>
 

@@ -1,5 +1,18 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 
+function useIsMobile(breakpoint = 768) {
+  const [mobile, setMobile] = useState(
+    () => typeof window !== "undefined" && window.innerWidth <= breakpoint,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${breakpoint}px)`);
+    const handler = (e: MediaQueryListEvent) => setMobile(e.matches);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, [breakpoint]);
+  return mobile;
+}
+
 export interface FilterValues {
   minPrice: number;
   maxPrice: number;
@@ -104,87 +117,54 @@ export default function FilterSidebar({
     };
   }, [handleDrag]);
 
-  return (
-    <div className="filter-sidebar">
-      <div className="filter-sidebar-header">
-        <h3>Filters</h3>
-        <button className="filter-clear-btn" onClick={clearAll}>
-          Clear all
-        </button>
+  const isMobile = useIsMobile();
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  // Price filter content
+  const priceFilter = prices.length >= 2 && (
+    <div className="filter-section">
+      <div style={{ padding: "14px 16px" }}><h4 style={{ fontSize: 14, fontWeight: 600 }}>Price</h4></div>
+      <div className="filter-section-body">
+        <div className="filter-histogram">
+          {counts.map((c, i) => {
+            const bMin = bucketStart + bucketWidth * i;
+            const bMax = bucketStart + bucketWidth * (i + 1);
+            const active = bMax >= filters.minPrice && bMin <= filters.maxPrice;
+            const h = Math.max(3, (c / maxCount) * 50);
+            return (
+              <div key={i} className={`filter-hist-bar${active ? " active" : ""}`} style={{ height: h }} />
+            );
+          })}
+        </div>
+        <div className="filter-range-track" ref={trackRef}>
+          <div className="filter-range-fill" style={{ left: `${minPct}%`, right: `${100 - maxPct}%` }} />
+          <div className="filter-range-thumb" style={{ left: `${minPct}%` }}
+            onMouseDown={() => (dragging.current = "min")} onTouchStart={() => (dragging.current = "min")} />
+          <div className="filter-range-thumb" style={{ left: `${maxPct}%` }}
+            onMouseDown={() => (dragging.current = "max")} onTouchStart={() => (dragging.current = "max")} />
+        </div>
+        <div className="filter-price-inputs">
+          <div>
+            <label>Min price</label>
+            <input className="filter-price-input" value={fmtPrice(filters.minPrice)}
+              onChange={(e) => onChange({ ...filters, minPrice: parsePrice(e.target.value) })} />
+          </div>
+          <span className="filter-price-dash">&mdash;</span>
+          <div>
+            <label>Max price</label>
+            <input className="filter-price-input" value={fmtPrice(filters.maxPrice)}
+              onChange={(e) => onChange({ ...filters, maxPrice: parsePrice(e.target.value) })} />
+          </div>
+        </div>
       </div>
+    </div>
+  );
 
-      {/* Price filter */}
-      {prices.length >= 2 && (
-        <FilterSection title="Price" defaultOpen>
-          {/* Histogram */}
-          <div className="filter-histogram">
-            {counts.map((c, i) => {
-              const bMin = bucketStart + bucketWidth * i;
-              const bMax = bucketStart + bucketWidth * (i + 1);
-              const active = bMax >= filters.minPrice && bMin <= filters.maxPrice;
-              const h = Math.max(3, (c / maxCount) * 50);
-              return (
-                <div
-                  key={i}
-                  className={`filter-hist-bar${active ? " active" : ""}`}
-                  style={{ height: h }}
-                />
-              );
-            })}
-          </div>
-
-          {/* Range slider */}
-          <div
-            className="filter-range-track"
-            ref={trackRef}
-          >
-            <div
-              className="filter-range-fill"
-              style={{ left: `${minPct}%`, right: `${100 - maxPct}%` }}
-            />
-            <div
-              className="filter-range-thumb"
-              style={{ left: `${minPct}%` }}
-              onMouseDown={() => (dragging.current = "min")}
-              onTouchStart={() => (dragging.current = "min")}
-            />
-            <div
-              className="filter-range-thumb"
-              style={{ left: `${maxPct}%` }}
-              onMouseDown={() => (dragging.current = "max")}
-              onTouchStart={() => (dragging.current = "max")}
-            />
-          </div>
-
-          {/* Price inputs */}
-          <div className="filter-price-inputs">
-            <div>
-              <label>Min price</label>
-              <input
-                className="filter-price-input"
-                value={fmtPrice(filters.minPrice)}
-                onChange={(e) =>
-                  onChange({ ...filters, minPrice: parsePrice(e.target.value) })
-                }
-              />
-            </div>
-            <span className="filter-price-dash">&mdash;</span>
-            <div>
-              <label>Max price</label>
-              <input
-                className="filter-price-input"
-                value={fmtPrice(filters.maxPrice)}
-                onChange={(e) =>
-                  onChange({ ...filters, maxPrice: parsePrice(e.target.value) })
-                }
-              />
-            </div>
-          </div>
-        </FilterSection>
-      )}
-
-      {/* Rating filter */}
-      <FilterSection title="Rating" defaultOpen>
+  // Rating filter content
+  const ratingFilter = (
+    <div className="filter-section">
+      <div style={{ padding: "14px 16px" }}><h4 style={{ fontSize: 14, fontWeight: 600 }}>Rating</h4></div>
+      <div className="filter-section-body">
         <div className="filter-rating-options">
           {[
             { value: "all", label: "All" },
@@ -193,58 +173,64 @@ export default function FilterSidebar({
             { value: "3.5", label: "3.5+" },
           ].map((opt) => (
             <label key={opt.value} className="filter-rating-option">
-              <input
-                type="radio"
-                name="rating"
-                checked={filters.minRating === opt.value}
-                onChange={() => setRating(opt.value)}
-              />
+              <input type="radio" name="rating" checked={filters.minRating === opt.value}
+                onChange={() => setRating(opt.value)} />
               {opt.value !== "all" && <span className="filter-star">&#9733;</span>}
               {opt.label}
             </label>
           ))}
         </div>
-      </FilterSection>
-
-      {/* Service filter (search only) */}
-      {showService && services.length > 0 && (
-        <FilterSection title="Service">
-          <select
-            className="filter-service-select"
-            value={filters.service || ""}
-            onChange={(e) => setService(e.target.value)}
-          >
-            <option value="">All services</option>
-            {services.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-        </FilterSection>
-      )}
+      </div>
     </div>
   );
-}
 
-function FilterSection({
-  title,
-  defaultOpen = true,
-  children,
-}: {
-  title: string;
-  defaultOpen?: boolean;
-  children: React.ReactNode;
-}) {
-  const [open, setOpen] = useState(defaultOpen);
+  // Service filter content
+  const serviceFilter = showService && services.length > 0 && (
+    <div className="filter-section">
+      <div style={{ padding: "14px 16px" }}><h4 style={{ fontSize: 14, fontWeight: 600 }}>Service</h4></div>
+      <div className="filter-section-body">
+        <select className="filter-service-select" value={filters.service || ""}
+          onChange={(e) => setService(e.target.value)}>
+          <option value="">All services</option>
+          {services.map((s) => <option key={s} value={s}>{s}</option>)}
+        </select>
+      </div>
+    </div>
+  );
+
+  if (isMobile) {
+    return (
+      <div className="filter-sidebar">
+        <div className="filter-sidebar-header" onClick={() => setMobileOpen(!mobileOpen)}
+          style={{ cursor: "pointer" }}>
+          <h3>Filters</h3>
+          <span className={`filter-chevron${mobileOpen ? "" : " collapsed"}`}>&#9650;</span>
+        </div>
+        {mobileOpen && (
+          <>
+            {priceFilter}
+            {ratingFilter}
+            {serviceFilter}
+            <div style={{ padding: "8px 16px 12px" }}>
+              <button className="filter-clear-btn" onClick={clearAll}>Clear all</button>
+            </div>
+          </>
+        )}
+      </div>
+    );
+  }
 
   return (
-    <div className="filter-section">
-      <div className="filter-section-toggle" onClick={() => setOpen(!open)}>
-        <h4>{title}</h4>
-        <span className={`filter-chevron${open ? "" : " collapsed"}`}>&#9650;</span>
+    <div className="filter-sidebar">
+      <div className="filter-sidebar-header">
+        <h3>Filters</h3>
+        <button className="filter-clear-btn" onClick={clearAll}>
+          Clear all
+        </button>
       </div>
-      {open && <div className="filter-section-body">{children}</div>}
+      {priceFilter}
+      {ratingFilter}
+      {serviceFilter}
     </div>
   );
 }

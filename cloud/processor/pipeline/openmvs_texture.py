@@ -310,9 +310,19 @@ def texture_scan(scan_root: str, metadata: dict, preview_faces: int = 0,
 
         # Decimate (0 = full mesh)
         if target_faces > 0 and original_faces > target_faces:
-            dec = src_mesh.simplify_quadric_decimation(face_count=target_faces)
+            # Two-stage decimation for large reductions (>3x) to preserve
+            # mesh topology. Single-stage 600K→50K produces degenerate faces
+            # that OpenMVS can't texture; 600K→300K→50K keeps topology clean.
+            INTERMEDIATE = RESOLUTION_LEVELS.get("standard", 300000)
+            if target_faces < INTERMEDIATE and original_faces > INTERMEDIATE:
+                stage1 = src_mesh.simplify_quadric_decimation(face_count=INTERMEDIATE)
+                dec = stage1.simplify_quadric_decimation(face_count=target_faces)
+                print(f"[OpenMVS] [{level_name}] Two-stage decimated: "
+                      f"{original_faces} → {len(stage1.faces)} → {len(dec.faces)} faces")
+            else:
+                dec = src_mesh.simplify_quadric_decimation(face_count=target_faces)
+                print(f"[OpenMVS] [{level_name}] Decimated: {original_faces} → {len(dec.faces)} faces")
             dec.export(mesh_ply)
-            print(f"[OpenMVS] [{level_name}] Decimated: {original_faces} → {len(dec.faces)} faces")
         else:
             src_mesh.export(mesh_ply)
             print(f"[OpenMVS] [{level_name}] Full mesh: {original_faces} faces")

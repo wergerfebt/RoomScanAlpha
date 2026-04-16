@@ -95,29 +95,24 @@ export default function OrgProfilePage() {
   return (
     <Layout>
       {/* Banner */}
-      <div style={{
-        height: 260, background: org.banner_image_url
+      <div className="org-profile-banner" style={{
+        background: org.banner_image_url
           ? `url(${org.banner_image_url}) center/cover no-repeat`
           : "linear-gradient(135deg, #0055cc 0%, #0088ff 100%)",
       }} />
 
       {/* Header */}
-      <div style={{ maxWidth: 1060, margin: "0 auto", padding: "0 24px", position: "relative" }}>
-        <div style={{ display: "flex", gap: 20, alignItems: "flex-end", marginTop: -36, paddingTop: 8 }}>
-          <div style={{
-            width: 100, height: 100, borderRadius: 16, background: "var(--color-surface)",
-            border: "4px solid var(--color-surface)", overflow: "hidden", flexShrink: 0,
-            display: "flex", alignItems: "center", justifyContent: "center",
-            fontSize: 36, fontWeight: 800, color: "var(--color-primary)",
-          }}>
+      <div className="org-profile-header-wrap">
+        <div className="org-profile-header">
+          <div className="org-profile-icon">
             {org.icon_url
-              ? <img src={org.icon_url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+              ? <img src={org.icon_url} alt="" />
               : org.name[0].toUpperCase()
             }
           </div>
-          <div style={{ paddingBottom: 8, paddingTop: 12, flex: 1 }}>
-            <h1 style={{ fontSize: 28, fontWeight: 800, marginBottom: 6 }}>{org.name}</h1>
-            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", fontSize: 14 }}>
+          <div className="org-profile-info">
+            <h1 className="org-profile-name">{org.name}</h1>
+            <div className="org-profile-meta">
               {org.avg_rating && (
                 <span style={{ color: "#f5a623", fontWeight: 700 }}>{org.avg_rating.toFixed(1)} &#9733;</span>
               )}
@@ -136,16 +131,29 @@ export default function OrgProfilePage() {
         </div>
 
         {/* Links */}
-        <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
+        <div className="org-profile-links">
           {org.website_url && <a href={org.website_url} target="_blank" rel="noopener noreferrer" className="btn" style={{ fontSize: 13, padding: "6px 14px" }}>Website</a>}
           {org.yelp_url && <a href={org.yelp_url} target="_blank" rel="noopener noreferrer" className="btn" style={{ fontSize: 13, padding: "6px 14px" }}>Yelp</a>}
           {org.google_reviews_url && <a href={org.google_reviews_url} target="_blank" rel="noopener noreferrer" className="btn" style={{ fontSize: 13, padding: "6px 14px" }}>Google Reviews</a>}
         </div>
       </div>
 
-      <div style={{ maxWidth: 1060, margin: "0 auto", padding: "32px 24px 60px", display: "grid", gridTemplateColumns: "1fr 360px", gap: 28, alignItems: "flex-start" }}>
+      <div className="org-profile-body">
         {/* Left column */}
         <div>
+          {/* CTA */}
+          <section className="card" style={{ padding: 16, marginBottom: 32 }}>
+            <h3 style={{ fontSize: 15, fontWeight: 700, marginBottom: 12 }}>Get a Quote</h3>
+            <p style={{ fontSize: 13, color: "var(--color-text-secondary)", marginBottom: 12 }}>
+              Scan your room with the RoomScanAlpha app and {org.name} can provide a detailed quote.
+            </p>
+            {org.website_url && (
+              <a href={org.website_url} target="_blank" rel="noopener noreferrer" className="btn btn-primary btn-full" style={{ fontSize: 14 }}>
+                Visit Website
+              </a>
+            )}
+          </section>
+
           {/* About */}
           {org.description && (
             <section style={{ marginBottom: 32 }}>
@@ -307,18 +315,6 @@ export default function OrgProfilePage() {
             </div>
           )}
 
-          {/* Contact */}
-          <div className="card" style={{ padding: 16 }}>
-            <h3 style={{ fontSize: 15, fontWeight: 700, marginBottom: 12 }}>Get a Quote</h3>
-            <p style={{ fontSize: 13, color: "var(--color-text-secondary)", marginBottom: 12 }}>
-              Scan your room with the RoomScanAlpha app and {org.name} can provide a detailed quote.
-            </p>
-            {org.website_url && (
-              <a href={org.website_url} target="_blank" rel="noopener noreferrer" className="btn btn-primary btn-full" style={{ fontSize: 14 }}>
-                Visit Website
-              </a>
-            )}
-          </div>
         </div>
       </div>
 

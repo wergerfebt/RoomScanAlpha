@@ -1,0 +1,1793 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>RoomScan - Gaussian Splat Viewer</title>
+<link rel="icon" type="image/x-icon" href="/favicon.ico">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f2f4f8; color: #1d1d1f; overflow: hidden; height: 100vh; }
+
+  .app { position: relative; height: 100vh; }
+  .main-panel { width: 100%; height: 100%; display: flex; flex-direction: column; }
+  .viewer-container { flex: 1; position: relative; background: #1a1a1a; }
+  .viewer-container canvas { display: block; }
+
+  /* Sidebar drawer */
+  .sidebar { position: absolute; top: 0; left: 0; z-index: 50; width: 320px; height: 100%;
+             background: #fff; border-right: 1px solid #e0e4ea; display: flex; flex-direction: column;
+             overflow-y: auto; box-shadow: 2px 0 12px rgba(0,0,0,0.1);
+             transition: transform 0.3s ease; transform: translateX(0);
+             padding-top: env(safe-area-inset-top, 0px); }
+  .sidebar.collapsed { transform: translateX(-100%); box-shadow: none; }
+  .sidebar-tab { position: absolute; top: 50%; left: 0; z-index: 49; transform: translateY(-50%);
+                 background: #fff; border: 1px solid #e0e4ea; border-left: none;
+                 border-radius: 0 8px 8px 0; padding: 12px 6px; cursor: pointer;
+                 box-shadow: 2px 0 8px rgba(0,0,0,0.08); transition: opacity 0.3s, left 0.3s;
+                 opacity: 0; pointer-events: none; }
+  .sidebar-tab svg { display: block; width: 20px; height: 20px; fill: #0055cc; }
+  .sidebar.collapsed ~ .sidebar-tab { opacity: 1; pointer-events: auto; }
+  .sidebar-close { position: absolute; top: 12px; right: 12px; z-index: 51; background: none; border: none;
+                   cursor: pointer; padding: 4px; border-radius: 4px; color: #8e8e93; }
+  .sidebar-close:hover { background: #f0f3f8; color: #1d1d1f; }
+  .sidebar-close svg { width: 18px; height: 18px; fill: currentColor; }
+
+  /* Joystick */
+  .joystick-zone { display: none; position: absolute; bottom: 24px; left: 16px; z-index: 20;
+                   width: 80px; height: 80px; touch-action: none; }
+  .joystick-base { width: 80px; height: 80px; border-radius: 50%;
+                   background: rgba(0,80,200,0.12); border: 2px solid rgba(0,80,200,0.35); }
+  .joystick-knob { position: absolute; width: 32px; height: 32px; border-radius: 50%;
+                   background: rgba(0,80,200,0.45); top: 24px; left: 24px;
+                   pointer-events: none; transition: none; }
+  @media (hover: none) and (pointer: coarse) { .joystick-zone { display: block; } }
+  @media (max-width: 768px) { .joystick-zone { display: block; bottom: 80px; } }
+
+  /* Sidebar sections */
+  .sidebar-header { padding: 16px; border-bottom: 1px solid #e0e4ea; }
+  .sidebar-header h1 { font-size: 18px; font-weight: 700; color: #0055cc; }
+  .sidebar-header .subtitle { color: #8e8e93; font-size: 12px; margin-top: 2px; }
+  .job-info { padding: 12px 16px; border-bottom: 1px solid #e0e4ea; }
+  .job-info .project-title { font-size: 16px; font-weight: 700; }
+  .job-info .address { color: #6e6e73; font-size: 12px; margin-top: 3px; }
+  .job-info .description { color: #8e8e93; font-size: 12px; margin-top: 6px; line-height: 1.4; }
+  .job-info .description.truncated { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .job-info .desc-toggle { color: #0055cc; font-size: 11px; font-weight: 600; cursor: pointer; margin-top: 2px; display: inline-block; }
+
+  /* Floor plan */
+  .floor-plan-section { padding: 12px; border-bottom: 1px solid #e0e4ea; }
+  .floor-plan-section .fp-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .floor-plan-section h3 { font-size: 12px; font-weight: 600; color: #8e8e93; text-transform: uppercase; letter-spacing: 0.5px; margin: 0; }
+  .fp-expand-btn { background: none; border: none; color: #0055cc; font-size: 11px; font-weight: 600; cursor: pointer; padding: 2px 6px; border-radius: 4px; }
+  .fp-expand-btn:hover { background: #e8f0fe; }
+  .floor-plan-canvas-wrap { background: #f7f8fa; border-radius: 8px; aspect-ratio: 4/3; position: relative; cursor: pointer; border: 1px solid #e0e4ea; }
+  .floor-plan-canvas-wrap canvas { width: 100%; height: 100%; border-radius: 8px; }
+  .fp-fullscreen { display: none; position: absolute; top: 0; left: 0; right: 0; bottom: 0; z-index: 40;
+                   background: #fff; flex-direction: column; }
+  .fp-fullscreen.active { display: flex; }
+  .fp-fullscreen-header { display: flex; align-items: center; padding: 10px 16px; border-bottom: 1px solid #e0e4ea; }
+  .fp-fullscreen-header h3 { flex: 1; font-size: 15px; font-weight: 600; }
+  .fp-fullscreen-close { background: none; border: none; font-size: 13px; font-weight: 600; color: #0055cc; cursor: pointer; padding: 4px 10px; border-radius: 6px; }
+  .fp-fullscreen-close:hover { background: #e8f0fe; }
+  .fp-fullscreen canvas { flex: 1; width: 100%; touch-action: none; }
+  .fp-fullscreen .fp-hint { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%);
+                            background: rgba(0,0,0,0.5); color: #fff; font-size: 11px; padding: 4px 12px;
+                            border-radius: 4px; pointer-events: none; }
+
+  /* Room list */
+  .room-list { padding: 8px; }
+  .room-list h3 { font-size: 12px; font-weight: 600; color: #8e8e93; text-transform: uppercase; letter-spacing: 0.5px; padding: 4px 8px; }
+  .room-item { padding: 10px 12px; border-radius: 8px; cursor: pointer; margin: 2px 0; transition: background 0.15s; border: 1px solid transparent; }
+  .room-item:hover { background: #f0f3f8; }
+  .room-item.active { background: #e8f0fe; border-color: #0055cc; }
+  .room-item .name { font-size: 14px; font-weight: 500; }
+  .room-item .detail { font-size: 11px; color: #8e8e93; margin-top: 2px; }
+
+  /* Metrics */
+  .metrics-section { padding: 12px 16px; border-top: 1px solid #e0e4ea; }
+  .metrics-section h3 { font-size: 12px; font-weight: 600; color: #8e8e93; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+  .metric-row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 13px; }
+  .metric-row .label { color: #6e6e73; }
+  .metric-row .value { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .rfq-id-section { padding: 12px 16px; border-top: 1px solid #e0e4ea; color: #b0b3ba; font-size: 10px;
+                    font-family: monospace; word-break: break-all; margin-top: auto; }
+
+  /* Top bar */
+  .top-bar { display: flex; align-items: center; gap: 8px; padding: 8px 16px; background: #fff; border-bottom: 1px solid #e0e4ea; flex-wrap: wrap; }
+  .top-bar .room-name { font-size: 16px; font-weight: 600; flex: 1; }
+  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; border: none; transition: background 0.15s; }
+  .btn-toggle { background: #e8f0fe; color: #0055cc; }
+  .btn-toggle:hover { background: #d0e2fc; }
+  .btn-toggle.active { background: #0055cc; color: #fff; }
+
+  /* Loading / error */
+  .loading { display: flex; align-items: center; justify-content: center; height: 100%; color: #8e8e93; font-size: 16px; }
+  .viewer-spinner { display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+                    z-index: 25; background: rgba(0,0,0,0.55); color: #fff; padding: 12px 20px;
+                    border-radius: 8px; font-size: 13px; font-weight: 600; pointer-events: none; }
+  .viewer-spinner::before { content: ''; display: inline-block; width: 14px; height: 14px;
+                            border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff;
+                            border-radius: 50%; animation: spin 0.8s linear infinite;
+                            vertical-align: middle; margin-right: 8px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .error { text-align: center; padding: 60px; }
+  .error h2 { font-size: 20px; margin-bottom: 8px; }
+  .error p { color: #8e8e93; }
+
+  /* Measurement labels (CSS2D) */
+  .measure-label { background: rgba(0,85,204,0.85); color: #fff; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600; font-family: -apple-system, monospace; white-space: nowrap; pointer-events: none; }
+  .measure-label.area { background: rgba(52,168,83,0.9); font-size: 13px; }
+  .measure-label.height { background: rgba(234,134,0,0.9); }
+
+  /* Corner thumbnail */
+  .corner-thumb { position: absolute; bottom: 16px; right: 16px; z-index: 15;
+                  width: 160px; height: 120px; border-radius: 8px; overflow: hidden;
+                  border: 2px solid rgba(0,85,204,0.3); background: #1a1a1a; cursor: pointer;
+                  box-shadow: 0 2px 8px rgba(0,0,0,0.15); display: none; }
+  .corner-thumb:hover { border-color: #0055cc; }
+  .corner-thumb canvas { width: 100%; height: 100%; display: block; }
+  .corner-thumb .thumb-label { position: absolute; bottom: 4px; left: 0; right: 0; text-align: center;
+                               font-size: 9px; font-weight: 600; color: rgba(255,255,255,0.6); pointer-events: none; }
+  @media (max-width: 768px) {
+    .corner-thumb { bottom: auto; top: 56px; right: 8px; width: 100px; height: 75px; }
+  }
+
+  /* Fullscreen isometric overlay */
+  .iso-fullscreen { display: none; position: absolute; top: 0; left: 0; right: 0; bottom: 0; z-index: 14; background: #1a1a1a; }
+  .iso-fullscreen.active { display: block; }
+  .iso-fullscreen canvas { width: 100%; height: 100%; display: block; }
+
+  /* WASD keys */
+  .wasd-keys { position: absolute; bottom: 16px; left: 16px; z-index: 15; display: grid;
+               grid-template-columns: repeat(3, 28px); grid-template-rows: repeat(2, 28px); gap: 3px;
+               pointer-events: none; }
+  .wasd-key { width: 28px; height: 28px; border-radius: 4px; display: flex; align-items: center;
+              justify-content: center; font-size: 11px; font-weight: 700; font-family: monospace;
+              background: rgba(0,0,0,0.25); color: rgba(255,255,255,0.4); border: 1px solid rgba(255,255,255,0.15); }
+  .wasd-key.active { background: rgba(0,85,204,0.7); color: #fff; border-color: rgba(0,85,204,0.9); }
+  .wasd-key.blank { visibility: hidden; }
+  @media (max-width: 768px) { .wasd-keys { display: none; } }
+
+  /* Orientation controls */
+  .orient-panel { position: absolute; top: 60px; right: 16px; z-index: 20; background: rgba(0,0,0,0.75);
+                  color: #fff; padding: 12px 16px; border-radius: 8px; font-size: 12px; min-width: 220px;
+                  display: none; backdrop-filter: blur(8px); }
+  .orient-panel.active { display: block; }
+  .orient-panel h4 { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: #aaa; margin-bottom: 8px; }
+  .orient-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .orient-row label { width: 70px; font-size: 11px; color: #ccc; }
+  .orient-row input[type="range"] { flex: 1; height: 4px; }
+  .orient-row .val { width: 40px; text-align: right; font-size: 11px; font-variant-numeric: tabular-nums; color: #aaa; }
+  .orient-reset { background: rgba(255,255,255,0.15); border: none; color: #fff; padding: 4px 10px;
+                  border-radius: 4px; font-size: 11px; cursor: pointer; margin-top: 4px; }
+  .orient-reset:hover { background: rgba(255,255,255,0.25); }
+
+  /* Toast */
+  .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: #333;
+           color: #fff; padding: 10px 20px; border-radius: 8px; font-size: 13px; font-weight: 500;
+           z-index: 200; opacity: 0; transition: opacity 0.3s; pointer-events: none; }
+  .toast.show { opacity: 1; }
+
+  @media (max-width: 768px) {
+    .sidebar { width: 280px; }
+    .top-bar { padding: 6px 12px; }
+    .top-bar .room-name { font-size: 14px; }
+    .btn { padding: 5px 10px; font-size: 12px; }
+    .floor-plan-section { display: none; }
+    .orient-panel { top: 48px; right: 8px; min-width: 180px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <div class="sidebar" id="sidebar">
+    <button class="sidebar-close" onclick="toggleSidebar()" title="Close panel">
+      <svg viewBox="0 0 24 24"><path d="M15.41 16.59L10.83 12l4.58-4.59L14 6l-6 6 6 6z"/></svg>
+    </button>
+    <div class="sidebar-header">
+      <h1>Room Scan Alpha</h1>
+      <div class="subtitle">Gaussian Splat Viewer</div>
+    </div>
+    <div id="sidebar-content"><div class="loading">Loading...</div></div>
+  </div>
+  <button class="sidebar-tab" id="sidebar-tab" onclick="toggleSidebar()" title="Show project info">
+    <svg viewBox="0 0 24 24"><path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6z"/></svg>
+  </button>
+  <div class="main-panel">
+    <div class="top-bar" id="top-bar">
+      <span class="room-name" id="room-name">Loading...</span>
+      <button class="btn btn-toggle" id="btn-measures" onclick="toggleMeasurements()" style="display:none">Show Measurements</button>
+      <button class="btn btn-toggle" id="btn-view-mode" onclick="toggleViewMode()" style="display:none">Birds Eye View</button>
+      <button class="btn btn-toggle" id="btn-orient" onclick="toggleOrientPanel()">Orientation</button>
+    </div>
+    <div class="viewer-container" id="viewer-container">
+      <div class="loading" id="viewer-loading">Loading Gaussian Splat...</div>
+      <div class="viewer-spinner" id="viewer-spinner">Loading splat...</div>
+
+      <div class="fp-fullscreen" id="fp-fullscreen">
+        <div class="fp-fullscreen-header">
+          <h3>Floor Plan</h3>
+          <button class="fp-fullscreen-close" onclick="closeFpFullscreen()">Close</button>
+        </div>
+        <canvas id="fp-canvas-full"></canvas>
+        <div class="fp-hint">Scroll to zoom - Drag to pan - Click room to select</div>
+      </div>
+
+      <div class="iso-fullscreen" id="iso-fullscreen">
+        <canvas id="iso-full-canvas"></canvas>
+      </div>
+
+      <div class="orient-panel" id="orient-panel">
+        <h4>Splat Orientation</h4>
+        <div class="orient-row">
+          <label>Rotate X</label>
+          <input type="range" id="orient-rx" min="-180" max="180" value="0" step="1">
+          <span class="val" id="orient-rx-val">0</span>
+        </div>
+        <div class="orient-row">
+          <label>Rotate Y</label>
+          <input type="range" id="orient-ry" min="-180" max="180" value="0" step="1">
+          <span class="val" id="orient-ry-val">0</span>
+        </div>
+        <div class="orient-row">
+          <label>Rotate Z</label>
+          <input type="range" id="orient-rz" min="-180" max="180" value="0" step="1">
+          <span class="val" id="orient-rz-val">0</span>
+        </div>
+        <div class="orient-row">
+          <label>Offset X</label>
+          <input type="range" id="orient-tx" min="-20" max="20" value="0" step="0.05">
+          <span class="val" id="orient-tx-val">0</span>
+        </div>
+        <div class="orient-row">
+          <label>Offset Y</label>
+          <input type="range" id="orient-ty" min="-20" max="20" value="0" step="0.05">
+          <span class="val" id="orient-ty-val">0</span>
+        </div>
+        <div class="orient-row">
+          <label>Offset Z</label>
+          <input type="range" id="orient-tz" min="-20" max="20" value="0" step="0.05">
+          <span class="val" id="orient-tz-val">0</span>
+        </div>
+        <div class="orient-row">
+          <label>Scale</label>
+          <input type="range" id="orient-scale" min="0.1" max="5" value="1" step="0.05">
+          <span class="val" id="orient-scale-val">1</span>
+        </div>
+        <button class="orient-reset" onclick="snapToCenter()">Snap to Center</button>
+        <button class="orient-reset" onclick="resetOrientation()">Reset</button>
+        <button class="orient-reset" onclick="saveOrientation()">Save</button>
+        <button class="orient-reset" onclick="logOrientation()" style="margin-left:4px">Log</button>
+      </div>
+
+      <div class="wasd-keys" id="wasd-keys">
+        <div class="wasd-key blank"></div>
+        <div class="wasd-key" id="key-arrowup">&#x25B2;</div>
+        <div class="wasd-key blank"></div>
+        <div class="wasd-key" id="key-arrowleft">&#x25C0;</div>
+        <div class="wasd-key" id="key-arrowdown">&#x25BC;</div>
+        <div class="wasd-key" id="key-arrowright">&#x25B6;</div>
+      </div>
+
+      <div class="corner-thumb" id="corner-thumb" onclick="toggleIsoFullscreen()">
+        <canvas id="iso-canvas"></canvas>
+        <div class="thumb-label" id="thumb-label">3D Model</div>
+      </div>
+
+      <div class="joystick-zone" id="joystick-zone">
+        <div class="joystick-base" id="joystick-base">
+          <div class="joystick-knob" id="joystick-knob"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+
+// --- Config ---
+const SCAN_ID = 'b069da20-8f00-4d9b-9d13-6a7b82bc52ba';
+const ROOM_ID = '66abbeb4-d916-4e04-b735-ae67bceb9066';
+const RFQ_ID = SCAN_ID; // For single-room RFQs, scan_id == rfq_id
+const API_BASE = window.location.origin;
+
+// Splat URL: check query param, then fall back to file proxy
+function getSplatUrl() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('splat')) return params.get('splat');
+  // Use ROOM_ID as the scan_id in the file proxy (matches GCS directory structure)
+  return `${API_BASE}/api/rfqs/${RFQ_ID}/scans/${ROOM_ID}/files/room_scan_glomap.splat`;
+}
+
+// --- State ---
+let currentData = null;
+let activeRoomIndex = -1;
+let measurementsVisible = false;
+let isBirdsEye = false;
+let savedInteriorCamPos = null;
+let savedInteriorCamTarget = null;
+let savedInteriorFov = 75;
+let currentRoomPolygonM = null;
+let currentRoomGeometry = null; // { cornersM, ceilingHeightM, cornersYM, avgCeilingY, floorY }
+
+// Three.js (for measurements overlay + isometric)
+let measureScene, measureCamera, cssRenderer;
+
+// Splat viewer state
+let splatViewer = null;
+let splatScene = null;
+let splatCamera = null;
+let splatRenderer = null;
+let splatControls = null;
+let splatGroup = null; // Group wrapping the splat for orientation transforms
+let roomWireframeGroup = null; // Room polygon wireframe in main scene (fixed, not affected by orientation)
+
+// Isometric
+let isoRenderer = null, isoScene = null, isoCamera = null;
+let isoFullRenderer = null, isoFullControls = null, isoCssRenderer = null;
+let isoRoomGroup = null, isoMeasureGroup = null;
+let isoCenter = null, isoSpan = 1;
+let isoFullscreen = false;
+
+// Orientation
+const orient = { rx: 0, ry: 0, rz: 0, tx: 0, ty: 0, tz: 0, scale: 1 };
+
+// --- Utility ---
+function esc(s) { const el = document.createElement('span'); el.textContent = s || ''; return el.innerHTML; }
+function formatFtIn(totalFt) {
+  const ft = Math.floor(totalFt);
+  const inches = Math.round((totalFt - ft) * 12);
+  return inches === 0 ? `${ft}'` : `${ft}' ${inches}"`;
+}
+function showToast(msg, duration = 3000) {
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), duration);
+}
+
+// --- Init ---
+async function init() {
+  try {
+    const resp = await fetch(`${API_BASE}/api/rfqs/${RFQ_ID}/contractor-view`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    currentData = await resp.json();
+    renderSidebar(currentData);
+
+    // Find the room matching ROOM_ID or SCAN_ID, default to first room
+    let roomIdx = 0;
+    if (currentData.rooms) {
+      const idx = currentData.rooms.findIndex(r => r.scan_id === SCAN_ID || r.room_id === ROOM_ID);
+      if (idx >= 0) roomIdx = idx;
+    }
+    await loadRoom(roomIdx);
+    // Load splat once after room geometry is set up (camera will be positioned by renderSplatData)
+    loadSplat();
+  } catch (e) {
+    console.error('Failed to load room data:', e);
+    // Still try to load splat even without room data
+    document.getElementById('sidebar-content').innerHTML =
+      `<div class="error"><h2>Room data unavailable</h2><p>${esc(e.message)}</p><p style="margin-top:12px;color:#8e8e93">Splat viewer will load without room metadata.</p></div>`;
+    initSplatOnly();
+  }
+}
+
+async function initSplatOnly() {
+  await initSplatViewer();
+  loadSplat();
+}
+
+// --- Sidebar ---
+function renderSidebar(data) {
+  let html = '';
+  const title = data.title || data.project_scope || 'Project';
+  html += '<div class="job-info">';
+  html += `<div class="project-title">${esc(title)}</div>`;
+  if (data.address) html += `<div class="address">${esc(data.address)}</div>`;
+  if (data.job_description) {
+    html += `<div class="description truncated" id="job-desc">${esc(data.job_description)}</div>`;
+    if (data.job_description.length > 60)
+      html += `<span class="desc-toggle" id="desc-toggle" onclick="window._toggleDesc()">Show more</span>`;
+  }
+  html += '</div>';
+
+  if (data.rooms?.some(r => r.room_polygon_ft))
+    html += `<div class="floor-plan-section"><div class="fp-header"><h3>Floor Plan</h3><button class="fp-expand-btn" onclick="openFpFullscreen()">Expand</button></div><div class="floor-plan-canvas-wrap"><canvas id="fp-canvas"></canvas></div></div>`;
+
+  html += '<div class="room-list"><h3>Rooms</h3>';
+  (data.rooms || []).forEach((room, i) => {
+    const area = room.floor_area_sqft ? `${Math.round(room.floor_area_sqft)} sq ft` : '';
+    html += `<div class="room-item" id="room-${i}" onclick="window._selectRoom(${i})">
+      <div class="name">${esc(room.room_label || `Room ${i + 1}`)}</div>
+      <div class="detail">${area}${area && room.ceiling_height_ft ? ' - ' : ''}${room.ceiling_height_ft ? room.ceiling_height_ft + ' ft ceiling' : ''}</div>
+    </div>`;
+  });
+  html += '</div>';
+  html += '<div class="metrics-section" id="metrics-panel"></div>';
+  html += `<div class="rfq-id-section">RFQ: ${esc(data.rfq_id || RFQ_ID)}<br>Scan: ${esc(SCAN_ID)}</div>`;
+  document.getElementById('sidebar-content').innerHTML = html;
+  requestAnimationFrame(() => drawFloorPlan(data, 'fp-canvas'));
+}
+
+function renderMetrics(room) {
+  const panel = document.getElementById('metrics-panel');
+  if (!panel) return;
+  let html = '<h3>Dimensions</h3>';
+  if (room.floor_area_sqft) html += metricRow('Floor Area', `${room.floor_area_sqft} sq ft`);
+  if (room.wall_area_sqft) html += metricRow('Wall Area', `${room.wall_area_sqft} sq ft`);
+  if (room.ceiling_height_ft) html += metricRow('Ceiling Height', `${room.ceiling_height_ft} ft`);
+  if (room.perimeter_linear_ft) html += metricRow('Perimeter', `${room.perimeter_linear_ft} ft`);
+
+  if (room.detected_components) {
+    const dc = room.detected_components;
+    const items = Array.isArray(dc) ? dc : dc.detected || [];
+    const details = dc.details || {};
+    if (items.length > 0) {
+      html += '<h3 style="margin-top:12px">Detected Materials</h3>';
+      items.forEach(c => {
+        const label = c.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+        const d = details[c];
+        html += metricRow(esc(label), d ? `${d.qty} ${d.unit}` : '');
+      });
+    }
+  }
+  panel.innerHTML = html;
+}
+
+function metricRow(label, value) {
+  return `<div class="metric-row"><span class="label">${label}</span><span class="value">${value}</span></div>`;
+}
+
+// --- Floor Plan ---
+const fpTransform = { panX: 0, panY: 0, zoom: 1 };
+let fpDrag = null, fpDidDrag = false, fpPinchDist = null, fpLastOpts = null;
+
+function resetFpTransform() { fpTransform.panX = 0; fpTransform.panY = 0; fpTransform.zoom = 1; }
+
+function setupFpInteraction() {
+  const canvas = document.getElementById('fp-canvas-full');
+  if (!canvas || canvas._fpSetup) return;
+  canvas._fpSetup = true;
+  function redraw() { if (currentData && fpLastOpts) drawFloorPlan(currentData, 'fp-canvas-full', fpLastOpts); }
+  canvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    fpTransform.zoom = Math.max(0.3, Math.min(5, fpTransform.zoom * (e.deltaY > 0 ? 0.9 : 1.1)));
+    redraw();
+  }, { passive: false });
+  canvas.addEventListener('mousedown', (e) => {
+    fpDrag = { startX: e.clientX, startY: e.clientY, startPanX: fpTransform.panX, startPanY: fpTransform.panY };
+    fpDidDrag = false;
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!fpDrag) return;
+    const dx = e.clientX - fpDrag.startX, dy = e.clientY - fpDrag.startY;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) fpDidDrag = true;
+    fpTransform.panX = fpDrag.startPanX + dx; fpTransform.panY = fpDrag.startPanY + dy;
+    redraw();
+  });
+  window.addEventListener('mouseup', () => { fpDrag = null; });
+}
+
+function drawFloorPlan(data, canvasId, opts) {
+  const canvas = document.getElementById(canvasId || 'fp-canvas');
+  if (!canvas) return;
+  const singleRoom = opts?.singleRoom;
+  const showMeasurements = opts?.showMeasurements || false;
+  const isFullscreen = (canvasId === 'fp-canvas-full');
+  if (isFullscreen) { fpLastOpts = opts; setupFpInteraction(); }
+
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.parentElement.getBoundingClientRect();
+  canvas.width = rect.width * dpr; canvas.height = rect.height * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  const w = rect.width, h = rect.height;
+
+  if (isFullscreen) {
+    ctx.translate(fpTransform.panX, fpTransform.panY);
+    ctx.translate(w/2, h/2); ctx.scale(fpTransform.zoom, fpTransform.zoom); ctx.translate(-w/2, -h/2);
+  }
+
+  const GAP_FT = 3;
+  const roomPolys = [];
+  let cursorX = 0;
+  (data.rooms || []).forEach((r, i) => {
+    if (singleRoom !== undefined && i !== singleRoom) return;
+    if (!r.room_polygon_ft || r.room_polygon_ft.length < 3) return;
+    const poly = r.room_polygon_ft;
+    let rMinX = Infinity, rMaxX = -Infinity, rMinY = Infinity, rMaxY = -Infinity;
+    poly.forEach(([x, y]) => { rMinX = Math.min(rMinX, x); rMaxX = Math.max(rMaxX, x); rMinY = Math.min(rMinY, y); rMaxY = Math.max(rMaxY, y); });
+    const offX = cursorX - rMinX, offY = -rMinY;
+    roomPolys.push({ poly: poly.map(([x, y]) => [x + offX, y + offY]), roomIdx: i });
+    cursorX += (rMaxX - rMinX) + GAP_FT;
+  });
+  if (roomPolys.length === 0) return;
+
+  let allPts = []; roomPolys.forEach(rp => rp.poly.forEach(p => allPts.push(p)));
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  allPts.forEach(([x, y]) => { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y); });
+  const polyW = maxX - minX || 1, polyH = maxY - minY || 1;
+  const pad = showMeasurements ? 0.18 : 0.12;
+  const scale = Math.min(w * (1 - 2*pad) / polyW, h * (1 - 2*pad) / polyH);
+  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+  const tx = x => w/2 + (x - cx) * scale;
+  const ty = y => h/2 + (y - cy) * scale;
+
+  roomPolys.forEach(rp => { data.rooms[rp.roomIdx]._offsetPoly = rp.poly; });
+
+  roomPolys.forEach(({ poly, roomIdx: i }) => {
+    const room = data.rooms[i];
+    const isActive = i === activeRoomIndex;
+    const isSingle = singleRoom !== undefined;
+    ctx.beginPath();
+    ctx.moveTo(tx(poly[0][0]), ty(poly[0][1]));
+    poly.slice(1).forEach(([x, y]) => ctx.lineTo(tx(x), ty(y)));
+    ctx.closePath();
+    ctx.fillStyle = (isActive || isSingle) ? 'rgba(0,85,204,0.1)' : 'rgba(0,0,0,0.03)';
+    ctx.fill();
+    ctx.strokeStyle = (isActive || isSingle) ? '#0055cc' : '#c0c4cc';
+    ctx.lineWidth = (isActive || isSingle) ? 2 : 1;
+    ctx.stroke();
+
+    if (showMeasurements || isSingle) {
+      for (let j = 0; j < poly.length; j++) {
+        const k = (j + 1) % poly.length;
+        const [x0, y0] = poly[j], [x1, y1] = poly[k];
+        const wallFt = Math.sqrt((x1-x0)**2 + (y1-y0)**2);
+        if (wallFt < 0.5) continue;
+        const mx = (tx(x0) + tx(x1)) / 2, my = (ty(y0) + ty(y1)) / 2;
+        const pcx = poly.reduce((s, p) => s + p[0], 0) / poly.length;
+        const pcy = poly.reduce((s, p) => s + p[1], 0) / poly.length;
+        const dx = tx(x1) - tx(x0), dy = ty(y1) - ty(y0);
+        const len = Math.sqrt(dx*dx + dy*dy) || 1;
+        let px = -dy/len, py = dx/len;
+        if ((tx(pcx) - mx) * px + (ty(pcy) - my) * py > 0) { px = -px; py = -py; }
+        ctx.save(); ctx.font = 'bold 11px -apple-system, sans-serif'; ctx.fillStyle = '#0055cc';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(formatFtIn(wallFt), mx + px * 14, my + py * 14);
+        ctx.restore();
+      }
+      if (room.floor_area_sqft) {
+        const pcx = poly.reduce((s, p) => s + p[0], 0) / poly.length;
+        const pcy = poly.reduce((s, p) => s + p[1], 0) / poly.length;
+        ctx.save(); ctx.font = 'bold 13px -apple-system, sans-serif'; ctx.fillStyle = '#34a853';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(`${Math.round(room.floor_area_sqft)} SF`, tx(pcx), ty(pcy) + 14);
+        ctx.restore();
+      }
+    }
+
+    const lx = poly.reduce((s, p) => s + p[0], 0) / poly.length;
+    const ly = poly.reduce((s, p) => s + p[1], 0) / poly.length;
+    ctx.font = `${(isActive || isSingle) ? 'bold ' : ''}${isSingle ? '14' : '11'}px -apple-system, sans-serif`;
+    ctx.fillStyle = (isActive || isSingle) ? '#0055cc' : '#8e8e93';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(room.room_label || `Room ${i+1}`, tx(lx), ty(ly) - (showMeasurements ? 6 : 0));
+  });
+
+  canvas.onclick = (e) => {
+    if (fpDidDrag) return;
+    const br = canvas.getBoundingClientRect();
+    let mx = e.clientX - br.left, my = e.clientY - br.top;
+    if (isFullscreen) {
+      mx = (mx - fpTransform.panX - w/2) / fpTransform.zoom + w/2;
+      my = (my - fpTransform.panY - h/2) / fpTransform.zoom + h/2;
+    }
+    const fpx = (mx - w/2) / scale + cx, fpy = (my - h/2) / scale + cy;
+    for (let i = 0; i < data.rooms.length; i++) {
+      const poly = data.rooms[i]._offsetPoly;
+      if (poly && pointInPoly(fpx, fpy, poly)) { window._selectRoom(i); return; }
+    }
+    if (isFullscreen) { resetFpTransform(); drawFloorPlan(data, canvasId, { showMeasurements: true }); }
+  };
+}
+
+function pointInPoly(x, y, poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    if ((poly[i][1] > y) !== (poly[j][1] > y) &&
+        x < (poly[j][0] - poly[i][0]) * (y - poly[i][1]) / (poly[j][1] - poly[i][1]) + poly[i][0])
+      inside = !inside;
+  }
+  return inside;
+}
+
+// --- Room Selection ---
+window._selectRoom = function(index) {
+  // Room switching disabled — this viewer is locked to a single room's splat
+  if (!currentData || !currentData.rooms[index]) return;
+  if (index !== activeRoomIndex) {
+    showToast('This viewer shows the Gaussian Splat for ' + (currentData.rooms[activeRoomIndex]?.room_label || 'this room'));
+    return;
+  }
+};
+
+// --- Three.js Splat Viewer ---
+
+async function initSplatViewer() {
+  const container = document.getElementById('viewer-container');
+  const loading = document.getElementById('viewer-loading');
+
+  // Create Three.js scene, camera, renderer manually
+  splatScene = new THREE.Scene();
+  splatScene.background = new THREE.Color(0x000000); // Pure black — easy to distinguish from white splats
+
+  splatCamera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.05, 500);
+  splatCamera.position.set(0, 1.5, 0);
+
+  splatRenderer = new THREE.WebGLRenderer({ antialias: true });
+  splatRenderer.setSize(container.clientWidth, container.clientHeight);
+  splatRenderer.setPixelRatio(window.devicePixelRatio);
+  container.appendChild(splatRenderer.domElement);
+
+  // CSS2D renderer for measurement labels
+  cssRenderer = new CSS2DRenderer();
+  cssRenderer.setSize(container.clientWidth, container.clientHeight);
+  cssRenderer.domElement.style.position = 'absolute';
+  cssRenderer.domElement.style.top = '0';
+  cssRenderer.domElement.style.pointerEvents = 'none';
+  container.appendChild(cssRenderer.domElement);
+
+  // Orbit controls
+  splatControls = new OrbitControls(splatCamera, splatRenderer.domElement);
+  splatControls.enableDamping = true;
+  splatControls.dampingFactor = 0.1;
+  splatControls.enableZoom = false;
+  splatControls.enablePan = false;
+  splatControls.rotateSpeed = -0.3;
+  splatControls.target.set(0, 1.5, -0.01);
+
+  // Lighting for isometric overlay (splat doesn't need lights)
+  splatScene.add(new THREE.AmbientLight(0xffffff, 1.0));
+
+  // Create a group that will hold the splat mesh for orientation transforms
+  splatGroup = new THREE.Group();
+  splatScene.add(splatGroup);
+
+  // Measurement scene (separate from splat scene but uses same camera)
+  measureScene = new THREE.Scene();
+
+  if (loading) loading.style.display = 'none';
+
+  window.addEventListener('resize', onResize);
+  new ResizeObserver(() => onResize()).observe(container);
+
+  // Auto-collapse sidebar on viewer interaction
+  splatRenderer.domElement.addEventListener('pointerdown', () => {
+    const sidebar = document.getElementById('sidebar');
+    if (!sidebar.classList.contains('collapsed')) {
+      sidebar.classList.add('collapsed');
+    }
+  });
+
+  animate();
+}
+
+async function loadSplat() {
+  const spinner = document.getElementById('viewer-spinner');
+  spinner.textContent = 'Loading Gaussian Splat...';
+  spinner.style.display = 'block';
+
+  const splatUrl = getSplatUrl();
+  console.log('Loading splat from:', splatUrl);
+
+  try {
+    const resp = await fetch(splatUrl);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
+
+    // Show download progress
+    const contentLength = resp.headers.get('content-length');
+    const total = contentLength ? parseInt(contentLength) : 0;
+    const reader = resp.body.getReader();
+    const chunks = [];
+    let received = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      received += value.length;
+      if (total > 0) {
+        const pct = Math.round(received / total * 100);
+        spinner.textContent = `Loading splat... ${pct}%`;
+      }
+    }
+    const buffer = new Uint8Array(received);
+    let pos = 0;
+    for (const chunk of chunks) { buffer.set(chunk, pos); pos += chunk.length; }
+
+    spinner.textContent = 'Building scene...';
+    // Yield to browser to show the status update
+    await new Promise(r => setTimeout(r, 0));
+
+    renderSplatData(buffer.buffer);
+    spinner.style.display = 'none';
+  } catch (e) {
+    console.error('Failed to load splat:', e);
+    spinner.textContent = 'Failed to load splat';
+    showToast('Failed to load splat: ' + e.message, 5000);
+  }
+}
+
+// --- Splat rendering: texture-based data + Web Worker sort ---
+let splatNumSplats = 0;
+let splatIndexAttr = null; // InstancedBufferAttribute for sorted indices (only buffer updated per sort)
+let sortWorker = null;
+let sortRunning = false;
+let pendingSortIndices = null; // Received from worker, applied next frame
+
+// Create Web Worker for async O(n) counting sort
+function createSortWorker() {
+  const code = `
+    let positions = null;
+    let count = 0;
+
+    onmessage = function(e) {
+      if (e.data.init) {
+        positions = new Float32Array(e.data.init);
+        count = e.data.count;
+        return;
+      }
+      if (e.data.sort) {
+        const vp = new Float32Array(e.data.sort);
+        // Compute view-space Z using modelView row 2 (column-major elements 2,6,10,14)
+        const depths = new Int32Array(count);
+        let minD = 2147483647, maxD = -2147483648;
+        for (let i = 0; i < count; i++) {
+          const d = ((vp[2] * positions[i*3] + vp[6] * positions[i*3+1] + vp[10] * positions[i*3+2] + vp[14]) * 4096) | 0;
+          depths[i] = d;
+          if (d < minD) minD = d;
+          if (d > maxD) maxD = d;
+        }
+        // 16-bit counting sort (O(n))
+        const range = maxD - minD;
+        const depthInv = range > 0 ? (65535 / range) : 0;
+        const counts = new Uint32Array(65536);
+        for (let i = 0; i < count; i++) {
+          depths[i] = ((depths[i] - minD) * depthInv) | 0;
+          counts[depths[i]]++;
+        }
+        const starts = new Uint32Array(65536);
+        for (let i = 1; i < 65536; i++) starts[i] = starts[i-1] + counts[i-1];
+        const sorted = new Float32Array(count);
+        for (let i = 0; i < count; i++) sorted[starts[depths[i]]++] = i;
+        postMessage({ sorted: sorted.buffer }, [sorted.buffer]);
+      }
+    };
+  `;
+  return new Worker(URL.createObjectURL(new Blob([code], { type: 'application/javascript' })));
+}
+
+// Parse .splat binary, build GPU texture + index buffer, start worker
+function renderSplatData(buffer) {
+  const SPLAT_SIZE = 32;
+  const totalSplats = Math.floor(buffer.byteLength / SPLAT_SIZE);
+  console.log(`Parsing ${totalSplats.toLocaleString()} splats from file`);
+
+  const f32 = new Float32Array(buffer);
+  const u8 = new Uint8Array(buffer);
+
+  // Filter outliers
+  const POS_LIMIT = 50, SCALE_LIMIT = 1.0, ALPHA_MIN = 10;
+  let sumX = 0, sumY = 0, sumZ = 0, cnt = 0;
+  for (let i = 0; i < Math.min(totalSplats, 10000); i++) {
+    sumX += f32[i*8]; sumY += f32[i*8+1]; sumZ += f32[i*8+2]; cnt++;
+  }
+  const approxCx = sumX/cnt, approxCy = sumY/cnt, approxCz = sumZ/cnt;
+
+  let validCount = 0;
+  const validIdx = new Uint32Array(totalSplats);
+  for (let i = 0; i < totalSplats; i++) {
+    const fo = i*8, bo = i*32;
+    if (Math.abs(f32[fo]-approxCx) > POS_LIMIT || Math.abs(f32[fo+1]-approxCy) > POS_LIMIT || Math.abs(f32[fo+2]-approxCz) > POS_LIMIT) continue;
+    if (f32[fo+3] > SCALE_LIMIT || f32[fo+4] > SCALE_LIMIT || f32[fo+5] > SCALE_LIMIT) continue;
+    if (u8[bo+27] < ALPHA_MIN) continue;
+    validIdx[validCount++] = i;
+  }
+  console.log(`Filtered to ${validCount.toLocaleString()} valid splats`);
+  splatNumSplats = validCount;
+  const numSplats = validCount;
+
+  // --- Pre-compute 3D covariance on CPU and pack into texture ---
+  // Texture: 4 RGBA float32 texels per splat
+  // Layout per splat: t0=(x,y,z,cov00) t1=(cov01,cov02,cov11,cov12) t2=(cov22,r,g,b) t3=(a,0,0,0)
+  const SPLATS_PER_ROW = 256;
+  const TEX_WIDTH = SPLATS_PER_ROW * 4; // 1024
+  const TEX_HEIGHT = Math.ceil(numSplats / SPLATS_PER_ROW);
+  const texData = new Float32Array(TEX_WIDTH * TEX_HEIGHT * 4); // RGBA per texel
+
+  // Also extract positions for the sort worker
+  const positions = new Float32Array(numSplats * 3);
+
+  for (let vi = 0; vi < numSplats; vi++) {
+    const si = validIdx[vi];
+    const fo = si * 8, bo = si * 32;
+
+    const x = f32[fo], y = f32[fo+1], z = f32[fo+2];
+    positions[vi*3] = x; positions[vi*3+1] = y; positions[vi*3+2] = z;
+
+    // Scale: use raw if small (linear), exp if likely log-encoded
+    let sx = f32[fo+3], sy = f32[fo+4], sz = f32[fo+5];
+    if (sx >= 1.0 || sy >= 1.0 || sz >= 1.0) { sx = Math.exp(sx); sy = Math.exp(sy); sz = Math.exp(sz); }
+
+    // Quaternion (w,x,y,z)
+    const qw = (u8[bo+28]-128)/128, qx = (u8[bo+29]-128)/128, qy = (u8[bo+30]-128)/128, qz = (u8[bo+31]-128)/128;
+
+    // Rotation matrix (column-major: M_col stored as flat [col0, col1, col2])
+    const r00 = 1-2*(qy*qy+qz*qz), r10 = 2*(qx*qy+qw*qz), r20 = 2*(qx*qz-qw*qy);
+    const r01 = 2*(qx*qy-qw*qz), r11 = 1-2*(qx*qx+qz*qz), r21 = 2*(qy*qz+qw*qx);
+    const r02 = 2*(qx*qz+qw*qy), r12 = 2*(qy*qz-qw*qx), r22 = 1-2*(qx*qx+qy*qy);
+
+    // M = R * diag(s): scale columns of R
+    const m00=r00*sx, m10=r10*sx, m20=r20*sx;
+    const m01=r01*sy, m11=r11*sy, m21=r21*sy;
+    const m02=r02*sz, m12=r12*sz, m22=r22*sz;
+
+    // Sigma = M * M^T (symmetric, 6 unique values)
+    const sig00 = m00*m00 + m01*m01 + m02*m02;
+    const sig01 = m00*m10 + m01*m11 + m02*m12;
+    const sig02 = m00*m20 + m01*m21 + m02*m22;
+    const sig11 = m10*m10 + m11*m11 + m12*m12;
+    const sig12 = m10*m20 + m11*m21 + m12*m22;
+    const sig22 = m20*m20 + m21*m21 + m22*m22;
+
+    // Color
+    const cr = u8[bo+24]/255, cg = u8[bo+25]/255, cb = u8[bo+26]/255, ca = u8[bo+27]/255;
+
+    // Pack into texture row
+    const row = Math.floor(vi / SPLATS_PER_ROW);
+    const col = (vi % SPLATS_PER_ROW) * 4;
+    const base = (row * TEX_WIDTH + col) * 4; // 4 floats per texel
+    // Texel 0: position + cov00
+    texData[base]    = x;     texData[base+1]  = y;     texData[base+2]  = z;     texData[base+3]  = sig00;
+    // Texel 1: cov01-cov12
+    texData[base+4]  = sig01; texData[base+5]  = sig02; texData[base+6]  = sig11; texData[base+7]  = sig12;
+    // Texel 2: cov22 + rgb
+    texData[base+8]  = sig22; texData[base+9]  = cr;    texData[base+10] = cg;    texData[base+11] = cb;
+    // Texel 3: alpha
+    texData[base+12] = ca;    texData[base+13] = 0;     texData[base+14] = 0;     texData[base+15] = 0;
+  }
+
+  // Create Three.js DataTexture (RGBA Float32, uploaded once)
+  const dataTexture = new THREE.DataTexture(texData, TEX_WIDTH, TEX_HEIGHT, THREE.RGBAFormat, THREE.FloatType);
+  dataTexture.minFilter = THREE.NearestFilter;
+  dataTexture.magFilter = THREE.NearestFilter;
+  dataTexture.needsUpdate = true;
+
+  // --- Geometry: quad + per-instance index (only buffer that changes) ---
+  const quadVerts = new Float32Array([-1,-1, 1,-1, 1,1, -1,1]);
+  const quadIdx = new Uint16Array([0,1,2, 0,2,3]);
+  const indexData = new Float32Array(numSplats);
+  for (let i = 0; i < numSplats; i++) indexData[i] = i;
+
+  const geo = new THREE.InstancedBufferGeometry();
+  geo.instanceCount = numSplats;
+  geo.setIndex(new THREE.BufferAttribute(quadIdx, 1));
+  geo.setAttribute('position', new THREE.BufferAttribute(quadVerts, 2));
+  splatIndexAttr = new THREE.InstancedBufferAttribute(indexData, 1);
+  geo.setAttribute('splatIndex', splatIndexAttr);
+
+  // --- Shader (GLSL ES 3.00 for texelFetch) ---
+  const container = document.getElementById('viewer-container');
+  const splatMaterial = new THREE.RawShaderMaterial({
+    glslVersion: THREE.GLSL3,
+    uniforms: {
+      u_splatData: { value: dataTexture },
+      viewport: { value: new THREE.Vector2(container.clientWidth, container.clientHeight) },
+      focal: { value: new THREE.Vector2(1, 1) },
+    },
+    vertexShader: `
+      precision highp float;
+      precision highp int;
+
+      uniform mat4 modelViewMatrix;
+      uniform mat4 projectionMatrix;
+      uniform vec2 viewport;
+      uniform vec2 focal;
+      uniform highp sampler2D u_splatData;
+
+      in vec2 position;
+      in float splatIndex;
+
+      out vec4 vColor;
+      out vec2 vPosition;
+
+      void main() {
+        // Fetch splat data from texture
+        int idx = int(splatIndex + 0.5);
+        int row = idx >> 8;          // / 256
+        int colBase = (idx & 0xFF) << 2;  // % 256 * 4
+        vec4 t0 = texelFetch(u_splatData, ivec2(colBase, row), 0);
+        vec4 t1 = texelFetch(u_splatData, ivec2(colBase+1, row), 0);
+        vec4 t2 = texelFetch(u_splatData, ivec2(colBase+2, row), 0);
+        vec4 t3 = texelFetch(u_splatData, ivec2(colBase+3, row), 0);
+
+        vec3 center = t0.xyz;
+        float sig00 = t0.w, sig01 = t1.x, sig02 = t1.y, sig11 = t1.z, sig12 = t1.w;
+        float sig22 = t2.x;
+        vColor = vec4(t2.yzw, t3.x);
+
+        // Transform to view space
+        vec4 viewCenter = modelViewMatrix * vec4(center, 1.0);
+        vec4 projCenter = projectionMatrix * viewCenter;
+
+        // Clip test
+        float clip = 1.2 * projCenter.w;
+        if (projCenter.z < -clip || projCenter.x < -clip || projCenter.x > clip || projCenter.y < -clip || projCenter.y > clip) {
+          gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+          return;
+        }
+
+        // Transform covariance to camera space
+        mat3 W = mat3(modelViewMatrix);
+        // Compute J^T (stored as 3x3, transposed Jacobian)
+        float tz = viewCenter.z;
+        float rz = 1.0 / tz;
+        float rz2 = rz * rz;
+        mat3 J = mat3(
+          focal.x * rz, 0.0,            0.0,
+          0.0,          -focal.y * rz,   0.0,
+          -focal.x * viewCenter.x * rz2, focal.y * viewCenter.y * rz2, 0.0
+        );
+
+        // T = W^T * J (using row vectors of W as columns of W^T)
+        // Since W is orthogonal, W^T = inverse(W)
+        // For mat3 in GLSL: W[col][row], so W^T can be built from rows
+        mat3 Wt = mat3(
+          W[0][0], W[1][0], W[2][0],
+          W[0][1], W[1][1], W[2][1],
+          W[0][2], W[1][2], W[2][2]
+        );
+        mat3 T = Wt * J;
+
+        // Sigma_world (symmetric)
+        mat3 Vrk = mat3(
+          sig00, sig01, sig02,
+          sig01, sig11, sig12,
+          sig02, sig12, sig22
+        );
+
+        // cov2d = T^T * Vrk * T (2x2 result, but computed as 3x3 — row 2 / col 2 are zero)
+        mat3 cov2d = transpose(T) * Vrk * T;
+
+        float a = cov2d[0][0] + 0.3; // low-pass filter
+        float b = cov2d[0][1];
+        float c = cov2d[1][1] + 0.3;
+
+        // Eigenvalues for billboard sizing
+        float mid = 0.5 * (a + c);
+        float radius = length(vec2((a - c) * 0.5, b));
+        float lambda1 = mid + radius;
+        float lambda2 = mid - radius;
+        if (lambda2 < 0.0) { gl_Position = vec4(0,0,2,1); return; }
+
+        // Eigenvector for major axis → oriented billboard
+        vec2 eigVec = normalize(vec2(b, lambda1 - a));
+        vec2 majorAxis = min(sqrt(2.0 * lambda1), 1024.0) * eigVec;
+        vec2 minorAxis = min(sqrt(2.0 * lambda2), 1024.0) * vec2(eigVec.y, -eigVec.x);
+
+        vPosition = position;
+        // vColor depth fade removed — was zeroing colors for near splats
+
+        vec2 ndcCenter = projCenter.xy / projCenter.w;
+        gl_Position = vec4(
+          ndcCenter + (position.x * majorAxis + position.y * minorAxis) / viewport,
+          0.0, 1.0
+        );
+      }
+    `,
+    fragmentShader: `#version 300 es
+      precision highp float;
+      in vec4 vColor;
+      in vec2 vPosition;
+      out vec4 fragColor;
+
+      void main() {
+        float A = -dot(vPosition, vPosition);
+        if (A < -4.0) discard;
+        float B = exp(A) * vColor.a;
+        fragColor = vec4(B * vColor.rgb, B);
+      }
+    `,
+    transparent: true,
+    depthTest: false,
+    depthWrite: false,
+    blending: THREE.CustomBlending,
+    blendEquation: THREE.AddEquation,
+    blendSrc: THREE.OneFactor,
+    blendDst: THREE.OneMinusSrcAlphaFactor,
+  });
+
+  const mesh = new THREE.Mesh(geo, splatMaterial);
+  mesh.frustumCulled = false;
+  splatGroup.add(mesh);
+  splatGroup._splatMesh = mesh;
+  splatGroup._splatMaterial = splatMaterial;
+
+  // Bounding box + camera positioning
+  const bbox = new THREE.Box3();
+  for (let i = 0; i < numSplats; i++) {
+    bbox.expandByPoint(new THREE.Vector3(positions[i*3], positions[i*3+1], positions[i*3+2]));
+  }
+  const center = new THREE.Vector3(), size = new THREE.Vector3();
+  bbox.getCenter(center); bbox.getSize(size);
+  splatGroup._bboxCenter = center.clone();
+  console.log('Splat bounds:', { center: center.toArray(), size: size.toArray() });
+
+  splatCamera.position.set(center.x, center.y, center.z);
+  splatControls.target.set(center.x + 0.01, center.y, center.z);
+  splatControls.update();
+
+  // Uniform updater (called every frame)
+  window._updateSplatUniforms = () => {
+    const c = document.getElementById('viewer-container');
+    const proj = splatCamera.projectionMatrix.elements;
+    splatMaterial.uniforms.focal.value.set(proj[0] * c.clientWidth * 0.5, proj[5] * c.clientHeight * 0.5);
+    splatMaterial.uniforms.viewport.value.set(c.clientWidth, c.clientHeight);
+  };
+
+  // --- Start sort worker ---
+  sortWorker = createSortWorker();
+  const posCopy = new Float32Array(positions);
+  sortWorker.postMessage({ init: posCopy.buffer, count: numSplats }, [posCopy.buffer]);
+  sortWorker.onmessage = (e) => {
+    if (e.data.sorted) {
+      pendingSortIndices = new Float32Array(e.data.sorted);
+      sortRunning = false;
+    }
+  };
+  // Trigger initial sort
+  requestSort();
+
+  showToast(`Loaded ${numSplats.toLocaleString()} Gaussian splats`);
+}
+
+function requestSort() {
+  if (sortRunning || !sortWorker || !splatCamera) return;
+  sortRunning = true;
+  const mv = new THREE.Matrix4().multiplyMatrices(splatCamera.matrixWorldInverse, splatGroup.matrixWorld);
+  sortWorker.postMessage({ sort: new Float32Array(mv.elements) });
+}
+
+function applyPendingSort() {
+  if (!pendingSortIndices || !splatIndexAttr) return;
+  splatIndexAttr.array.set(pendingSortIndices);
+  splatIndexAttr.needsUpdate = true;
+  pendingSortIndices = null;
+}
+
+function onResize() {
+  const container = document.getElementById('viewer-container');
+  if (!container || !splatCamera) return;
+  const w = container.clientWidth, h = container.clientHeight;
+  if (w === 0 || h === 0) return;
+  splatCamera.aspect = w / h;
+  splatCamera.updateProjectionMatrix();
+  splatRenderer.setSize(w, h);
+  cssRenderer.setSize(w, h);
+}
+
+// --- WASD Movement ---
+const _keys = {};
+window.addEventListener('keydown', e => { _keys[e.key.toLowerCase()] = true; });
+window.addEventListener('keyup', e => { _keys[e.key.toLowerCase()] = false; });
+const MOVE_SPEED = 0.12; // ~4x faster than default for splat navigation
+
+// Virtual joystick
+const _joystick = { dx: 0, dz: 0, active: false };
+{
+  const zone = document.getElementById('joystick-zone');
+  const base = document.getElementById('joystick-base');
+  const knob = document.getElementById('joystick-knob');
+  const RADIUS = 24;
+  let touchId = null, baseRect = null;
+  zone.addEventListener('touchstart', (e) => {
+    touchId = e.changedTouches[0].identifier;
+    baseRect = base.getBoundingClientRect();
+    _joystick.active = true;
+    e.preventDefault();
+  }, { passive: false });
+  zone.addEventListener('touchmove', (e) => {
+    if (touchId === null) return;
+    for (const t of e.changedTouches) {
+      if (t.identifier !== touchId) continue;
+      const cx = baseRect.left + baseRect.width / 2, cy = baseRect.top + baseRect.height / 2;
+      let dx = t.clientX - cx, dy = t.clientY - cy;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist > RADIUS) { dx *= RADIUS / dist; dy *= RADIUS / dist; }
+      knob.style.left = (24 + dx) + 'px'; knob.style.top = (24 + dy) + 'px';
+      _joystick.dx = dx / RADIUS; _joystick.dz = dy / RADIUS;
+    }
+    e.preventDefault();
+  }, { passive: false });
+  const onEnd = (e) => {
+    for (const t of e.changedTouches) {
+      if (t.identifier !== touchId) continue;
+      touchId = null; _joystick.active = false; _joystick.dx = 0; _joystick.dz = 0;
+      knob.style.left = '24px'; knob.style.top = '24px';
+    }
+  };
+  zone.addEventListener('touchend', onEnd);
+  zone.addEventListener('touchcancel', onEnd);
+}
+
+function pointInPolygon(px, pz, poly) {
+  if (!poly || poly.length < 3) return true;
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, zi] = poly[i], [xj, zj] = poly[j];
+    if ((zi > pz) !== (zj > pz) && px < (xj - xi) * (pz - zi) / (zj - zi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+// --- Animation Loop ---
+function animate() {
+  requestAnimationFrame(animate);
+
+  if (splatCamera && splatControls) {
+    // WASD + joystick movement
+    const forward = new THREE.Vector3();
+    splatCamera.getWorldDirection(forward);
+    forward.y = 0; forward.normalize();
+    const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
+    const delta = new THREE.Vector3();
+
+    if (_keys['arrowup']) delta.add(forward.clone().multiplyScalar(MOVE_SPEED));
+    if (_keys['arrowdown']) delta.add(forward.clone().multiplyScalar(-MOVE_SPEED));
+    if (_keys['arrowleft']) delta.add(right.clone().multiplyScalar(-MOVE_SPEED));
+    if (_keys['arrowright']) delta.add(right.clone().multiplyScalar(MOVE_SPEED));
+    if (_joystick.active) {
+      delta.add(forward.clone().multiplyScalar(-_joystick.dz * MOVE_SPEED));
+      delta.add(right.clone().multiplyScalar(_joystick.dx * MOVE_SPEED));
+    }
+
+    if (delta.lengthSq() > 0) {
+      // Wall collision disabled — splat and room polygon may be in different coordinate systems
+      splatCamera.position.add(delta);
+      splatControls.target.add(delta);
+    }
+
+    // Key indicators
+    for (const k of ['arrowup','arrowleft','arrowdown','arrowright']) {
+      const el = document.getElementById('key-' + k);
+      if (el) el.classList.toggle('active', !!_keys[k]);
+    }
+
+    splatControls.update();
+  }
+
+  // Update splat uniforms (focal length changes with FOV/resize)
+  if (window._updateSplatUniforms) window._updateSplatUniforms();
+
+  // Async sort: request sort on worker (non-blocking), apply results when ready
+  requestSort();
+  applyPendingSort();
+
+  // Render splat scene
+  if (splatRenderer && splatScene && splatCamera) {
+    splatRenderer.render(splatScene, splatCamera);
+  }
+
+  // Render CSS2D measurements
+  if (cssRenderer && measureScene && splatCamera) {
+    cssRenderer.render(measureScene, splatCamera);
+  }
+
+  // Isometric overlay
+  renderIso();
+}
+
+// --- Load Room ---
+async function loadRoom(index) {
+  const room = currentData.rooms[index];
+  if (!room) return;
+  activeRoomIndex = index;
+
+  document.querySelectorAll('.room-item').forEach((el, i) => el.classList.toggle('active', i === index));
+  document.getElementById('room-name').textContent = room.room_label || `Room ${index + 1}`;
+  renderMetrics(room);
+
+  const polygon = room.room_polygon_ft;
+  const FT_TO_M = 1 / 3.28084;
+
+  // Store room polygon for wall collision
+  if (polygon && polygon.length >= 3) {
+    currentRoomPolygonM = polygon.map(([x, z]) => [x * FT_TO_M, z * FT_TO_M]);
+  } else {
+    currentRoomPolygonM = null;
+  }
+
+  // Init Three.js if not done
+  if (!splatScene) await initSplatViewer();
+
+  // Set up room geometry (don't position camera — renderSplatData will handle that)
+  if (polygon && polygon.length >= 3) {
+    const cornersM = polygon.map(([x, z]) => [x * FT_TO_M, z * FT_TO_M]);
+    const ceilingHeightM = (room.ceiling_height_ft || 8) * FT_TO_M;
+    const cornersYM = (room.wall_heights_ft || []).map(h => h * FT_TO_M);
+    const avgCeilingY = cornersYM.length > 0 ? cornersYM.reduce((s, v) => s + v, 0) / cornersYM.length : ceilingHeightM;
+    const floorY = avgCeilingY - ceilingHeightM;
+
+    // Store room geometry for wireframe overlay and alignment
+    currentRoomGeometry = { cornersM, ceilingHeightM, cornersYM, avgCeilingY, floorY };
+
+    // Build measurements (hidden by default)
+    buildMeasurements(room, cornersM, floorY, avgCeilingY, ceilingHeightM);
+
+    // Add room polygon wireframe to main 3D scene for alignment
+    addRoomWireframeToScene(room);
+
+    // Show buttons
+    document.getElementById('btn-measures').style.display = '';
+    document.getElementById('btn-view-mode').style.display = '';
+  }
+
+  // Build isometric overlay
+  updateIsoView(room);
+}
+
+// --- Room Wireframe Overlay (in main 3D scene for alignment) ---
+
+function addRoomWireframeToScene(room) {
+  if (roomWireframeGroup) {
+    splatScene.remove(roomWireframeGroup);
+    roomWireframeGroup = null;
+  }
+  const poly = room.room_polygon_ft;
+  if (!poly || poly.length < 3) return;
+
+  roomWireframeGroup = new THREE.Group();
+  const FT_TO_M = 1 / 3.28084;
+  const cornersM = poly.map(([x, z]) => [x * FT_TO_M, z * FT_TO_M]);
+  const ceilingHeightM = (room.ceiling_height_ft || 8) * FT_TO_M;
+  const cornersYM = (room.wall_heights_ft || []).map(h => h * FT_TO_M);
+  const avgCeilingY = cornersYM.length > 0 ? cornersYM.reduce((s, v) => s + v, 0) / cornersYM.length : ceilingHeightM;
+  const floorY = avgCeilingY - ceilingHeightM;
+  const n = cornersM.length;
+
+  const wallMat = new THREE.LineBasicMaterial({ color: 0x00ffff, depthTest: false, transparent: true, opacity: 0.8 });
+  const floorMat = new THREE.MeshBasicMaterial({ color: 0x00ffff, transparent: true, opacity: 0.08, side: THREE.DoubleSide, depthTest: false });
+
+  // Wall edges (vertical + ceiling + floor)
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    const [x0, z0] = cornersM[i], [x1, z1] = cornersM[j];
+    const h0 = cornersYM[i] || avgCeilingY, h1 = cornersYM[j] || avgCeilingY;
+    // Ceiling edge
+    roomWireframeGroup.add(new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(x0, h0, z0), new THREE.Vector3(x1, h1, z1)]), wallMat));
+    // Floor edge
+    roomWireframeGroup.add(new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(x0, floorY, z0), new THREE.Vector3(x1, floorY, z1)]), wallMat));
+    // Vertical edge
+    roomWireframeGroup.add(new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(x0, floorY, z0), new THREE.Vector3(x0, h0, z0)]), wallMat));
+  }
+
+  // Floor polygon fill (semi-transparent)
+  const cx = cornersM.reduce((s, p) => s + p[0], 0) / n;
+  const cz = cornersM.reduce((s, p) => s + p[1], 0) / n;
+  const fv = [];
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    fv.push(cx, floorY, cz, cornersM[i][0], floorY, cornersM[i][1], cornersM[j][0], floorY, cornersM[j][1]);
+  }
+  const fg = new THREE.BufferGeometry();
+  fg.setAttribute('position', new THREE.Float32BufferAttribute(fv, 3));
+  const floorMesh = new THREE.Mesh(fg, floorMat);
+  floorMesh.renderOrder = 1;
+  roomWireframeGroup.add(floorMesh);
+
+  // Add to splatScene directly (NOT inside splatGroup — orientation controls should move splat, not wireframe)
+  splatScene.add(roomWireframeGroup);
+}
+
+// --- Measurements ---
+let measurementGroup = null;
+
+function buildMeasurements(room, cornersM, floorY, ceilingY, ceilingHeightM) {
+  // Clear existing measurements
+  if (measurementGroup) {
+    measurementGroup.traverse(obj => {
+      if (obj.isCSS2DObject && obj.element?.parentNode) obj.element.parentNode.removeChild(obj.element);
+    });
+    measureScene.remove(measurementGroup);
+  }
+
+  measurementGroup = new THREE.Group();
+  measurementGroup.visible = measurementsVisible;
+
+  const roomCx = cornersM.reduce((s, p) => s + p[0], 0) / cornersM.length;
+  const roomCz = cornersM.reduce((s, p) => s + p[1], 0) / cornersM.length;
+  const NUDGE = 0.005;
+  function nudge(x, z) {
+    const dx = roomCx - x, dz = roomCz - z;
+    const d = Math.sqrt(dx * dx + dz * dz) || 1;
+    return [x + dx / d * NUDGE, z + dz / d * NUDGE];
+  }
+
+  for (let i = 0; i < cornersM.length; i++) {
+    const j = (i + 1) % cornersM.length;
+    const [x0, z0] = cornersM[i], [x1, z1] = cornersM[j];
+    const [nx0, nz0] = nudge(x0, z0), [nx1, nz1] = nudge(x1, z1);
+    const wallLen = Math.sqrt((x1-x0)**2 + (z1-z0)**2) * 3.28084;
+    const label = formatFtIn(wallLen);
+    const mid = new THREE.Vector3((nx0+nx1)/2, ceilingY + 0.1, (nz0+nz1)/2);
+    addLabel(label, mid, 'measure-label');
+  }
+
+  if (cornersM.length > 0) {
+    const dx = roomCx - cornersM[0][0], dz = roomCz - cornersM[0][1];
+    const d = Math.sqrt(dx*dx + dz*dz) || 1;
+    const hx = cornersM[0][0] + dx/d * 0.15, hz = cornersM[0][1] + dz/d * 0.15;
+    addLabel(formatFtIn(ceilingHeightM * 3.28084), new THREE.Vector3(hx, (floorY + ceilingY) / 2, hz), 'measure-label height');
+  }
+
+  if (room.floor_area_sqft) {
+    const cx = cornersM.reduce((s, p) => s + p[0], 0) / cornersM.length;
+    const cz = cornersM.reduce((s, p) => s + p[1], 0) / cornersM.length;
+    addLabel(`${Math.round(room.floor_area_sqft)} SF`, new THREE.Vector3(cx, floorY + 0.15, cz), 'measure-label area');
+  }
+
+  measureScene.add(measurementGroup);
+}
+
+function addLabel(text, position, className) {
+  const div = document.createElement('div');
+  div.className = className;
+  div.textContent = text;
+  const label = new CSS2DObject(div);
+  label.position.copy(position);
+  measurementGroup.add(label);
+}
+
+// --- View Mode Toggle ---
+window.toggleMeasurements = function() {
+  measurementsVisible = !measurementsVisible;
+  if (measurementGroup) measurementGroup.visible = measurementsVisible;
+  const btn = document.getElementById('btn-measures');
+  btn.classList.toggle('active', measurementsVisible);
+  btn.textContent = measurementsVisible ? 'Hide Measurements' : 'Show Measurements';
+};
+
+window.toggleViewMode = function() {
+  isBirdsEye = !isBirdsEye;
+  const btn = document.getElementById('btn-view-mode');
+
+  if (isBirdsEye) {
+    savedInteriorCamPos = splatCamera.position.clone();
+    savedInteriorCamTarget = splatControls.target.clone();
+    savedInteriorFov = splatCamera.fov;
+
+    // Compute bounding box from splat group (includes orientation transform)
+    let center, maxSpan, minY = 0;
+    const splatBox = new THREE.Box3();
+    if (splatGroup && splatGroup.children.length > 0) {
+      splatBox.setFromObject(splatGroup);
+      center = new THREE.Vector3();
+      const sz = new THREE.Vector3();
+      splatBox.getCenter(center);
+      splatBox.getSize(sz);
+      maxSpan = Math.max(sz.x, sz.z, 2);
+      minY = splatBox.min.y;
+    } else if (currentRoomPolygonM && currentRoomPolygonM.length >= 3) {
+      let mnX = Infinity, mxX = -Infinity, mnZ = Infinity, mxZ = -Infinity;
+      currentRoomPolygonM.forEach(([x, z]) => { mnX = Math.min(mnX, x); mxX = Math.max(mxX, x); mnZ = Math.min(mnZ, z); mxZ = Math.max(mxZ, z); });
+      center = new THREE.Vector3((mnX+mxX)/2, 0, (mnZ+mxZ)/2);
+      maxSpan = Math.max(mxX - mnX, mxZ - mnZ, 2);
+    } else {
+      center = new THREE.Vector3(0, 0, 0);
+      maxSpan = 5;
+    }
+
+    const camHeight = maxSpan * 2.5;
+    splatCamera.position.set(center.x, camHeight, center.z);
+    splatControls.target.set(center.x, minY, center.z);
+
+    const dist = camHeight - minY;
+    const aspect = splatCamera.aspect;
+    const fovV = 2 * Math.atan2(maxSpan / 2, dist);
+    const fovH = 2 * Math.atan2(maxSpan / 2 / aspect, dist);
+    const fovRad = Math.max(fovV, fovH) / 0.5;
+    splatCamera.fov = Math.min(Math.max(THREE.MathUtils.radToDeg(fovRad), 30), 120);
+    splatCamera.updateProjectionMatrix();
+
+    splatControls.enableZoom = true;
+    splatControls.enablePan = true;
+    splatControls.rotateSpeed = 0.5;
+    splatControls.update();
+
+    btn.classList.add('active');
+    btn.textContent = '360 Tour';
+  } else {
+    if (savedInteriorCamPos) {
+      splatCamera.position.copy(savedInteriorCamPos);
+      splatControls.target.copy(savedInteriorCamTarget);
+      splatCamera.fov = savedInteriorFov;
+      splatCamera.updateProjectionMatrix();
+    }
+    splatControls.enableZoom = false;
+    splatControls.enablePan = false;
+    splatControls.rotateSpeed = -0.3;
+    splatControls.update();
+
+    btn.classList.remove('active');
+    btn.textContent = 'Birds Eye View';
+  }
+};
+
+// --- Orientation Controls ---
+window.toggleOrientPanel = function() {
+  const panel = document.getElementById('orient-panel');
+  const btn = document.getElementById('btn-orient');
+  panel.classList.toggle('active');
+  btn.classList.toggle('active');
+};
+
+function setupOrientControls() {
+  const sliders = ['rx', 'ry', 'rz', 'tx', 'ty', 'tz', 'scale'];
+  sliders.forEach(id => {
+    const el = document.getElementById('orient-' + id);
+    if (!el) return;
+    el.addEventListener('input', () => {
+      const val = parseFloat(el.value);
+      orient[id] = val;
+      document.getElementById('orient-' + id + '-val').textContent =
+        id === 'scale' ? val.toFixed(2) : (id.startsWith('t') ? val.toFixed(1) : Math.round(val) + '\u00B0');
+      applyOrientation();
+    });
+  });
+}
+
+function applyOrientation() {
+  if (!splatGroup) return;
+  splatGroup.rotation.set(
+    orient.rx * Math.PI / 180,
+    orient.ry * Math.PI / 180,
+    orient.rz * Math.PI / 180
+  );
+  splatGroup.position.set(orient.tx, orient.ty, orient.tz);
+  splatGroup.scale.setScalar(orient.scale);
+}
+
+window.resetOrientation = function() {
+  const defaults = { rx: 0, ry: 0, rz: 0, tx: 0, ty: 0, tz: 0, scale: 1 };
+  Object.assign(orient, defaults);
+  Object.keys(defaults).forEach(id => {
+    const el = document.getElementById('orient-' + id);
+    if (el) el.value = defaults[id];
+    const valEl = document.getElementById('orient-' + id + '-val');
+    if (valEl) valEl.textContent = id === 'scale' ? '1' : '0';
+  });
+  applyOrientation();
+};
+
+window.logOrientation = function() {
+  console.log('Splat orientation:', JSON.stringify(orient, null, 2));
+  showToast('Orientation logged to console');
+};
+
+window.snapToCenter = function() {
+  // Compute offset so splat bbox center overlaps room polygon centroid
+  if (!splatGroup._bboxCenter || !currentRoomGeometry) {
+    showToast('Need both splat and room data loaded'); return;
+  }
+  const sc = splatGroup._bboxCenter;
+  const rg = currentRoomGeometry;
+  const cx = rg.cornersM.reduce((s, p) => s + p[0], 0) / rg.cornersM.length;
+  const cz = rg.cornersM.reduce((s, p) => s + p[1], 0) / rg.cornersM.length;
+  const cy = (rg.floorY + rg.avgCeilingY) / 2;
+
+  orient.tx = cx - sc.x;
+  orient.ty = cy - sc.y;
+  orient.tz = cz - sc.z;
+  updateOrientSliders();
+  applyOrientation();
+  showToast('Snapped splat center to room center');
+};
+
+window.saveOrientation = function() {
+  const key = `splat-orient-${SCAN_ID}-${ROOM_ID}`;
+  localStorage.setItem(key, JSON.stringify(orient));
+  showToast('Orientation saved');
+};
+
+function loadSavedOrientation() {
+  const key = `splat-orient-${SCAN_ID}-${ROOM_ID}`;
+  const saved = localStorage.getItem(key);
+  if (saved) {
+    try {
+      Object.assign(orient, JSON.parse(saved));
+      updateOrientSliders();
+      applyOrientation();
+      console.log('Loaded saved orientation:', orient);
+    } catch (e) { /* ignore */ }
+  }
+}
+
+function updateOrientSliders() {
+  ['rx', 'ry', 'rz', 'tx', 'ty', 'tz', 'scale'].forEach(id => {
+    const el = document.getElementById('orient-' + id);
+    if (el) el.value = orient[id];
+    const valEl = document.getElementById('orient-' + id + '-val');
+    if (valEl) valEl.textContent = id === 'scale' ? orient[id].toFixed(2) :
+      (id.startsWith('t') ? orient[id].toFixed(1) : Math.round(orient[id]) + '\u00B0');
+  });
+}
+
+// --- Isometric 3D Room View ---
+
+function buildIsoRoomGeometry(room) {
+  const FT_TO_M = 1 / 3.28084, M_TO_FT = 3.28084;
+  const poly = room.room_polygon_ft;
+  const cornersM = poly.map(([x, z]) => [x * FT_TO_M, z * FT_TO_M]);
+  const ceilingHeightM = (room.ceiling_height_ft || 8) * FT_TO_M;
+  const cornersYM = (room.wall_heights_ft || []).map(h => h * FT_TO_M);
+  const avgCeilingY = cornersYM.length > 0 ? cornersYM.reduce((s, v) => s + v, 0) / cornersYM.length : ceilingHeightM;
+  const floorY = avgCeilingY - ceilingHeightM;
+  const n = cornersM.length;
+
+  const group = new THREE.Group();
+  const wallMat = new THREE.MeshPhongMaterial({ color: 0x4488cc, transparent: true, opacity: 0.35, side: THREE.DoubleSide });
+  const floorMat = new THREE.MeshPhongMaterial({ color: 0x5599dd, transparent: true, opacity: 0.5, side: THREE.DoubleSide });
+  const edgeMat = new THREE.LineBasicMaterial({ color: 0x88bbee });
+
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    const [x0, z0] = cornersM[i], [x1, z1] = cornersM[j];
+    const h0 = cornersYM[i] || avgCeilingY, h1 = cornersYM[j] || avgCeilingY;
+    const verts = new Float32Array([x0,floorY,z0, x0,h0,z0, x1,h1,z1, x0,floorY,z0, x1,h1,z1, x1,floorY,z1]);
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(verts, 3));
+    geom.computeVertexNormals();
+    group.add(new THREE.Mesh(geom, wallMat));
+    group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(x0,h0,z0), new THREE.Vector3(x1,h1,z1)]), edgeMat));
+    group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(x0,floorY,z0), new THREE.Vector3(x1,floorY,z1)]), edgeMat));
+    group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(x0,floorY,z0), new THREE.Vector3(x0,h0,z0)]), edgeMat));
+  }
+
+  const cx = cornersM.reduce((s, p) => s + p[0], 0) / n;
+  const cz = cornersM.reduce((s, p) => s + p[1], 0) / n;
+  const fv = [];
+  for (let i = 0; i < n; i++) { const j = (i+1)%n; fv.push(cx,floorY,cz, cornersM[i][0],floorY,cornersM[i][1], cornersM[j][0],floorY,cornersM[j][1]); }
+  const fg = new THREE.BufferGeometry(); fg.setAttribute('position', new THREE.Float32BufferAttribute(fv, 3)); fg.computeVertexNormals();
+  group.add(new THREE.Mesh(fg, floorMat));
+
+  // Camera indicator
+  const indicator = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 8), new THREE.MeshBasicMaterial({ color: 0xff3333 }));
+  indicator.name = 'camIndicator'; group.add(indicator);
+  const lookLine = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(0,0,-0.4)]),
+    new THREE.LineBasicMaterial({ color: 0xff3333 })
+  );
+  lookLine.name = 'camLookLine'; group.add(lookLine);
+
+  // Measurements
+  const measures = new THREE.Group();
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    const [x0, z0] = cornersM[i], [x1, z1] = cornersM[j];
+    const h0 = cornersYM[i] || avgCeilingY, h1 = cornersYM[j] || avgCeilingY;
+    const wallLen = Math.sqrt((x1-x0)**2 + (z1-z0)**2) * M_TO_FT;
+    if (wallLen < 0.5) continue;
+    const div = document.createElement('div'); div.className = 'measure-label'; div.textContent = formatFtIn(wallLen);
+    const label = new CSS2DObject(div);
+    label.position.set((x0+x1)/2, (h0+h1)/2 + 0.08, (z0+z1)/2);
+    measures.add(label);
+  }
+  if (n > 0) {
+    const hDiv = document.createElement('div'); hDiv.className = 'measure-label height';
+    hDiv.textContent = formatFtIn(ceilingHeightM * M_TO_FT);
+    const hLabel = new CSS2DObject(hDiv);
+    hLabel.position.set(cornersM[0][0], (floorY + avgCeilingY) / 2, cornersM[0][1]);
+    measures.add(hLabel);
+  }
+  if (room.floor_area_sqft) {
+    const aDiv = document.createElement('div'); aDiv.className = 'measure-label area';
+    aDiv.textContent = `${Math.round(room.floor_area_sqft)} SF`;
+    const aLabel = new CSS2DObject(aDiv); aLabel.position.set(cx, floorY + 0.05, cz);
+    measures.add(aLabel);
+  }
+
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  cornersM.forEach(([x, z]) => { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z); });
+
+  return {
+    group, measures,
+    center: { x: (minX+maxX)/2, y: (floorY+avgCeilingY)/2, z: (minZ+maxZ)/2 },
+    span: Math.max(maxX-minX, maxZ-minZ, ceilingHeightM) * 0.8,
+  };
+}
+
+function updateIsoView(room) {
+  const thumb = document.getElementById('corner-thumb');
+  if (!room?.room_polygon_ft || room.room_polygon_ft.length < 3) { thumb.style.display = 'none'; return; }
+  thumb.style.display = 'block';
+  document.getElementById('thumb-label').textContent = isoFullscreen ? 'Splat View' : '3D Model';
+
+  if (!isoScene) {
+    isoScene = new THREE.Scene();
+    isoScene.background = new THREE.Color(0x1a1a1a);
+    isoScene.add(new THREE.AmbientLight(0xffffff, 0.8));
+    const d = new THREE.DirectionalLight(0xffffff, 0.4); d.position.set(1,2,1); isoScene.add(d);
+  }
+  if (isoRoomGroup) isoScene.remove(isoRoomGroup);
+  if (isoMeasureGroup) {
+    isoMeasureGroup.traverse(obj => {
+      if (obj.isCSS2DObject && obj.element?.parentNode) obj.element.parentNode.removeChild(obj.element);
+    });
+    isoScene.remove(isoMeasureGroup);
+  }
+
+  const built = buildIsoRoomGeometry(room);
+  isoRoomGroup = built.group; isoMeasureGroup = built.measures;
+  isoMeasureGroup.visible = isoFullscreen;
+  isoCenter = built.center; isoSpan = built.span;
+  isoScene.add(isoRoomGroup); isoScene.add(isoMeasureGroup);
+
+  if (!isoRenderer) {
+    isoRenderer = new THREE.WebGLRenderer({ canvas: document.getElementById('iso-canvas'), antialias: true });
+    isoRenderer.setPixelRatio(window.devicePixelRatio);
+  }
+  isoRenderer.setSize(thumb.clientWidth, thumb.clientHeight);
+
+  if (!isoCamera) isoCamera = new THREE.OrthographicCamera(-1,1,1,-1, 0.01, 100);
+  const s = isoSpan;
+  const thumbAspect = (thumb.clientWidth || 160) / (thumb.clientHeight || 120);
+  isoCamera.left = -s; isoCamera.right = s;
+  isoCamera.top = s / thumbAspect; isoCamera.bottom = -s / thumbAspect;
+  isoCamera.updateProjectionMatrix();
+
+  if (!isoFullRenderer) {
+    const fCanvas = document.getElementById('iso-full-canvas');
+    const fContainer = document.getElementById('iso-fullscreen');
+    isoFullRenderer = new THREE.WebGLRenderer({ canvas: fCanvas, antialias: true });
+    isoFullRenderer.setPixelRatio(window.devicePixelRatio);
+    isoFullRenderer.setSize(fContainer.clientWidth, fContainer.clientHeight);
+    isoCssRenderer = new CSS2DRenderer();
+    isoCssRenderer.setSize(fContainer.clientWidth, fContainer.clientHeight);
+    isoCssRenderer.domElement.style.position = 'absolute';
+    isoCssRenderer.domElement.style.top = '0'; isoCssRenderer.domElement.style.left = '0';
+    isoCssRenderer.domElement.style.pointerEvents = 'none';
+    fContainer.appendChild(isoCssRenderer.domElement);
+    isoFullControls = new OrbitControls(isoCamera, fCanvas);
+    isoFullControls.enableDamping = true; isoFullControls.dampingFactor = 0.1;
+  }
+}
+
+function syncIsoCamera() {
+  if (!isoCamera || !isoCenter || !splatCamera) return;
+  if (isoFullscreen) {
+    isoFullControls.update();
+  } else {
+    const forward = new THREE.Vector3();
+    splatCamera.getWorldDirection(forward);
+    const yaw = Math.atan2(forward.x, forward.z);
+    const dist = isoSpan * 2, pitch = 0.6;
+    isoCamera.position.set(
+      isoCenter.x + Math.sin(yaw + Math.PI) * dist * Math.cos(pitch),
+      isoCenter.y + dist * Math.sin(pitch),
+      isoCenter.z + Math.cos(yaw + Math.PI) * dist * Math.cos(pitch)
+    );
+    isoCamera.lookAt(isoCenter.x, isoCenter.y, isoCenter.z);
+    isoCamera.updateProjectionMatrix();
+  }
+
+  if (isoRoomGroup && splatCamera) {
+    const indicator = isoRoomGroup.getObjectByName('camIndicator');
+    const lookLine = isoRoomGroup.getObjectByName('camLookLine');
+    if (indicator) indicator.position.copy(splatCamera.position);
+    if (lookLine) {
+      lookLine.position.copy(splatCamera.position);
+      const fwd = new THREE.Vector3(); splatCamera.getWorldDirection(fwd);
+      lookLine.lookAt(splatCamera.position.x + fwd.x, splatCamera.position.y, splatCamera.position.z + fwd.z);
+    }
+  }
+}
+
+function renderIso() {
+  if (!isoScene || !isoCamera) return;
+  syncIsoCamera();
+  if (isoFullscreen && isoFullRenderer) {
+    const c = document.getElementById('iso-fullscreen');
+    const fw = c.clientWidth, fh = c.clientHeight;
+    isoFullRenderer.setSize(fw, fh);
+    const fAspect = (fw || 1) / (fh || 1);
+    const s = isoSpan;
+    isoCamera.left = -s * fAspect; isoCamera.right = s * fAspect;
+    isoCamera.top = s; isoCamera.bottom = -s;
+    isoCamera.updateProjectionMatrix();
+    isoFullRenderer.render(isoScene, isoCamera);
+    if (isoCssRenderer) { isoCssRenderer.setSize(fw, fh); isoCssRenderer.render(isoScene, isoCamera); }
+    // Render main splat scene into corner thumbnail
+    if (isoRenderer && splatRenderer && splatScene && splatCamera) {
+      const thumb = document.getElementById('corner-thumb');
+      isoRenderer.setSize(thumb.clientWidth, thumb.clientHeight);
+      isoRenderer.render(splatScene, splatCamera);
+    }
+  } else if (isoRenderer) {
+    const thumb = document.getElementById('corner-thumb');
+    const tw = thumb.clientWidth || 160, th = thumb.clientHeight || 120;
+    const tAspect = tw / th;
+    const s = isoSpan;
+    isoCamera.left = -s; isoCamera.right = s;
+    isoCamera.top = s / tAspect; isoCamera.bottom = -s / tAspect;
+    isoCamera.updateProjectionMatrix();
+    isoRenderer.setSize(tw, th);
+    isoRenderer.render(isoScene, isoCamera);
+  }
+}
+
+window.toggleIsoFullscreen = function() {
+  isoFullscreen = !isoFullscreen;
+  document.getElementById('iso-fullscreen').classList.toggle('active', isoFullscreen);
+  document.getElementById('thumb-label').textContent = isoFullscreen ? 'Splat View' : '3D Model';
+  document.getElementById('corner-thumb').style.display = 'block';
+  if (isoMeasureGroup) isoMeasureGroup.visible = isoFullscreen;
+  if (isoFullscreen && isoFullControls && isoCenter) {
+    isoFullControls.target.set(isoCenter.x, isoCenter.y, isoCenter.z);
+    const s = isoSpan * 2;
+    isoCamera.position.set(isoCenter.x + s*0.7, isoCenter.y + s*0.5, isoCenter.z + s*0.7);
+    isoFullControls.update();
+    const c = document.getElementById('iso-fullscreen');
+    isoFullRenderer.setSize(c.clientWidth, c.clientHeight);
+  }
+};
+
+// --- Expose to window ---
+window.toggleMeasurements = window.toggleMeasurements;
+window.toggleViewMode = window.toggleViewMode;
+window.toggleOrientPanel = window.toggleOrientPanel;
+window.resetOrientation = window.resetOrientation;
+window.logOrientation = window.logOrientation;
+window.toggleIsoFullscreen = window.toggleIsoFullscreen;
+
+window.toggleSidebar = function() {
+  document.getElementById('sidebar').classList.toggle('collapsed');
+};
+
+window._toggleDesc = function() {
+  const desc = document.getElementById('job-desc');
+  const toggle = document.getElementById('desc-toggle');
+  if (!desc) return;
+  desc.classList.toggle('truncated');
+  toggle.textContent = desc.classList.contains('truncated') ? 'Show more' : 'Show less';
+};
+
+window.openFpFullscreen = function() {
+  document.getElementById('fp-fullscreen').classList.add('active');
+  resetFpTransform();
+  if (currentData) {
+    const opts = activeRoomIndex >= 0 ? { singleRoom: activeRoomIndex, showMeasurements: true } : { showMeasurements: true };
+    requestAnimationFrame(() => drawFloorPlan(currentData, 'fp-canvas-full', opts));
+  }
+};
+
+window.closeFpFullscreen = function() {
+  document.getElementById('fp-fullscreen').classList.remove('active');
+};
+
+// --- Start ---
+setupOrientControls();
+loadSavedOrientation();
+init();
+</script>
+</body>
+</html>
