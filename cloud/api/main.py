@@ -15,6 +15,8 @@ import os
 import uuid
 import json
 import datetime
+import urllib.parse
+import urllib.request
 from typing import Optional
 
 from pathlib import Path
@@ -2267,7 +2269,152 @@ def delete_album(album_id: str, authorization: str = Header(None)) -> dict:
     return {"status": "deleted"}
 
 
-# --- Public org profile ---
+# --- Public org search + profile ---
+
+@app.get("/api/contractors/search")
+def search_contractors(
+    service: str = "",
+    location: str = "",
+    q: str = "",
+) -> list:
+    """Public contractor search. No auth required.
+
+    Filters:
+      - service: exact service name match via org_services
+      - location: geocode to lat/lng, filter orgs within service_radius_miles
+      - q: text search on org name or description
+    """
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+
+        # Build query
+        where_clauses = ["o.deleted_at IS NULL"]
+        params: list = []
+        joins = ""
+
+        if service:
+            joins += """
+                JOIN org_services os ON os.org_id = o.id
+                JOIN services sv ON sv.id = os.service_id"""
+            where_clauses.append("sv.name = %s")
+            params.append(service)
+
+        if q:
+            where_clauses.append("(o.name ILIKE %s OR o.description ILIKE %s)")
+            params.extend([f"%{q}%", f"%{q}%"])
+
+        # Location filtering: geocode then distance check
+        search_lat = None
+        search_lng = None
+        if location:
+            geo = _geocode_location(location)
+            if geo:
+                search_lat, search_lng = geo
+                # Haversine distance filter — include orgs whose service area covers this point
+                where_clauses.append("""
+                    (o.service_lat IS NOT NULL AND o.service_lng IS NOT NULL AND
+                     (3959 * acos(LEAST(1.0, cos(radians(%s)) * cos(radians(o.service_lat))
+                       * cos(radians(o.service_lng) - radians(%s))
+                       + sin(radians(%s)) * sin(radians(o.service_lat)))))
+                     <= COALESCE(o.service_radius_miles, 50))
+                """)
+                params.extend([search_lat, search_lng, search_lat])
+
+        where_sql = " AND ".join(where_clauses)
+        cursor.execute(
+            f"""SELECT DISTINCT o.id, o.name, o.description, o.address, o.icon_url,
+                       o.website_url, o.yelp_url, o.google_reviews_url, o.avg_rating
+                FROM organizations o
+                {joins}
+                WHERE {where_sql}
+                ORDER BY o.avg_rating DESC NULLS LAST, o.name
+                LIMIT 50""",
+            params,
+        )
+        org_rows = cursor.fetchall()
+
+        if not org_rows:
+            return []
+
+        org_ids = [str(r[0]) for r in org_rows]
+
+        # Batch-fetch gallery previews (up to 4 per org)
+        cursor.execute(
+            """SELECT m.org_id, m.id, m.image_url, m.caption
+               FROM org_work_images m
+               WHERE m.org_id = ANY(%s)
+               ORDER BY m.sort_order, m.created_at
+            """,
+            (org_ids,),
+        )
+        gallery_by_org: dict = {}
+        for gr in cursor.fetchall():
+            oid = str(gr[0])
+            if oid not in gallery_by_org:
+                gallery_by_org[oid] = []
+            if len(gallery_by_org[oid]) < 4:
+                gallery_by_org[oid].append(gr)
+
+    finally:
+        conn.close()
+
+    # Sign image URLs
+    _credentials.refresh(_auth_request)
+    _bucket = storage_client.bucket(BUCKET_NAME)
+    _prefix = f"https://storage.googleapis.com/{BUCKET_NAME}/"
+
+    def _sign(val):
+        if not val:
+            return None
+        blob_path = val.replace(_prefix, "") if val.startswith("http") else val
+        return _bucket.blob(blob_path).generate_signed_url(
+            version="v4", expiration=datetime.timedelta(days=7), method="GET",
+            service_account_email=SIGNING_SA_EMAIL, access_token=_credentials.token,
+        )
+
+    results = []
+    for row in org_rows:
+        oid = str(row[0])
+        gallery = gallery_by_org.get(oid, [])
+        results.append({
+            "id": oid,
+            "name": row[1],
+            "description": row[2],
+            "address": row[3],
+            "icon_url": _sign(row[4]),
+            "website_url": row[5],
+            "yelp_url": row[6],
+            "google_reviews_url": row[7],
+            "review_rating": float(row[8]) if row[8] else None,
+            "review_count": None,
+            "gallery": [
+                {"id": str(g[1]), "image_url": _sign(g[2]), "before_image_url": None,
+                 "image_type": "image", "caption": g[3]}
+                for g in gallery
+            ],
+        })
+    return results
+
+
+def _geocode_location(location: str):
+    """Geocode a location string to (lat, lng) using Google Maps Geocoding API.
+    Returns None if geocoding fails."""
+    api_key = os.environ.get("GOOGLE_MAPS_API_KEY", "")
+    if not api_key:
+        return None
+    try:
+        encoded = urllib.parse.quote(location)
+        url = f"https://maps.googleapis.com/maps/api/geocode/json?address={encoded}&key={api_key}"
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            data = json.loads(resp.read())
+        if data.get("status") == "OK" and data.get("results"):
+            loc = data["results"][0]["geometry"]["location"]
+            return (loc["lat"], loc["lng"])
+    except Exception:
+        pass
+    return None
+
 
 @app.get("/api/orgs/{org_id}")
 def get_public_org(org_id: str) -> dict:
