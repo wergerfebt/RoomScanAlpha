@@ -2,24 +2,24 @@
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
-html { overflow-x: hidden; }
-
 body {
   font-family: var(--font-stack);
   background: var(--color-bg);
   color: var(--color-text);
   min-height: 100vh;
-  overflow-x: hidden;
-  width: 100%;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
 }
 
-#root {
-  overflow-x: hidden;
-  width: 100%;
-  position: relative;
-}
+/* Prevent horizontal overflow without breaking position:sticky.
+   Use 100% (not 100vw — 100vw includes scrollbar on iOS and causes overflow). */
+main, .layout-main, .list-page-layout, .list-page-main,
+.org-profile-header-wrap, .org-profile-body,
+.contractor-card { max-width: 100%; }
+
+/* Google Places autocomplete — clamp to viewport */
+.pac-container { max-width: 100% !important; }
 
 a { color: var(--color-primary); text-decoration: none; }
 a:hover { text-decoration: underline; }
@@ -321,6 +321,7 @@ a:hover { text-decoration: underline; }
 
 .contractor-card-detail {
   padding: 0 16px 16px; border-top: 1px solid var(--color-border-light);
+  overflow-wrap: break-word; word-break: break-word; min-width: 0;
 }
 .contractor-card-reviews {
   display: flex; align-items: center; gap: 8px; margin-bottom: 12px;
@@ -331,7 +332,8 @@ a:hover { text-decoration: underline; }
 }
 .contractor-card-review-link:hover { text-decoration: underline; }
 .contractor-card-description {
-  font-size: 14px; line-height: 1.6; color: #3a3a3c; margin-bottom: 14px; white-space: pre-wrap;
+  font-size: 14px; line-height: 1.6; color: #3a3a3c; margin-bottom: 14px;
+  white-space: pre-wrap; overflow-wrap: break-word; word-break: break-word;
 }
 .contractor-card-pdf {
   display: inline-flex; align-items: center; gap: 8px; padding: 10px 16px;
@@ -415,14 +417,15 @@ a:hover { text-decoration: underline; }
   .org-profile-banner { height: 160px; }
   .org-profile-header-wrap { padding: 0 16px; }
   .org-profile-header {
-    margin-top: -30px; gap: 12px;
+    flex-direction: column; align-items: flex-start;
+    margin-top: -36px; gap: 0;
   }
   .org-profile-icon {
-    width: 64px; height: 64px; border-radius: 12px; font-size: 24px;
+    width: 68px; height: 68px; border-radius: 12px; font-size: 24px;
     border-width: 3px;
   }
-  .org-profile-info { padding-bottom: 0; padding-top: 4px; }
-  .org-profile-name { font-size: 20px; margin-bottom: 4px; }
+  .org-profile-info { padding-bottom: 0; padding-top: 10px; }
+  .org-profile-name { font-size: 20px; margin-bottom: 4px; margin-top: 0; }
   .org-profile-meta { font-size: 13px; gap: 8px; }
   .org-profile-links { margin-top: 12px; }
   .org-profile-body {
