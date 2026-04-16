@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import Layout from "../components/Layout";
+import Lightbox, { type LightboxItem } from "../components/Lightbox";
 
 interface OrgProfile {
   id: string;
@@ -19,7 +20,7 @@ interface OrgProfile {
   business_hours: Record<string, string>;
   services: { id: string; name: string }[];
   gallery: {
-    id: string; image_url: string | null; caption: string | null;
+    id: string; image_url: string | null; before_image_url: string | null; caption: string | null;
     media_type: string; album_title: string | null; service_name: string | null;
   }[];
   team: { name: string | null; icon_url: string | null; role: string }[];
@@ -66,7 +67,7 @@ export default function OrgProfilePage() {
   const [org, setOrg] = useState<OrgProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [lightbox, setLightbox] = useState<{ url: string; type: string } | null>(null);
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [serviceFilter, setServiceFilter] = useState<string>("all");
 
   useEffect(() => {
@@ -188,25 +189,51 @@ export default function OrgProfilePage() {
                   ))}
                 </div>
               )}
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 12 }}>
-                {filteredGallery.map((item) => (
-                  <div key={item.id} style={{ borderRadius: 10, overflow: "hidden", cursor: "pointer", position: "relative" }}
-                    onClick={() => item.image_url && setLightbox({ url: item.image_url, type: item.media_type })}>
-                    {item.media_type === "video" && item.image_url ? (
-                      <>
-                        <video src={item.image_url} style={{ width: "100%", height: 140, objectFit: "cover", display: "block" }} muted preload="metadata" />
-                        <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.2)" }}>
-                          <div style={{ width: 36, height: 36, borderRadius: "50%", background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                            <span style={{ color: "#fff", fontSize: 16, marginLeft: 2 }}>&#9654;</span>
-                          </div>
-                        </div>
-                      </>
-                    ) : item.image_url ? (
-                      <img src={item.image_url} alt={item.caption || ""} style={{ width: "100%", height: 140, objectFit: "cover", display: "block" }} />
-                    ) : null}
+              {(() => {
+                const viewable = filteredGallery.filter((g) => g.image_url);
+                const lbItems: LightboxItem[] = viewable.map((g) => ({
+                  url: g.image_url!,
+                  beforeUrl: g.before_image_url,
+                  type: g.before_image_url ? "before_after" : g.media_type,
+                }));
+                return (
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 12 }}>
+                    {viewable.map((item, i) => (
+                      <div key={item.id} style={{ borderRadius: 10, overflow: "hidden", cursor: "pointer", position: "relative" }}
+                        onClick={() => setLightboxIndex(i)}>
+                        {item.media_type === "video" ? (
+                          <>
+                            <video src={item.image_url!} style={{ width: "100%", height: 140, objectFit: "cover", display: "block" }} muted preload="metadata" />
+                            <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.2)" }}>
+                              <div style={{ width: 36, height: 36, borderRadius: "50%", background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                                <span style={{ color: "#fff", fontSize: 16, marginLeft: 2 }}>&#9654;</span>
+                              </div>
+                            </div>
+                          </>
+                        ) : (
+                          <img src={item.image_url!} alt={item.caption || ""} style={{ width: "100%", height: 140, objectFit: "cover", display: "block" }} />
+                        )}
+                        {item.before_image_url && (
+                          <span style={{
+                            position: "absolute", bottom: 6, left: 6, fontSize: 11, fontWeight: 700,
+                            color: "#fff", background: "rgba(0,0,0,0.6)", padding: "2px 6px",
+                            borderRadius: 4,
+                          }}>B/A</span>
+                        )}
+                      </div>
+                    ))}
+
+                    {lightboxIndex !== null && lbItems.length > 0 && (
+                      <Lightbox
+                        items={lbItems}
+                        startIndex={lightboxIndex}
+                        onClose={() => setLightboxIndex(null)}
+                        onIndexChange={(i) => setLightboxIndex(i)}
+                      />
+                    )}
                   </div>
-                ))}
-              </div>
+                );
+              })()}
             </section>
           )}
 
@@ -316,23 +343,7 @@ export default function OrgProfilePage() {
         </div>
       </div>
 
-      {/* Lightbox */}
-      {lightbox && (
-        <div onClick={() => setLightbox(null)}
-          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", display: "flex",
-            alignItems: "center", justifyContent: "center", zIndex: 2000, cursor: "zoom-out", padding: 24 }}>
-          {lightbox.type === "video" ? (
-            <video src={lightbox.url} controls autoPlay onClick={(e) => e.stopPropagation()}
-              style={{ maxWidth: "90vw", maxHeight: "90vh", borderRadius: 8, cursor: "default" }} />
-          ) : (
-            <img src={lightbox.url} alt="" style={{ maxWidth: "90vw", maxHeight: "90vh", objectFit: "contain", borderRadius: 8 }} />
-          )}
-          <button onClick={() => setLightbox(null)}
-            style={{ position: "absolute", top: 20, right: 24, background: "none", border: "none", color: "#fff", fontSize: 32, cursor: "pointer", lineHeight: 1 }}>
-            &times;
-          </button>
-        </div>
-      )}
+      {/* Lightbox is now rendered inside the gallery section */}
     </Layout>
   );
 }

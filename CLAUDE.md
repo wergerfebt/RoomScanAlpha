@@ -25,6 +25,11 @@ cd cloud/frontend
 npm run build
 firebase deploy --only hosting
 
+# GS Processor (GPU — Gaussian Splatting)
+cd cloud/gs-processor
+gcloud run deploy gs-processor --source . --region us-central1 --project roomscanalpha \
+  --gpu=1 --gpu-type=nvidia-l4 --cpu=8 --memory=32Gi --concurrency=1 --timeout=3600
+
 # Reprocess a scan
 cd cloud/processor
 ./reprocess.sh <rfq_id> <scan_id|all>
@@ -52,10 +57,22 @@ Cloud Run: scan-processor (OIDC-protected, 8 vCPU / 16GB / concurrency=1)
   → WTA texture projection (fallback): per-surface JPEGs from annotation corners
   → Upload textured mesh + atlas to GCS
   → Write results to Cloud SQL → FCM notification to app
+  → Enqueue gs-processor via Cloud Tasks for Gaussian Splatting
   → Supplemental merge: POST /process-supplemental
     → Downloads original + supplemental zips → merges meshes (voxel+proximity filter)
     → Merges keyframes (continuous numbering) → re-textures with all frames
     → Overwrites textured outputs in GCS
+
+Cloud Run: gs-processor (OIDC-protected, 8 vCPU / 32GB / L4 GPU / concurrency=1)
+  → Download scan data from GCS
+  → HEVC video → extract frames → sharpness filter + stride-4 subsampling
+  → ALIKED feature extraction (GPU, 8192 keypoints, 1600px)
+  → LightGlue matching (GPU, sequential ±10 + spatial 30 neighbors)
+  → GLOMAP global SfM mapper (CPU, via bundled binary)
+  → FastGS training (GPU, 30K iterations, color correction)
+  → Procrustes alignment to ARKit world frame (post-training)
+  → Upload .splat to GCS
+  → ~18 min end-to-end, scales to zero when idle
 
 Cloud Run: scan-api (public)
   → Firebase Auth JWT on all endpoints
@@ -82,6 +99,7 @@ React SPA (Firebase Hosting: roomscanalpha.com / roomscanalpha.web.app)
 |---------|-----|------|---------|
 | scan-api | `https://scan-api-839349778883.us-central1.run.app` | Firebase JWT | REST API + web viewer |
 | scan-processor | `https://scan-processor-839349778883.us-central1.run.app` | OIDC (Cloud Tasks) | Scan processing + OpenMVS |
+| gs-processor | TBD | OIDC (Cloud Tasks) | Gaussian Splatting (L4 GPU) |
 | Firebase Hosting | `https://roomscanalpha.com` / `https://roomscanalpha.web.app` | — | React SPA frontend |
 | Cloud SQL | `roomscanalpha:us-central1:roomscanalpha-db` | IAM | PostgreSQL (db: `quoterra`) |
 | GCS | `gs://roomscanalpha-scans/` | IAM | Scan storage + portfolio images |
@@ -105,6 +123,53 @@ React SPA (Firebase Hosting: roomscanalpha.com / roomscanalpha.web.app)
 - Enhanced version: mesh depth correction, photometric pose refinement, dual keyframe sources
 - Outputs per-surface JPEGs (wall_0.jpg, floor.jpg, ceiling.jpg)
 - Used when OpenMVS fails or `USE_OPENMVS=false`
+
+### Gaussian Splatting Pipeline (Production)
+
+**Service: gs-processor** (Cloud Run with L4 GPU)
+- Source: `cloud/gs-processor/`
+- Triggered by Cloud Tasks from scan-processor after mesh processing completes
+- Produces a `.splat` file aligned to ARKit world frame for the 3D viewer
+
+**Pipeline stages:**
+```
+1. GCS pull (~5s)           — Download scan.zip + mesh.ply from GCS
+2. HEVC extract (~90s)      — Decode video frames via PyAV
+3. Frame selection (~75s)    — Sharpness filter (bottom 20%) + stride-4 subsampling → ~475 frames
+4. ALIKED features (~45s)   — GPU feature extraction, 8192 keypoints at 1600px (hloc)
+5. LightGlue matching (~8m) — GPU matching, sequential ±10 + spatial 30 neighbors (~10K pairs)
+6. COLMAP DB build (~5s)    — sqlite3 DB with ARKit intrinsics + pose priors
+7. Geometric verify (~35s)  — pycolmap RANSAC verification
+8. GLOMAP mapping (~4m)     — Global SfM (CPU, via GLOMAP binary built from source)
+9. FastGS training (~5m)    — 30K iterations, color correction, resolution 2
+10. Splat export (<1s)      — PLY → .splat (32 bytes/Gaussian)
+11. ARKit alignment (<1s)   — Umeyama (Procrustes) transform to ARKit world frame
+12. GCS upload (<5s)        — Upload .splat to scan bucket
+```
+
+**Key design decisions:**
+- **ALIKED over SIFT/SuperPoint**: Deformable convolutions handle indoor textureless surfaces better. 8192 keypoints at 1600px resolution for dense coverage.
+- **GLOMAP over COLMAP mapper**: Global SfM in ~4 min vs 15-30 min incremental. Registers ~75% of images (room interior well-covered, drops hallway/transition frames).
+- **Post-training alignment**: Train in native SfM frame for best quality, then apply Umeyama similarity transform (scale + rotation + translation) to the final `.splat` file. Preserves relative Gaussian positions. RMS alignment error ~3cm.
+- **ARKit intrinsics**: Read real fx/fy/cx/cy from `poses.jsonl` (not estimated). Prior focal length flag set in COLMAP DB.
+- **ARKit pose priors**: Injected into `pose_priors` table to help GLOMAP converge near ARKit frame.
+- **Color correction**: Per-frame white balance + brightness (LighthouseGS-inspired). Critical for quality — without it, Gaussian count drops from ~500K to ~160K.
+- **Rasterizer guard**: FastGS CUDA rasterizer crashes when a camera sees 0 Gaussians. Patched backward to return `[N, 4]` zero gradient (not `[N, 3]`).
+
+**Coordinate frames:**
+- Training: native SfM frame (arbitrary, from GLOMAP)
+- Output `.splat`: ARKit world frame (Y-up, meters) — aligned via Procrustes
+- Measurement overlays: ARKit world frame (feet → meters in viewer)
+- mesh.ply: ARKit world frame (unchanged from iOS)
+
+**Dependencies (in Docker):**
+- PyTorch 2.4.0+cu118, hloc (ALIKED + LightGlue), pycolmap 3.13, GLOMAP (built from source in Ubuntu 24.04 layer), FastGS + CUDA rasterizer, h5py, scipy
+
+**Dev/test environment:**
+- Vertex AI Workbench `gs-pipeline` (g2-standard-8, L4, us-central1-a)
+- Auto-shutdown: 1hr idle. Start: `gcloud workbench instances start gs-pipeline --location=us-central1-a`
+- Script: `/home/jake_a_julian_gmail_com/gs-pipeline/run_pipeline.py`
+- GLOMAP Docker: `glomap:local` (pre-built on instance)
 
 ### Contractor Web Viewer
 
@@ -305,7 +370,7 @@ gs://roomscanalpha-scans/scans/{rfq_id}/{scan_id}/
   ├── mesh.ply                              # Uploaded by processor
   ├── textured.obj / .mtl / _material_00_map_Kd.jpg    # OpenMVS preview (50K faces)
   ├── standard_textured.obj / .mtl / ...jpg             # OpenMVS HD (300K faces, may have multiple atlases)
-  └── room_scan_glomap.splat                            # Gaussian Splat (optional, from GLOMAP pipeline)
+  └── room_scan.splat                                   # Gaussian Splat (ARKit world frame, from gs-processor)
 ```
 
 ## Dead Code & Known Issues

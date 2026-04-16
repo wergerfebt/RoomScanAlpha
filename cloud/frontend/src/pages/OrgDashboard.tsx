@@ -4,6 +4,7 @@ import Layout from "../components/Layout";
 import JobCard, { type Job } from "../components/JobCard";
 import { apiFetch } from "../api/client";
 import AddressAutocomplete from "../components/AddressAutocomplete";
+import Lightbox, { type LightboxItem } from "../components/Lightbox";
 
 interface OrgData {
   id: string;
@@ -369,7 +370,7 @@ function OrgGallery() {
   const [uploading, setUploading] = useState(false);
   const [caption, setCaption] = useState("");
   const [uploadAlbumId, setUploadAlbumId] = useState<string>("");
-  const [lightbox, setLightbox] = useState<{ url: string; type: string } | null>(null);
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [uploadMsg, setUploadMsg] = useState("");
 
   // Album creation
@@ -377,6 +378,14 @@ function OrgGallery() {
   const [newAlbumTitle, setNewAlbumTitle] = useState("");
   const [newAlbumServiceId, setNewAlbumServiceId] = useState("");
   const [creatingAlbum, setCreatingAlbum] = useState(false);
+
+  // Before/After upload
+  const [showBA, setShowBA] = useState(false);
+  const [baBeforeFile, setBaBeforeFile] = useState<File | null>(null);
+  const [baAfterFile, setBaAfterFile] = useState<File | null>(null);
+  const [baCaption, setBaCaption] = useState("");
+  const [baAlbumId, setBaAlbumId] = useState("");
+  const [baUploading, setBaUploading] = useState(false);
 
   // Filter
   const [filterAlbum, setFilterAlbum] = useState<string>("all");
@@ -467,6 +476,46 @@ function OrgGallery() {
     setCreatingAlbum(false);
   }
 
+  async function handleBAUpload(e: FormEvent) {
+    e.preventDefault();
+    if (!baBeforeFile || !baAfterFile) return;
+    setBaUploading(true);
+    try {
+      // Upload both files
+      const [beforeUpload, afterUpload] = await Promise.all([
+        apiFetch<{ upload_url: string; blob_path: string; content_type: string }>(
+          `/api/org/gallery/upload-url?content_type=${encodeURIComponent(baBeforeFile.type || "image/jpeg")}`
+        ),
+        apiFetch<{ upload_url: string; blob_path: string; content_type: string }>(
+          `/api/org/gallery/upload-url?content_type=${encodeURIComponent(baAfterFile.type || "image/jpeg")}`
+        ),
+      ]);
+      await Promise.all([
+        fetch(beforeUpload.upload_url, { method: "PUT", headers: { "Content-Type": beforeUpload.content_type }, body: baBeforeFile }),
+        fetch(afterUpload.upload_url, { method: "PUT", headers: { "Content-Type": afterUpload.content_type }, body: baAfterFile }),
+      ]);
+      // Create gallery record with both URLs
+      await apiFetch("/api/org/gallery", {
+        method: "POST",
+        body: JSON.stringify({
+          image_url: afterUpload.blob_path,
+          before_image_url: beforeUpload.blob_path,
+          image_type: "before_after",
+          caption: baCaption.trim() || null,
+          media_type: "image",
+          album_id: baAlbumId || null,
+        }),
+      });
+      await refresh();
+      setBaBeforeFile(null);
+      setBaAfterFile(null);
+      setBaCaption("");
+      setBaAlbumId("");
+      setShowBA(false);
+    } catch {}
+    setBaUploading(false);
+  }
+
   async function handleDeleteAlbum(id: string) {
     if (!confirm("Delete this album? Media will be kept but unlinked.")) return;
     await apiFetch(`/api/org/albums/${id}`, { method: "DELETE" });
@@ -508,11 +557,16 @@ function OrgGallery() {
       </div>
 
       {/* Albums section */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
         <h3 style={{ fontSize: 16, fontWeight: 700 }}>Albums</h3>
-        <button className="btn" style={{ fontSize: 13, padding: "6px 14px" }} onClick={() => setShowNewAlbum(!showNewAlbum)}>
-          {showNewAlbum ? "Cancel" : "+ New Album"}
-        </button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="btn" style={{ fontSize: 13, padding: "6px 14px" }} onClick={() => { setShowBA(!showBA); if (!showBA) setShowNewAlbum(false); }}>
+            {showBA ? "Cancel" : "+ Before & After"}
+          </button>
+          <button className="btn" style={{ fontSize: 13, padding: "6px 14px" }} onClick={() => { setShowNewAlbum(!showNewAlbum); if (!showNewAlbum) setShowBA(false); }}>
+            {showNewAlbum ? "Cancel" : "+ New Album"}
+          </button>
+        </div>
       </div>
 
       {showNewAlbum && (
@@ -526,6 +580,34 @@ function OrgGallery() {
           <button className="btn btn-primary" type="submit" disabled={creatingAlbum || !newAlbumTitle.trim()}>
             {creatingAlbum ? "Creating..." : "Create"}
           </button>
+        </form>
+      )}
+
+      {showBA && (
+        <form onSubmit={handleBAUpload} className="card" style={{ padding: 16, marginBottom: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+            <div>
+              <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "var(--color-text-secondary)", marginBottom: 4 }}>Before</label>
+              <input type="file" accept="image/*" onChange={(e) => setBaBeforeFile(e.target.files?.[0] || null)}
+                style={{ fontSize: 13, width: "100%" }} />
+            </div>
+            <div>
+              <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "var(--color-text-secondary)", marginBottom: 4 }}>After</label>
+              <input type="file" accept="image/*" onChange={(e) => setBaAfterFile(e.target.files?.[0] || null)}
+                style={{ fontSize: 13, width: "100%" }} />
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <input className="form-input" value={baCaption} onChange={(e) => setBaCaption(e.target.value)}
+              placeholder="Caption (optional)" style={{ flex: 1, minWidth: 140 }} />
+            <select className="form-input" value={baAlbumId} onChange={(e) => setBaAlbumId(e.target.value)} style={{ width: 160 }}>
+              <option value="">Album (optional)</option>
+              {albums.map((a) => <option key={a.id} value={a.id}>{a.title}</option>)}
+            </select>
+            <button className="btn btn-primary" type="submit" disabled={baUploading || !baBeforeFile || !baAfterFile}>
+              {baUploading ? "Uploading..." : "Upload"}
+            </button>
+          </div>
         </form>
       )}
 
@@ -556,58 +638,69 @@ function OrgGallery() {
         </div>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 16 }}>
-        {filtered.map((item) => (
-          <div key={item.id} className="card" style={{ overflow: "hidden" }}>
-            {item.media_type === "video" && item.image_url ? (
-              <div style={{ position: "relative", cursor: "pointer" }} onClick={() => setLightbox({ url: item.image_url!, type: "video" })}>
-                <video src={item.image_url} style={{ width: "100%", height: 160, objectFit: "cover", display: "block" }} muted preload="metadata" />
-                <div style={{
-                  position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center",
-                  background: "rgba(0,0,0,0.2)",
-                }}>
-                  <div style={{ width: 40, height: 40, borderRadius: "50%", background: "rgba(0,0,0,0.6)",
-                    display: "flex", alignItems: "center", justifyContent: "center" }}>
-                    <span style={{ color: "#fff", fontSize: 18, marginLeft: 3 }}>&#9654;</span>
+      {(() => {
+        const viewable = filtered.filter((g) => g.image_url);
+        const lbItems: LightboxItem[] = viewable.map((g) => ({
+          url: g.image_url!,
+          beforeUrl: g.before_image_url,
+          type: g.before_image_url ? "before_after" : (g.media_type === "video" ? "video" : "image"),
+        }));
+        return (
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 16 }}>
+              {viewable.map((item, i) => (
+                <div key={item.id} className="card" style={{ overflow: "hidden" }}>
+                  {item.media_type === "video" ? (
+                    <div style={{ position: "relative", cursor: "pointer" }} onClick={() => setLightboxIndex(i)}>
+                      <video src={item.image_url!} style={{ width: "100%", height: 160, objectFit: "cover", display: "block" }} muted preload="metadata" />
+                      <div style={{
+                        position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center",
+                        background: "rgba(0,0,0,0.2)",
+                      }}>
+                        <div style={{ width: 40, height: 40, borderRadius: "50%", background: "rgba(0,0,0,0.6)",
+                          display: "flex", alignItems: "center", justifyContent: "center" }}>
+                          <span style={{ color: "#fff", fontSize: 18, marginLeft: 3 }}>&#9654;</span>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{ position: "relative", cursor: "pointer" }} onClick={() => setLightboxIndex(i)}>
+                      <img src={item.image_url!} alt={item.caption || ""}
+                        style={{ width: "100%", height: 160, objectFit: "cover", display: "block" }} />
+                      {item.before_image_url && (
+                        <span style={{
+                          position: "absolute", bottom: 6, left: 6, fontSize: 11, fontWeight: 700,
+                          color: "#fff", background: "rgba(0,0,0,0.6)", padding: "2px 6px",
+                          borderRadius: 4,
+                        }}>B/A</span>
+                      )}
+                    </div>
+                  )}
+                  <div style={{ padding: 12 }}>
+                    {item.caption && <p style={{ fontSize: 13, color: "var(--color-text-secondary)", marginBottom: 4 }}>{item.caption}</p>}
+                    {item.album_title && (
+                      <p style={{ fontSize: 11, color: "var(--color-primary)", marginBottom: 4 }}>{item.album_title}</p>
+                    )}
+                    <button onClick={() => handleDelete(item.id)}
+                      style={{ fontSize: 12, fontWeight: 600, color: "var(--color-danger)", background: "none", border: "none", cursor: "pointer", fontFamily: "inherit" }}>
+                      Delete
+                    </button>
                   </div>
                 </div>
-              </div>
-            ) : item.image_url ? (
-              <img src={item.image_url} alt={item.caption || ""}
-                style={{ width: "100%", height: 160, objectFit: "cover", display: "block", cursor: "pointer" }}
-                onClick={() => setLightbox({ url: item.image_url!, type: "image" })} />
-            ) : null}
-            <div style={{ padding: 12 }}>
-              {item.caption && <p style={{ fontSize: 13, color: "var(--color-text-secondary)", marginBottom: 4 }}>{item.caption}</p>}
-              {item.album_title && (
-                <p style={{ fontSize: 11, color: "var(--color-primary)", marginBottom: 4 }}>{item.album_title}</p>
-              )}
-              <button onClick={() => handleDelete(item.id)}
-                style={{ fontSize: 12, fontWeight: 600, color: "var(--color-danger)", background: "none", border: "none", cursor: "pointer", fontFamily: "inherit" }}>
-                Delete
-              </button>
+              ))}
             </div>
-          </div>
-        ))}
-      </div>
 
-      {/* Lightbox */}
-      {lightbox && (
-        <div onClick={() => setLightbox(null)}
-          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", display: "flex",
-            alignItems: "center", justifyContent: "center", zIndex: 2000, cursor: "zoom-out", padding: 24 }}>
-          {lightbox.type === "video" ? (
-            <video src={lightbox.url} controls autoPlay onClick={(e) => e.stopPropagation()}
-              style={{ maxWidth: "90vw", maxHeight: "90vh", borderRadius: 8, cursor: "default" }} />
-          ) : (
-            <img src={lightbox.url} alt="" style={{ maxWidth: "90vw", maxHeight: "90vh", objectFit: "contain", borderRadius: 8 }} />
-          )}
-          <button onClick={() => setLightbox(null)}
-            style={{ position: "absolute", top: 20, right: 24, background: "none", border: "none", color: "#fff", fontSize: 32, cursor: "pointer", lineHeight: 1 }}>
-            &times;
-          </button>
-        </div>
-      )}
+            {lightboxIndex !== null && lbItems.length > 0 && (
+              <Lightbox
+                items={lbItems}
+                startIndex={lightboxIndex}
+                onClose={() => setLightboxIndex(null)}
+                onIndexChange={(i) => setLightboxIndex(i)}
+              />
+            )}
+          </>
+        );
+      })()}
     </div>
   );
 }

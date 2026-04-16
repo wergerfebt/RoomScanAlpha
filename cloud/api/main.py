@@ -2346,12 +2346,14 @@ def search_contractors(
 
         org_ids = [str(r[0]) for r in org_rows]
 
-        # Batch-fetch gallery previews (up to 4 per org)
+        # Batch-fetch gallery previews (up to 6 per org, before/after first)
         cursor.execute(
-            """SELECT m.org_id, m.id, m.image_url, m.caption
+            """SELECT m.org_id, m.id, m.image_url, m.before_image_url,
+                      m.image_type, m.caption
                FROM org_work_images m
                WHERE m.org_id = ANY(%s)
-               ORDER BY m.sort_order, m.created_at
+               ORDER BY (CASE WHEN m.image_type = 'before_after' THEN 0 ELSE 1 END),
+                        m.sort_order, m.created_at
             """,
             (org_ids,),
         )
@@ -2360,7 +2362,7 @@ def search_contractors(
             oid = str(gr[0])
             if oid not in gallery_by_org:
                 gallery_by_org[oid] = []
-            if len(gallery_by_org[oid]) < 4:
+            if len(gallery_by_org[oid]) < 6:
                 gallery_by_org[oid].append(gr)
 
     finally:
@@ -2396,8 +2398,9 @@ def search_contractors(
             "review_rating": float(row[8]) if row[8] else None,
             "review_count": None,
             "gallery": [
-                {"id": str(g[1]), "image_url": _sign(g[2]), "before_image_url": None,
-                 "image_type": "image", "caption": g[3]}
+                {"id": str(g[1]), "image_url": _sign(g[2]),
+                 "before_image_url": _sign(g[3]),
+                 "image_type": g[4] or "image", "caption": g[5]}
                 for g in gallery
             ],
         })

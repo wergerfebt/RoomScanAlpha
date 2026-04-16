@@ -993,8 +993,9 @@ function renderSplatData(buffer) {
   splatGroup._bboxCenter = center.clone();
   console.log('Splat bounds:', { center: center.toArray(), size: size.toArray() });
 
+  // Position camera at splat center, looking along -Z (Three.js/ARKit forward)
   splatCamera.position.set(center.x, center.y, center.z);
-  splatControls.target.set(center.x + 0.01, center.y, center.z);
+  splatControls.target.set(center.x, center.y, center.z - 1.0);
   splatControls.update();
 
   window._updateSplatUniforms = () => {

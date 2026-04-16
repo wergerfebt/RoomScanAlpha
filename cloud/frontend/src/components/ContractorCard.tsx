@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
+import Lightbox, { type LightboxItem } from "./Lightbox";
 
 export interface GalleryImage {
   id: string;
@@ -69,8 +70,16 @@ export default function ContractorCard({
   onHire,
 }: ContractorCardProps) {
   const [expanded, setExpanded] = useState(false);
-  const [lightbox, setLightbox] = useState<string | null>(null);
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const c = contractor;
+
+  const lightboxItems: LightboxItem[] = (c.gallery || [])
+    .filter((g) => g.image_url)
+    .map((g) => ({
+      url: g.image_url!,
+      beforeUrl: g.before_image_url,
+      type: g.before_image_url ? "before_after" : (g.image_type === "video" ? "video" : "image"),
+    }));
 
   return (
     <>
@@ -204,25 +213,30 @@ export default function ContractorCard({
                 display: "flex", gap: 8, marginBottom: 14, overflowX: "auto",
                 paddingBottom: 4,
               }}>
-                {c.gallery.map((img) => (
+                {c.gallery.filter((g) => g.image_url).map((img, i) => (
                   <div
                     key={img.id}
                     onClick={(e) => {
                       e.stopPropagation();
-                      if (img.image_url) setLightbox(img.image_url);
+                      setLightboxIndex(i);
                     }}
                     style={{
                       flexShrink: 0, width: 120, height: 90, borderRadius: 8,
                       overflow: "hidden", background: "var(--color-border-light)",
-                      cursor: img.image_url ? "pointer" : "default",
+                      cursor: "pointer", position: "relative",
                     }}
                   >
-                    {img.image_url && (
-                      <img
-                        src={img.image_url}
-                        alt={img.caption || ""}
-                        style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-                      />
+                    <img
+                      src={img.image_url!}
+                      alt={img.caption || ""}
+                      style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                    />
+                    {img.before_image_url && (
+                      <span style={{
+                        position: "absolute", bottom: 4, left: 4, fontSize: 10, fontWeight: 700,
+                        color: "#fff", background: "rgba(0,0,0,0.6)", padding: "1px 5px",
+                        borderRadius: 3, lineHeight: 1.3,
+                      }}>B/A</span>
                     )}
                   </div>
                 ))}
@@ -297,30 +311,13 @@ export default function ContractorCard({
       </div>
 
       {/* Lightbox */}
-      {lightbox && (
-        <div
-          onClick={() => setLightbox(null)}
-          style={{
-            position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            zIndex: 2000, cursor: "zoom-out", padding: 24,
-          }}
-        >
-          <img
-            src={lightbox}
-            alt=""
-            style={{ maxWidth: "90vw", maxHeight: "90vh", objectFit: "contain", borderRadius: 8 }}
-          />
-          <button
-            onClick={() => setLightbox(null)}
-            style={{
-              position: "absolute", top: 20, right: 24, background: "none",
-              border: "none", color: "#fff", fontSize: 32, cursor: "pointer", lineHeight: 1,
-            }}
-          >
-            &times;
-          </button>
-        </div>
+      {lightboxIndex !== null && lightboxItems.length > 0 && (
+        <Lightbox
+          items={lightboxItems}
+          startIndex={lightboxIndex}
+          onClose={() => setLightboxIndex(null)}
+          onIndexChange={(i) => setLightboxIndex(i)}
+        />
       )}
     </>
   );
