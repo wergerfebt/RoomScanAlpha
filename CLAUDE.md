@@ -68,8 +68,10 @@ Cloud Run: scan-api (public)
 React SPA (Firebase Hosting: roomscanalpha.com / roomscanalpha.web.app)
   → Vite + React + TypeScript frontend
   → Firebase Auth (email/password + Google OAuth)
-  → Shared components: TopBar, SearchBar, AuthModal, FilterSidebar, ContractorCard, JobCard
+  → Shared components: TopBar, SearchBar, SearchOverlay, AuthModal, FilterSidebar, ContractorCard, JobCard, AddressAutocomplete
   → Pages: Landing, Login, Projects, ProjectQuotes, Search, Account, OrgDashboard, OrgProfile, Invite
+  → Mobile-responsive: sticky TopBar, collapsible filters, carousel "How it works", single-column layouts
+  → Address autocomplete via Google Places API (key in .env: VITE_GOOGLE_MAPS_API_KEY)
   → Persistent org sidebar for contractor accounts
   → /api/* proxied to Cloud Run scan-api via Firebase Hosting rewrites
 ```
@@ -143,6 +145,14 @@ React SPA (Firebase Hosting: roomscanalpha.com / roomscanalpha.web.app)
 
 **Planned**: Merge features into room polygon so door frames/openings connect to wall edges for segment-level measurements (trim linear feet). See `docs/ML_ARCHITECTURE.md` for the full ML training pipeline plan.
 
+**Public API endpoints** (no auth required):
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/contractors/search?service=&location=&q=` | Search orgs by service, location (geocoded), text. Returns org profiles with gallery preview. |
+| GET | `/api/orgs/{org_id}` | Full public org profile (services, gallery, team, hours, map) |
+
+Location search geocodes via Google Maps Geocoding API (`GOOGLE_MAPS_API_KEY` env var on scan-api) and filters by Haversine distance against each org's `service_radius_miles`.
+
 ## React Frontend (Quoterra Platform)
 
 ### Tech Stack
@@ -169,9 +179,11 @@ firebase deploy --only hosting    # ~10 seconds, no API rebuild needed
 | `cloud/frontend/src/hooks/useAccount.ts` | Account/org context for sidebar |
 | `cloud/frontend/src/components/TopBar.tsx` | Shared nav bar |
 | `cloud/frontend/src/components/SearchBar.tsx` | Two-field search (service + location) with mobile overlay |
+| `cloud/frontend/src/components/SearchOverlay.tsx` | Full-screen mobile search with service list + location |
+| `cloud/frontend/src/components/AddressAutocomplete.tsx` | Google Places autocomplete for address/location inputs |
 | `cloud/frontend/src/components/AuthModal.tsx` | Sign in/create account/Google/forgot password |
-| `cloud/frontend/src/components/FilterSidebar.tsx` | Price histogram, rating, service filters |
-| `cloud/frontend/src/components/ContractorCard.tsx` | Expandable bid card with gallery + hire |
+| `cloud/frontend/src/components/FilterSidebar.tsx` | Price histogram, rating, service filters (collapsed on mobile) |
+| `cloud/frontend/src/components/ContractorCard.tsx` | Expandable contractor card with profile, gallery, CTA |
 | `cloud/frontend/src/components/JobCard.tsx` | Expandable RFQ card for contractors with floor plan |
 | `cloud/frontend/src/components/FloorPlan.tsx` | Canvas-rendered room polygon floor plan |
 | `cloud/frontend/src/components/SubmitQuoteForm.tsx` | Inline quote submission (price + desc + PDF) |
@@ -182,8 +194,8 @@ firebase deploy --only hosting    # ~10 seconds, no API rebuild needed
 |------|------|------|---------|
 | `/` | Landing | Public | Hero + search + how it works |
 | `/login` | Login | Public | Firebase auth (email/password + Google) |
-| `/search` | Search | Public | Contractor discovery with filters |
-| `/contractors/{orgId}` | OrgProfile | Public | Public org profile with gallery, map, hours |
+| `/search` | Search | Public | Contractor discovery via `GET /api/contractors/search` with filters |
+| `/contractors/{orgId}` | OrgProfile | Public | Public org profile with gallery, map, hours, "Join Alpha" CTA |
 | `/projects` | Projects | Auth | Homeowner RFQ list with expandable details, edit, delete |
 | `/projects/{rfqId}/quotes` | ProjectQuotes | Auth | Bid comparison with filters, hire button |
 | `/account` | Account | Auth | Profile editor, contractor request |

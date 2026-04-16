@@ -30,7 +30,7 @@ Quoterra is expanding from an alpha iOS scanning app + simple web viewer into a 
 | DONE | `/org?tab=gallery` | Portfolio gallery (albums, videos, multi-upload, service tags, lightbox) |
 | DONE | `/org?tab=services` | Service selection from 14 categories |
 | DONE | `/contractors/{orgId}` | Public org profile (banner, gallery, map with radius, hours, services, team) |
-| DONE | `/search` | Contractor search/browse with filters (demo data, needs real API) |
+| DONE | `/search` | Contractor search/browse via `GET /api/contractors/search` with service, location, text filters |
 | DONE | `/invite?token=` | Token-based org invite acceptance |
 | DONE | `/info` | Original marketing landing page (static HTML) |
 
@@ -428,7 +428,8 @@ Two-pass approach to minimize Google Maps API costs:
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
 | GET | `/api/services` | Public | List all active services (for picker/browse) |
-| GET | `/api/search` | Public | Search contractors by query, service, location, rating |
+| DONE | GET | `/api/contractors/search?service=&location=&q=` | Public | Search orgs by service name, geocoded location (Haversine), text. Returns profiles with gallery preview. |
+| DONE | GET | `/api/orgs/{org_id}` | Public | Full public org profile (services, gallery, team, hours, map) |
 
 #### Bids & Hiring (new + migrated)
 | Method | Path | Auth | Purpose |

@@ -265,6 +265,16 @@ export default function ContractorCard({
               </button>
             )}
 
+            {/* Get a Quote CTA */}
+            <a
+              href="/info"
+              onClick={(e) => e.stopPropagation()}
+              className="contractor-card-hire-btn"
+              style={{ display: "block", textAlign: "center", textDecoration: "none", marginTop: 10 }}
+            >
+              Get a Quote from {c.name || "this Contractor"}
+            </a>
+
             {/* View profile link */}
             <Link
               to={`/contractors/${c.id}`}

@@ -5,16 +5,6 @@ import FilterSidebar, { type FilterValues } from "../components/FilterSidebar";
 import ContractorCard, { type Contractor } from "../components/ContractorCard";
 import { SERVICES } from "../api/services";
 
-// Placeholder contractors for now — will be replaced by GET /api/contractors search endpoint
-const DEMO_CONTRACTORS: Contractor[] = [
-  { id: "c1", name: "Mike's Renovations", icon_url: null, yelp_url: "https://yelp.com", google_reviews_url: "https://google.com", review_rating: 4.8, review_count: 142, description: "Full-service renovation company specializing in kitchens and bathrooms. Licensed and insured with 15 years of experience.", address: "1234 W Division St, Chicago, IL", website_url: "https://example.com" },
-  { id: "c2", name: "ABC Contracting", icon_url: null, yelp_url: "https://yelp.com", google_reviews_url: "https://google.com", review_rating: 4.7, review_count: 128, description: "Quality craftsmanship for residential and commercial projects.", address: "5678 N Milwaukee Ave, Chicago, IL", website_url: "https://example.com" },
-  { id: "c3", name: "Lakefront Builders", icon_url: null, yelp_url: null, google_reviews_url: "https://google.com", review_rating: 4.9, review_count: 87, description: "Premium home renovation serving Chicago's North Shore.", address: "910 Sheridan Rd, Evanston, IL" },
-  { id: "c4", name: "Quick Fix Pro", icon_url: null, yelp_url: null, google_reviews_url: null, review_rating: 4.2, review_count: 34, description: "Fast, reliable repairs and small renovations.", address: "2200 S Halsted St, Chicago, IL" },
-  { id: "c5", name: "Chicago Home Pros", icon_url: null, yelp_url: "https://yelp.com", google_reviews_url: "https://google.com", review_rating: 4.6, review_count: 203, description: "Chicago's most-reviewed home renovation team. We handle projects of all sizes.", address: "3300 N Ashland Ave, Chicago, IL", website_url: "https://example.com" },
-  { id: "c6", name: "Urban Remodel Co", icon_url: null, yelp_url: null, google_reviews_url: "https://google.com", review_rating: 3.9, review_count: 56, description: "Modern remodeling for urban living spaces.", address: "4400 W Fullerton Ave, Chicago, IL" },
-];
-
 export default function Search() {
   const [params] = useSearchParams();
   const serviceParam = params.get("service") || "";
@@ -31,12 +21,15 @@ export default function Search() {
   });
 
   useEffect(() => {
-    // TODO: Replace with GET /api/contractors?q=...&service=...&location=...
-    // For now, use demo data
-    setTimeout(() => {
-      setContractors(DEMO_CONTRACTORS);
-      setLoading(false);
-    }, 300);
+    setLoading(true);
+    const qs = new URLSearchParams();
+    if (serviceParam) qs.set("service", serviceParam);
+    if (locationParam) qs.set("location", locationParam);
+    fetch(`/api/contractors/search?${qs}`)
+      .then((r) => r.json())
+      .then((data) => setContractors(data))
+      .catch(() => setContractors([]))
+      .finally(() => setLoading(false));
   }, [serviceParam, locationParam]);
 
   // Apply filters
@@ -102,6 +95,26 @@ export default function Search() {
           />
 
           <div className="list-page-main">
+            {/* Alpha CTA banner */}
+            <a
+              href="/info"
+              style={{
+                display: "block",
+                padding: "14px 20px",
+                marginBottom: 14,
+                background: "linear-gradient(135deg, #0055cc 0%, #0088ff 100%)",
+                borderRadius: "var(--radius-lg)",
+                color: "#fff",
+                textDecoration: "none",
+                textAlign: "center",
+              }}
+            >
+              <strong style={{ fontSize: 15 }}>Compare quotes and save</strong>
+              <span style={{ display: "block", fontSize: 13, opacity: 0.85, marginTop: 2 }}>
+                Scan your room, get competing bids from local contractors. Join the alpha.
+              </span>
+            </a>
+
             <div className="list-page-sort">
               <label>Sort:</label>
               <select value={sort} onChange={(e) => setSort(e.target.value)}>

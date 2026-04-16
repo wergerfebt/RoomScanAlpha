@@ -147,11 +147,9 @@ export default function OrgProfilePage() {
             <p style={{ fontSize: 13, color: "var(--color-text-secondary)", marginBottom: 12 }}>
               Scan your room with the RoomScanAlpha app and {org.name} can provide a detailed quote.
             </p>
-            {org.website_url && (
-              <a href={org.website_url} target="_blank" rel="noopener noreferrer" className="btn btn-primary btn-full" style={{ fontSize: 14 }}>
-                Visit Website
-              </a>
-            )}
+            <a href="/info" className="btn btn-primary btn-full" style={{ fontSize: 14, textDecoration: "none" }}>
+              Join the Alpha
+            </a>
           </section>
 
           {/* About */}
