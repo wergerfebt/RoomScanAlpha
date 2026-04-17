@@ -474,10 +474,10 @@ function applyMovement() {
   const fwd = new THREE.Vector3(dir.x, 0, dir.z).normalize();
   const strafe = new THREE.Vector3(right.x, 0, right.z).normalize();
   const d = new THREE.Vector3();
-  if (keys['arrowup']) d.add(fwd.clone().multiplyScalar(MOVE_SPEED));
-  if (keys['arrowdown']) d.add(fwd.clone().multiplyScalar(-MOVE_SPEED));
-  if (keys['arrowleft']) d.add(strafe.clone().multiplyScalar(-MOVE_SPEED));
-  if (keys['arrowright']) d.add(strafe.clone().multiplyScalar(MOVE_SPEED));
+  if (keys['arrowup'] || keys['w']) d.add(fwd.clone().multiplyScalar(MOVE_SPEED));
+  if (keys['arrowdown'] || keys['s']) d.add(fwd.clone().multiplyScalar(-MOVE_SPEED));
+  if (keys['arrowleft'] || keys['a']) d.add(strafe.clone().multiplyScalar(-MOVE_SPEED));
+  if (keys['arrowright'] || keys['d']) d.add(strafe.clone().multiplyScalar(MOVE_SPEED));
   if (keys['='] || keys['+']) d.y += MOVE_SPEED;
   if (keys['-'] || keys['_']) d.y -= MOVE_SPEED;
   if (d.lengthSq() > 0) { camera.position.add(d); controls.target.add(d); }
@@ -975,7 +975,7 @@ function renderAllFeatures() {
         }
       }
 
-      // Faces (for extruded room polygon edges) — trackable for S-key surface selection
+      // Faces (for extruded room polygon edges) — trackable for F-key surface selection
       for (let fci = 0; fci < feat.faces.length; fci++) {
         const face = feat.faces[fci];
         if (face.length < 3) continue;
@@ -1053,7 +1053,7 @@ function renderAllFeatures() {
       vis.lines.push(line);
     }
 
-    // Faces (semi-transparent quads) — trackable for S-key surface selection
+    // Faces (semi-transparent quads) — trackable for F-key surface selection
     for (let fci = 0; fci < feat.faces.length; fci++) {
       const face = feat.faces[fci];
       if (face.length < 3) continue;
@@ -1271,15 +1271,15 @@ function onFeatureDown(e) {
   ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
   ray.setFromCamera(ndc, camera);
 
-  // 0. S-key: surface mode (select or extrude)
-  if (keys['s'] && faceMeshes.length > 0) {
+  // 0. F-key: face/surface mode (select or extrude)
+  if (keys['f'] && faceMeshes.length > 0) {
     const faceObjs = faceMeshes.map(fm => fm.mesh);
     const faceHits = ray.intersectObjects(faceObjs, false);
     if (faceHits.length > 0) {
       const { featureIdx, faceIdx } = faceHits[0].object.userData;
 
       if (keys['e']) {
-        // S+E+click = start surface extrude
+        // F+E+click = start surface extrude
         const feat = features[featureIdx];
         const face = feat.faces[faceIdx];
         const FT = 1/3.28084;
@@ -1327,7 +1327,7 @@ function onFeatureDown(e) {
         return;
       }
 
-      // S+click (no E) = select + start face drag
+      // F+click (no E) = select + start face drag
       const key = `${featureIdx}-${faceIdx}`;
       selectedFaces.set(key, true);
       // Start face drag
@@ -1555,8 +1555,8 @@ function updateFeatureHover(e) {
   ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
   ray.setFromCamera(ndc, camera);
 
-  // S-key: surface hover mode
-  if (keys['s'] && faceMeshes.length > 0) {
+  // F-key: face/surface hover mode
+  if (keys['f'] && faceMeshes.length > 0) {
     const faceObjs = faceMeshes.map(fm => fm.mesh);
     const faceHits = ray.intersectObjects(faceObjs, false);
     if (faceHits.length > 0) {

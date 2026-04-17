@@ -252,7 +252,8 @@
 {
   "imports": {
     "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
-    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+    "@mkkellogg/gaussian-splats-3d": "https://cdn.jsdelivr.net/npm/@mkkellogg/gaussian-splats-3d@0.4.7/build/gaussian-splats-3d.module.js"
   }
 }
 </script>
@@ -261,6 +262,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+import * as GaussianSplats3D from '@mkkellogg/gaussian-splats-3d';
 
 // --- Config ---
 const SCAN_ID = 'b069da20-8f00-4d9b-9d13-6a7b82bc52ba';
@@ -296,7 +298,9 @@ let splatScene = null;
 let splatCamera = null;
 let splatRenderer = null;
 let splatControls = null;
-let splatMeshRef = null; // Direct reference to the splat mesh in the scene
+// splatMeshRef removed with the custom shader — the GaussianSplats3D Viewer
+// owns the splat mesh internally. BEV bbox clipping is not exposed by the
+// library; BirdsEye now shows all splats (not clipped to room bounds).
 let roomWireframeGroup = null; // Room polygon wireframe in main scene (fixed, not affected by orientation)
 
 // Isometric
@@ -638,7 +642,99 @@ async function initSplatViewer() {
     }
   });
 
+  // Teleport circles: hover on floor + click to transport
+  splatRenderer.domElement.addEventListener('mousemove', updateTeleportHover);
+  let _tpDown = null;
+  splatRenderer.domElement.addEventListener('pointerdown', (e) => {
+    _tpDown = { x: e.clientX, y: e.clientY };
+  });
+  splatRenderer.domElement.addEventListener('pointerup', (e) => {
+    if (!_tpDown) return;
+    const dx = e.clientX - _tpDown.x, dy = e.clientY - _tpDown.y;
+    _tpDown = null;
+    if (Math.hypot(dx, dy) < 5) teleportToHovered();
+  });
+
   animate();
+}
+
+// Render path: @mkkellogg/gaussian-splats-3d Viewer instance that owns its
+// own render pass for the splat mesh (not added to splatScene directly; the
+// viewer calls renderer.render(splatMesh, camera) itself during viewer.render()).
+let gsViewer = null;
+
+// Blob URLs for the two .splat variants — full tour view vs BirdsEye clipped
+// (inside room bbox + 6" tolerance). Swapped in toggleViewMode().
+let _splatFullUrl = null;
+let _splatFilteredUrl = null;
+let _splatIsFiltered = false;
+
+// Build a new .splat buffer that keeps only splats inside the room's axis-
+// aligned bbox with configurable margins per face. Used to clip splats for BEV.
+// Operates on the Antimatter15 32-byte-per-splat layout:
+//   bytes 0-11:  xyz (float32)
+//   bytes 12-23: scale (float32)
+//   bytes 24-27: rgba (uint8)
+//   bytes 28-31: quat (uint8, [-128,127] remapped)
+//
+// wallMarginM: outward X/Z margin (positive expands bbox).
+// floorMarginM: outward margin below floor (positive expands down).
+// ceilingCutM: inward margin below ceiling (positive cuts a band off the top).
+//   e.g. 0.15 removes splats within 15cm of the ceiling and above it.
+function _filterSplatsToRoomBbox(buffer, rg, wallMarginM, floorMarginM, ceilingCutM) {
+  const SPLAT_SIZE = 32;
+  const u8 = new Uint8Array(buffer);
+  const f32 = new Float32Array(buffer);
+  const n = Math.floor(buffer.byteLength / SPLAT_SIZE);
+
+  let mnX = Infinity, mxX = -Infinity, mnZ = Infinity, mxZ = -Infinity;
+  for (const [x, z] of rg.cornersM) {
+    if (x < mnX) mnX = x; if (x > mxX) mxX = x;
+    if (z < mnZ) mnZ = z; if (z > mxZ) mxZ = z;
+  }
+  mnX -= wallMarginM; mxX += wallMarginM;
+  mnZ -= wallMarginM; mxZ += wallMarginM;
+  const mnY = rg.floorY - floorMarginM;
+  const mxY = rg.avgCeilingY - ceilingCutM;
+
+  // First pass: count splats we will keep.
+  let keep = 0;
+  for (let i = 0; i < n; i++) {
+    const x = f32[i * 8], y = f32[i * 8 + 1], z = f32[i * 8 + 2];
+    if (x >= mnX && x <= mxX && z >= mnZ && z <= mxZ && y >= mnY && y <= mxY) keep++;
+  }
+
+  // Second pass: copy them into a tight output buffer.
+  const out = new Uint8Array(keep * SPLAT_SIZE);
+  let k = 0;
+  for (let i = 0; i < n; i++) {
+    const x = f32[i * 8], y = f32[i * 8 + 1], z = f32[i * 8 + 2];
+    if (x >= mnX && x <= mxX && z >= mnZ && z <= mxZ && y >= mnY && y <= mxY) {
+      out.set(u8.subarray(i * SPLAT_SIZE, (i + 1) * SPLAT_SIZE), k * SPLAT_SIZE);
+      k++;
+    }
+  }
+  console.log(`Room-bbox filter kept ${keep.toLocaleString()} / ${n.toLocaleString()} splats (wall ${wallMarginM}m, floor ${floorMarginM}m, ceiling-cut ${ceilingCutM}m)`);
+  return out.buffer;
+}
+
+async function _swapSplatScene(filtered) {
+  if (!gsViewer) return;
+  if (_splatIsFiltered === filtered) return;
+  const url = filtered ? _splatFilteredUrl : _splatFullUrl;
+  if (!url) return;
+  try {
+    await gsViewer.removeSplatScene(0);
+    await gsViewer.addSplatScene(url, {
+      format: GaussianSplats3D.SceneFormat.Splat,
+      showLoadingUI: false,
+      splatAlphaRemovalThreshold: 5,
+      progressiveLoad: false,
+    });
+    _splatIsFiltered = filtered;
+  } catch (e) {
+    console.error('Splat scene swap failed:', e);
+  }
 }
 
 async function loadSplat() {
@@ -649,36 +745,87 @@ async function loadSplat() {
   const splatUrl = getSplatUrl();
   console.log('Loading splat from:', splatUrl);
 
+  if (gsViewer) {
+    try { await gsViewer.dispose(); } catch (_) {}
+    gsViewer = null;
+  }
+  if (_splatFullUrl) { URL.revokeObjectURL(_splatFullUrl); _splatFullUrl = null; }
+  if (_splatFilteredUrl) { URL.revokeObjectURL(_splatFilteredUrl); _splatFilteredUrl = null; }
+  _splatIsFiltered = false;
+
   try {
+    // Fetch the raw .splat once so we can build both blob-URL variants.
     const resp = await fetch(splatUrl);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
+    const arrayBuf = await resp.arrayBuffer();
+    _splatFullUrl = URL.createObjectURL(new Blob([arrayBuf], { type: 'application/octet-stream' }));
 
-    // Show download progress
-    const contentLength = resp.headers.get('content-length');
-    const total = contentLength ? parseInt(contentLength) : 0;
-    const reader = resp.body.getReader();
-    const chunks = [];
-    let received = 0;
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      chunks.push(value);
-      received += value.length;
-      if (total > 0) {
-        const pct = Math.round(received / total * 100);
-        spinner.textContent = `Loading splat... ${pct}%`;
+    // Pre-build the bbox-clipped variant so BirdsEye toggle is near-instant.
+    // Walls: 3" outward tolerance (~0.076m). Floor: 6" outward tolerance
+    // (~0.15m). Ceiling: 9" inward cut (~0.229m) — drops splats within 9"
+    // below the ceiling and everything above it.
+    if (currentRoomGeometry) {
+      const filteredBuf = _filterSplatsToRoomBbox(arrayBuf, currentRoomGeometry, 0.076, 0.15, 0.229);
+      if (filteredBuf.byteLength > 0) {
+        _splatFilteredUrl = URL.createObjectURL(new Blob([filteredBuf], { type: 'application/octet-stream' }));
       }
     }
-    const buffer = new Uint8Array(received);
-    let pos = 0;
-    for (const chunk of chunks) { buffer.set(chunk, pos); pos += chunk.length; }
 
-    spinner.textContent = 'Building scene...';
-    // Yield to browser to show the status update
-    await new Promise(r => setTimeout(r, 0));
+    gsViewer = new GaussianSplats3D.Viewer({
+      selfDrivenMode: false,
+      useBuiltInControls: false,
+      renderer: splatRenderer,
+      camera: splatCamera,
+      threeScene: splatScene,
+      // SharedArrayBuffer path requires COOP/COEP headers we don't serve on
+      // the Cloud Run API. Fall back to copy-transfer + CPU sort.
+      gpuAcceleratedSort: false,
+      sharedMemoryForWorkers: false,
+      sphericalHarmonicsDegree: 0,
+      splatAlphaRemovalThreshold: 5,
+      antialiased: false,
+      dynamicScene: false,
+    });
 
-    renderSplatData(buffer.buffer);
+    // Blob URLs have no extension — pass the format explicitly so the library
+    // doesn't try to guess.
+    await gsViewer.addSplatScene(_splatFullUrl, {
+      format: GaussianSplats3D.SceneFormat.Splat,
+      showLoadingUI: false,
+      splatAlphaRemovalThreshold: 5,
+      progressiveLoad: false,
+    });
+    _splatIsFiltered = false;
+
+    // Position the camera from the room polygon so the viewer opens at eye
+    // level inside the room (same logic the contractor OBJ viewer uses).
+    if (currentRoomGeometry) {
+      const rg = currentRoomGeometry;
+      const cx = rg.cornersM.reduce((s, p) => s + p[0], 0) / rg.cornersM.length;
+      const cz = rg.cornersM.reduce((s, p) => s + p[1], 0) / rg.cornersM.length;
+      const eyeHeight = rg.floorY + Math.min(1.52, rg.ceilingHeightM * 0.55);
+      const [wx0, wz0] = rg.cornersM[0];
+      const [wx1, wz1] = rg.cornersM[1];
+      const lookX = (wx0 + wx1) / 2, lookZ = (wz0 + wz1) / 2;
+      const dx = lookX - cx, dz = lookZ - cz;
+      const dist = Math.sqrt(dx * dx + dz * dz) || 1;
+      const tx = cx + dx / dist, tz = cz + dz / dist;
+
+      splatControls.dispose();
+      splatCamera.position.set(cx, eyeHeight, cz);
+      splatCamera.lookAt(tx, eyeHeight, tz);
+      splatControls = new OrbitControls(splatCamera, splatRenderer.domElement);
+      splatControls.target.set(tx, eyeHeight, tz);
+      splatControls.enableDamping = true;
+      splatControls.dampingFactor = 0.1;
+      splatControls.enableZoom = false;
+      splatControls.enablePan = false;
+      splatControls.rotateSpeed = -0.3;
+      splatControls.update();
+    }
+
     spinner.style.display = 'none';
+    showToast('Loaded Gaussian splats');
   } catch (e) {
     console.error('Failed to load splat:', e);
     spinner.textContent = 'Failed to load splat';
@@ -686,371 +833,9 @@ async function loadSplat() {
   }
 }
 
-// --- Splat rendering: instanced attributes + Web Worker sort ---
-let splatNumSplats = 0;
-let splatInstancedGeo = null;
-let splatOrigBuffers = null; // Original unsorted buffers for worker
-let sortWorker = null;
-let sortRunning = false;
-let pendingSortBuffers = null; // Reordered buffers from worker, applied next frame
-
-// Create Web Worker: O(n) counting sort + buffer reorder, fully off main thread
-function createSortWorker() {
-  const code = `
-    let origCenters = null, origColors = null, origScales = null, origQuats = null;
-    let count = 0;
-
-    onmessage = function(e) {
-      if (e.data.init) {
-        origCenters = new Float32Array(e.data.centers);
-        origColors = new Float32Array(e.data.colors);
-        origScales = new Float32Array(e.data.scales);
-        origQuats = new Float32Array(e.data.quats);
-        count = e.data.count;
-        return;
-      }
-      if (e.data.sort) {
-        const vp = e.data.sort;
-        // Compute view-space Z (modelView row 2 in column-major: elements 2,6,10,14)
-        const depths = new Int32Array(count);
-        let minD = 2147483647, maxD = -2147483648;
-        for (let i = 0; i < count; i++) {
-          const d = ((vp[2]*origCenters[i*3] + vp[6]*origCenters[i*3+1] + vp[10]*origCenters[i*3+2] + vp[14]) * 4096) | 0;
-          depths[i] = d;
-          if (d < minD) minD = d;
-          if (d > maxD) maxD = d;
-        }
-        // 16-bit counting sort (O(n))
-        const range = maxD - minD;
-        const depthInv = range > 0 ? (65535 / range) : 0;
-        const buckets = new Uint32Array(65536);
-        for (let i = 0; i < count; i++) {
-          depths[i] = ((depths[i] - minD) * depthInv) | 0;
-          buckets[depths[i]]++;
-        }
-        const starts = new Uint32Array(65536);
-        for (let i = 1; i < 65536; i++) starts[i] = starts[i-1] + buckets[i-1];
-        const sorted = new Uint32Array(count);
-        for (let i = 0; i < count; i++) sorted[starts[depths[i]]++] = i;
-
-        // Reorder all attribute buffers (off main thread)
-        const newC = new Float32Array(count * 3);
-        const newCol = new Float32Array(count * 4);
-        const newS = new Float32Array(count * 3);
-        const newQ = new Float32Array(count * 4);
-        for (let i = 0; i < count; i++) {
-          const si = sorted[i];
-          newC[i*3]=origCenters[si*3]; newC[i*3+1]=origCenters[si*3+1]; newC[i*3+2]=origCenters[si*3+2];
-          newCol[i*4]=origColors[si*4]; newCol[i*4+1]=origColors[si*4+1]; newCol[i*4+2]=origColors[si*4+2]; newCol[i*4+3]=origColors[si*4+3];
-          newS[i*3]=origScales[si*3]; newS[i*3+1]=origScales[si*3+1]; newS[i*3+2]=origScales[si*3+2];
-          newQ[i*4]=origQuats[si*4]; newQ[i*4+1]=origQuats[si*4+1]; newQ[i*4+2]=origQuats[si*4+2]; newQ[i*4+3]=origQuats[si*4+3];
-        }
-        postMessage({ centers: newC.buffer, colors: newCol.buffer, scales: newS.buffer, quats: newQ.buffer },
-                     [newC.buffer, newCol.buffer, newS.buffer, newQ.buffer]);
-      }
-    };
-  `;
-  return new Worker(URL.createObjectURL(new Blob([code], { type: 'application/javascript' })));
-}
-
-// Parse .splat binary and render with proper 2D Gaussian projection (GLSL ES 1.00)
-function renderSplatData(buffer) {
-  const SPLAT_SIZE = 32;
-  const totalSplats = Math.floor(buffer.byteLength / SPLAT_SIZE);
-  console.log(`Parsing ${totalSplats.toLocaleString()} splats from file`);
-
-  const f32 = new Float32Array(buffer);
-  const u8 = new Uint8Array(buffer);
-
-  // Filter outliers
-  const POS_LIMIT = 50, SCALE_LIMIT = 1.0, ALPHA_MIN = 10;
-  let sumX = 0, sumY = 0, sumZ = 0, cnt = 0;
-  for (let i = 0; i < Math.min(totalSplats, 10000); i++) {
-    sumX += f32[i*8]; sumY += f32[i*8+1]; sumZ += f32[i*8+2]; cnt++;
-  }
-  const approxCx = sumX/cnt, approxCy = sumY/cnt, approxCz = sumZ/cnt;
-
-  let validCount = 0;
-  const validIdx = new Uint32Array(totalSplats);
-  for (let i = 0; i < totalSplats; i++) {
-    const fo = i*8, bo = i*32;
-    if (Math.abs(f32[fo]-approxCx) > POS_LIMIT || Math.abs(f32[fo+1]-approxCy) > POS_LIMIT || Math.abs(f32[fo+2]-approxCz) > POS_LIMIT) continue;
-    if (f32[fo+3] > SCALE_LIMIT || f32[fo+4] > SCALE_LIMIT || f32[fo+5] > SCALE_LIMIT) continue;
-    if (u8[bo+27] < ALPHA_MIN) continue;
-    validIdx[validCount++] = i;
-  }
-  console.log(`Filtered to ${validCount.toLocaleString()} valid splats`);
-  splatNumSplats = validCount;
-  const numSplats = validCount;
-
-  // Extract per-splat data
-  const centers = new Float32Array(numSplats * 3);
-  const colors = new Float32Array(numSplats * 4);
-  const scales3 = new Float32Array(numSplats * 3);
-  const quats = new Float32Array(numSplats * 4);
-
-  for (let vi = 0; vi < numSplats; vi++) {
-    const i = validIdx[vi];
-    const fo = i * 8, bo = i * 32;
-    centers[vi*3] = f32[fo]; centers[vi*3+1] = f32[fo+1]; centers[vi*3+2] = f32[fo+2];
-    scales3[vi*3] = f32[fo+3]; scales3[vi*3+1] = f32[fo+4]; scales3[vi*3+2] = f32[fo+5];
-    colors[vi*4] = u8[bo+24]/255; colors[vi*4+1] = u8[bo+25]/255; colors[vi*4+2] = u8[bo+26]/255; colors[vi*4+3] = u8[bo+27]/255;
-    quats[vi*4] = (u8[bo+28]-128)/128; quats[vi*4+1] = (u8[bo+29]-128)/128; quats[vi*4+2] = (u8[bo+30]-128)/128; quats[vi*4+3] = (u8[bo+31]-128)/128;
-  }
-
-  // Billboard quad
-  const quadVerts = new Float32Array([-1,-1, 1,-1, 1,1, -1,1]);
-  const quadIdx = new Uint16Array([0,1,2, 0,2,3]);
-
-  splatInstancedGeo = new THREE.InstancedBufferGeometry();
-  splatInstancedGeo.instanceCount = numSplats;
-  splatInstancedGeo.setIndex(new THREE.BufferAttribute(quadIdx, 1));
-  splatInstancedGeo.setAttribute('position', new THREE.BufferAttribute(quadVerts, 2));
-  splatInstancedGeo.setAttribute('splatCenter', new THREE.InstancedBufferAttribute(centers, 3));
-  splatInstancedGeo.setAttribute('splatColor', new THREE.InstancedBufferAttribute(colors, 4));
-  splatInstancedGeo.setAttribute('splatScale', new THREE.InstancedBufferAttribute(scales3, 3));
-  splatInstancedGeo.setAttribute('splatQuat', new THREE.InstancedBufferAttribute(quats, 4));
-  splatInstancedGeo.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 1e10);
-
-  const container = document.getElementById('viewer-container');
-  const splatMaterial = new THREE.RawShaderMaterial({
-    uniforms: {
-      viewport: { value: new THREE.Vector2(container.clientWidth, container.clientHeight) },
-      focal: { value: new THREE.Vector2(1, 1) },
-      clipMin: { value: new THREE.Vector3(-1e10, -1e10, -1e10) },
-      clipMax: { value: new THREE.Vector3(1e10, 1e10, 1e10) },
-    },
-    vertexShader: `
-      precision highp float;
-      uniform mat4 modelViewMatrix;
-      uniform mat4 projectionMatrix;
-      uniform vec2 viewport;
-      uniform vec2 focal;
-      uniform vec3 clipMin; // BEV bounding box clip (set to -1e10 = disabled)
-      uniform vec3 clipMax; // BEV bounding box clip (set to 1e10 = disabled)
-
-      attribute vec2 position;
-      attribute vec3 splatCenter;
-      attribute vec4 splatColor;
-      attribute vec3 splatScale;
-      attribute vec4 splatQuat;
-
-      varying vec4 vColor;
-      varying vec2 vConicA;
-      varying float vConicC;
-      varying vec2 vCenterOffset;
-
-      mat3 quatToMat3(vec4 q) {
-        float w = q.x, x = q.y, y = q.z, z = q.w;
-        return mat3(
-          1.0 - 2.0*(y*y + z*z), 2.0*(x*y + w*z),       2.0*(x*z - w*y),
-          2.0*(x*y - w*z),       1.0 - 2.0*(x*x + z*z),  2.0*(y*z + w*x),
-          2.0*(x*z + w*y),       2.0*(y*z - w*x),         1.0 - 2.0*(x*x + y*y)
-        );
-      }
-
-      void main() {
-        vColor = splatColor;
-
-        mat3 R = quatToMat3(splatQuat);
-        vec3 rawS = splatScale;
-        vec3 s = (rawS.x < 1.0 && rawS.y < 1.0 && rawS.z < 1.0) ? rawS : exp(rawS);
-        mat3 M = mat3(R[0] * s.x, R[1] * s.y, R[2] * s.z);
-
-        vec3 row0 = vec3(M[0][0], M[1][0], M[2][0]);
-        vec3 row1 = vec3(M[0][1], M[1][1], M[2][1]);
-        vec3 row2 = vec3(M[0][2], M[1][2], M[2][2]);
-        float sig00 = dot(row0, row0), sig01 = dot(row0, row1), sig02 = dot(row0, row2);
-        float sig11 = dot(row1, row1), sig12 = dot(row1, row2), sig22 = dot(row2, row2);
-
-        vec4 viewCenter4 = modelViewMatrix * vec4(splatCenter, 1.0);
-        vec3 tc = viewCenter4.xyz;
-        if (tc.z > -0.1) { gl_Position = vec4(0.0, 0.0, 2.0, 1.0); return; }
-        if (splatCenter.x < clipMin.x || splatCenter.x > clipMax.x ||
-            splatCenter.y < clipMin.y || splatCenter.y > clipMax.y ||
-            splatCenter.z < clipMin.z || splatCenter.z > clipMax.z) {
-          gl_Position = vec4(0.0, 0.0, 2.0, 1.0); return;
-        }
-
-        mat3 W = mat3(modelViewMatrix);
-        vec3 wr0 = vec3(W[0][0], W[1][0], W[2][0]);
-        vec3 wr1 = vec3(W[0][1], W[1][1], W[2][1]);
-        vec3 wr2 = vec3(W[0][2], W[1][2], W[2][2]);
-
-        vec3 v0 = vec3(sig00*wr0.x+sig01*wr0.y+sig02*wr0.z, sig01*wr0.x+sig11*wr0.y+sig12*wr0.z, sig02*wr0.x+sig12*wr0.y+sig22*wr0.z);
-        vec3 v1 = vec3(sig00*wr1.x+sig01*wr1.y+sig02*wr1.z, sig01*wr1.x+sig11*wr1.y+sig12*wr1.z, sig02*wr1.x+sig12*wr1.y+sig22*wr1.z);
-        vec3 v2 = vec3(sig00*wr2.x+sig01*wr2.y+sig02*wr2.z, sig01*wr2.x+sig11*wr2.y+sig12*wr2.z, sig02*wr2.x+sig12*wr2.y+sig22*wr2.z);
-
-        float sc00 = dot(wr0,v0), sc01 = dot(wr0,v1), sc02 = dot(wr0,v2);
-        float sc11 = dot(wr1,v1), sc12 = dot(wr1,v2), sc22 = dot(wr2,v2);
-
-        float rz = 1.0/tc.z, rz2 = rz*rz;
-        float j00 = focal.x*rz, j02 = -focal.x*tc.x*rz2;
-        float j11 = focal.y*rz, j12 = -focal.y*tc.y*rz2;
-
-        float r0x = j00*sc00+j02*sc02, r0y = j00*sc01+j02*sc12, r0z = j00*sc02+j02*sc22;
-        float r1x = j11*sc01+j12*sc02, r1y = j11*sc11+j12*sc12, r1z = j11*sc12+j12*sc22;
-
-        float cov00 = r0x*j00+r0z*j02 + 0.3;
-        float cov01 = r1x*j00+r1z*j02;
-        float cov11 = r1y*j11+r1z*j12 + 0.3;
-
-        float mid = 0.5*(cov00+cov11);
-        float det = cov00*cov11-cov01*cov01;
-        float disc = max(0.01, mid*mid-det);
-        float sqrtDisc = sqrt(disc);
-        float lambda1 = mid+sqrtDisc;
-
-        float radius = ceil(3.0*sqrt(lambda1));
-        radius = min(radius, 2048.0);
-        if (radius < 1.0) { gl_Position = vec4(0.0,0.0,2.0,1.0); return; }
-
-        float invDet = 1.0/max(det, 1e-6);
-        vConicA = vec2(cov11*invDet, -cov01*invDet);
-        vConicC = cov00*invDet;
-
-        vec4 projCenter = projectionMatrix * viewCenter4;
-        vec2 ndcCenter = projCenter.xy / projCenter.w;
-        vec2 cornerOffset = position * radius;
-        vCenterOffset = cornerOffset;
-        vec2 ndcOffset = cornerOffset * 2.0 / viewport;
-        gl_Position = vec4(ndcCenter + ndcOffset, projCenter.z/projCenter.w, 1.0);
-      }
-    `,
-    fragmentShader: `
-      precision highp float;
-      varying vec4 vColor;
-      varying vec2 vConicA;
-      varying float vConicC;
-      varying vec2 vCenterOffset;
-
-      void main() {
-        float power = -0.5 * (
-          vConicA.x * vCenterOffset.x * vCenterOffset.x +
-          2.0 * vConicA.y * vCenterOffset.x * vCenterOffset.y +
-          vConicC * vCenterOffset.y * vCenterOffset.y
-        );
-        if (power > 0.0) discard;
-        float alpha = min(0.99, exp(power) * vColor.a);
-        if (alpha < 1.0/255.0) discard;
-        gl_FragColor = vec4(vColor.rgb * alpha, alpha);
-      }
-    `,
-    transparent: true,
-    depthTest: true,
-    depthWrite: false,
-    blending: THREE.CustomBlending,
-    blendEquation: THREE.AddEquation,
-    blendSrc: THREE.OneFactor,
-    blendDst: THREE.OneMinusSrcAlphaFactor,
-  });
-
-  const mesh = new THREE.Mesh(splatInstancedGeo, splatMaterial);
-  mesh.frustumCulled = false;
-  splatScene.add(mesh);
-  splatMeshRef = mesh;
-
-  // Bounding box + camera
-  const bbox = new THREE.Box3();
-  for (let i = 0; i < numSplats; i++) bbox.expandByPoint(new THREE.Vector3(centers[i*3], centers[i*3+1], centers[i*3+2]));
-  const center = new THREE.Vector3(), size = new THREE.Vector3();
-  bbox.getCenter(center); bbox.getSize(size);
-  // bbox center stored for reference
-  console.log('Splat bounds:', { center: center.toArray(), size: size.toArray() });
-
-  // Position camera using room polygon (same as contractor OBJ viewer)
-  if (currentRoomGeometry) {
-    const rg = currentRoomGeometry;
-    const cx = rg.cornersM.reduce((s, p) => s + p[0], 0) / rg.cornersM.length;
-    const cz = rg.cornersM.reduce((s, p) => s + p[1], 0) / rg.cornersM.length;
-    const eyeHeight = rg.floorY + Math.min(1.52, rg.ceilingHeightM * 0.55); // 5ft eye level
-    // Look toward midpoint of first wall
-    const [wx0, wz0] = rg.cornersM[0];
-    const [wx1, wz1] = rg.cornersM[1];
-    const lookX = (wx0 + wx1) / 2, lookZ = (wz0 + wz1) / 2;
-    const dx = lookX - cx, dz = lookZ - cz;
-    const dist = Math.sqrt(dx * dx + dz * dz) || 1;
-    const tx = cx + dx / dist, tz = cz + dz / dist; // 1m away for stable lookAt
-
-    // Recreate controls to fully clear internal state
-    splatControls.dispose();
-    splatCamera.position.set(cx, eyeHeight, cz);
-    splatCamera.lookAt(tx, eyeHeight, tz);
-    splatControls = new OrbitControls(splatCamera, splatRenderer.domElement);
-    splatControls.target.set(tx, eyeHeight, tz);
-    splatControls.enableDamping = true;
-    splatControls.dampingFactor = 0.1;
-    splatControls.enableZoom = false;
-    splatControls.enablePan = false;
-    splatControls.rotateSpeed = -0.3;
-    splatControls.update();
-
-    console.log('Camera pos:', {x: cx.toFixed(2), y: eyeHeight.toFixed(2), z: cz.toFixed(2)});
-    console.log('Look dir:', {dx: (dx/dist).toFixed(3), dz: (dz/dist).toFixed(3)});
-    console.log('Room polygon (meters):', rg.cornersM.map(c => `(${c[0].toFixed(2)}, ${c[1].toFixed(2)})`).join(', '));
-    console.log('Room Y: floor=', rg.floorY.toFixed(2), 'ceil=', rg.avgCeilingY.toFixed(2));
-  } else {
-    splatControls.enabled = false;
-    splatCamera.position.set(center.x, center.y, center.z);
-    splatControls.target.set(center.x, center.y, center.z - 0.01);
-    splatCamera.lookAt(center.x, center.y, center.z - 0.01);
-    splatControls.enabled = true;
-  }
-  splatControls.update();
-
-  window._updateSplatUniforms = () => {
-    const c = document.getElementById('viewer-container');
-    const proj = splatCamera.projectionMatrix.elements;
-    splatMaterial.uniforms.focal.value.set(proj[0]*c.clientWidth*0.5, proj[5]*c.clientHeight*0.5);
-    splatMaterial.uniforms.viewport.value.set(c.clientWidth, c.clientHeight);
-  };
-
-  // --- Start sort worker ---
-  sortWorker = createSortWorker();
-  sortWorker.postMessage({
-    init: true, count: numSplats,
-    centers: new Float32Array(centers).buffer,
-    colors: new Float32Array(colors).buffer,
-    scales: new Float32Array(scales3).buffer,
-    quats: new Float32Array(quats).buffer,
-  }, [new Float32Array(centers).buffer, new Float32Array(colors).buffer, new Float32Array(scales3).buffer, new Float32Array(quats).buffer]);
-
-  sortWorker.onmessage = (e) => {
-    pendingSortBuffers = {
-      centers: new Float32Array(e.data.centers),
-      colors: new Float32Array(e.data.colors),
-      scales: new Float32Array(e.data.scales),
-      quats: new Float32Array(e.data.quats),
-    };
-    sortRunning = false;
-  };
-
-  requestSort();
-  console.log('Splat mesh added directly to scene (no group transform)');
-  showToast(`Loaded ${numSplats.toLocaleString()} Gaussian splats`);
-}
-
-function requestSort() {
-  if (sortRunning || !sortWorker || !splatCamera) return;
-  sortRunning = true;
-  // No group transform — splats are in world space, just use camera inverse
-  const mv = splatCamera.matrixWorldInverse;
-  sortWorker.postMessage({ sort: Array.from(mv.elements) });
-}
-
-function applyPendingSort() {
-  if (!pendingSortBuffers || !splatInstancedGeo) return;
-  const geo = splatInstancedGeo;
-  geo.attributes.splatCenter.array.set(pendingSortBuffers.centers);
-  geo.attributes.splatCenter.needsUpdate = true;
-  geo.attributes.splatColor.array.set(pendingSortBuffers.colors);
-  geo.attributes.splatColor.needsUpdate = true;
-  geo.attributes.splatScale.array.set(pendingSortBuffers.scales);
-  geo.attributes.splatScale.needsUpdate = true;
-  geo.attributes.splatQuat.array.set(pendingSortBuffers.quats);
-  geo.attributes.splatQuat.needsUpdate = true;
-  pendingSortBuffers = null;
-}
+// --- Splat rendering: delegated to @mkkellogg/gaussian-splats-3d Viewer ---
+// Nothing else here — see loadSplat() above. The Viewer owns parse, sort,
+// covariance projection, and the splat render pass.
 
 function onResize() {
   const container = document.getElementById('viewer-container');
@@ -1129,10 +914,10 @@ function animate() {
     const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
     const delta = new THREE.Vector3();
 
-    if (_keys['arrowup']) delta.add(forward.clone().multiplyScalar(MOVE_SPEED));
-    if (_keys['arrowdown']) delta.add(forward.clone().multiplyScalar(-MOVE_SPEED));
-    if (_keys['arrowleft']) delta.add(right.clone().multiplyScalar(-MOVE_SPEED));
-    if (_keys['arrowright']) delta.add(right.clone().multiplyScalar(MOVE_SPEED));
+    if (_keys['arrowup'] || _keys['w']) delta.add(forward.clone().multiplyScalar(MOVE_SPEED));
+    if (_keys['arrowdown'] || _keys['s']) delta.add(forward.clone().multiplyScalar(-MOVE_SPEED));
+    if (_keys['arrowleft'] || _keys['a']) delta.add(right.clone().multiplyScalar(-MOVE_SPEED));
+    if (_keys['arrowright'] || _keys['d']) delta.add(right.clone().multiplyScalar(MOVE_SPEED));
     if (_joystick.active) {
       delta.add(forward.clone().multiplyScalar(-_joystick.dz * MOVE_SPEED));
       delta.add(right.clone().multiplyScalar(_joystick.dx * MOVE_SPEED));
@@ -1190,19 +975,31 @@ function animate() {
     }
   }
 
-  // Update splat uniforms (focal length changes with FOV/resize)
-  if (window._updateSplatUniforms) window._updateSplatUniforms();
-
-  // Async sort: request sort on worker (non-blocking), apply results when ready
-  requestSort();
-  applyPendingSort();
-
-  // Render splat scene
-  if (splatRenderer && splatScene && splatCamera) {
+  // Render: the Viewer draws threeScene then the splat mesh. Splats composite
+  // on top and cover the wireframe lines + teleport circles that also live in
+  // splatScene. Re-render splatScene afterwards with cleared depth so the
+  // overlay meshes (all configured with depthTest:false) draw above the splats.
+  // Null the background during the overlay pass — Three.js's WebGLBackground
+  // pre-pass clears to scene.background regardless of autoClear, which would
+  // wipe the splats the Viewer just drew.
+  if (gsViewer) {
+    gsViewer.update();
+    gsViewer.render();
+    if (splatRenderer && splatScene && splatCamera) {
+      const prevAutoClear = splatRenderer.autoClear;
+      const prevBg = splatScene.background;
+      splatScene.background = null;
+      splatRenderer.autoClear = false;
+      splatRenderer.clearDepth();
+      splatRenderer.render(splatScene, splatCamera);
+      splatScene.background = prevBg;
+      splatRenderer.autoClear = prevAutoClear;
+    }
+  } else if (splatRenderer && splatScene && splatCamera) {
     splatRenderer.render(splatScene, splatCamera);
   }
 
-  // Render CSS2D measurements
+  // Render CSS2D measurements on top (splat viewer doesn't touch measureScene).
   if (cssRenderer && measureScene && splatCamera) {
     cssRenderer.render(measureScene, splatCamera);
   }
@@ -1314,6 +1111,210 @@ function addRoomWireframeToScene(room) {
 
   // Add to splatScene directly (NOT inside splatGroup — orientation controls should move splat, not wireframe)
   splatScene.add(roomWireframeGroup);
+
+  // Build teleport circles attached to the same group (auto-cleaned on room reload)
+  teleportState = buildTeleportCircles(cornersM, floorY, roomWireframeGroup);
+}
+
+// ============================================================
+// Teleport circles (floor waypoints) — up to 3 blue discs.
+// Visible only while cursor hovers floor; click transports camera X/Z.
+// ============================================================
+
+function _distToPolyEdge(px, pz, poly) {
+  let best = Infinity;
+  const n = poly.length;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const [x1, z1] = poly[j], [x2, z2] = poly[i];
+    const dx = x2 - x1, dz = z2 - z1;
+    const l2 = dx * dx + dz * dz;
+    let t = l2 > 0 ? ((px - x1) * dx + (pz - z1) * dz) / l2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    const qx = x1 + t * dx, qz = z1 + t * dz;
+    const d = Math.hypot(px - qx, pz - qz);
+    if (d < best) best = d;
+  }
+  return best;
+}
+
+// Three waypoints spaced along the polygon's principal axis, then relaxed
+// toward the centroid until each has at least MIN_CLEARANCE from any wall.
+// Keeps discs centered between walls (away from appliances/counters that line
+// the walls in kitchens), rather than picking corners.
+function _pickWaypoints(cornersM) {
+  const n = cornersM.length;
+  const cx = cornersM.reduce((s, p) => s + p[0], 0) / n;
+  const cz = cornersM.reduce((s, p) => s + p[1], 0) / n;
+
+  let Sxx = 0, Szz = 0, Sxz = 0;
+  for (const [x, z] of cornersM) {
+    const dx = x - cx, dz = z - cz;
+    Sxx += dx * dx; Szz += dz * dz; Sxz += dx * dz;
+  }
+  const tr = Sxx + Szz, det = Sxx * Szz - Sxz * Sxz;
+  const disc = Math.max(0, tr * tr / 4 - det);
+  const lambda1 = tr / 2 + Math.sqrt(disc);
+  let ux, uz;
+  if (Math.abs(Sxz) > 1e-6) { ux = lambda1 - Szz; uz = Sxz; }
+  else { ux = Sxx >= Szz ? 1 : 0; uz = Sxx >= Szz ? 0 : 1; }
+  const L = Math.hypot(ux, uz) || 1; ux /= L; uz /= L;
+
+  let minP = Infinity, maxP = -Infinity;
+  for (const [x, z] of cornersM) {
+    const p = (x - cx) * ux + (z - cz) * uz;
+    if (p < minP) minP = p;
+    if (p > maxP) maxP = p;
+  }
+  const half = (maxP - minP) / 2;
+
+  // Center first so small rooms collapse to a single center disc after dedupe.
+  const t = 0.5;
+  const candidates = [
+    [cx, cz],
+    [cx - t * half * ux, cz - t * half * uz],
+    [cx + t * half * ux, cz + t * half * uz],
+  ];
+
+  const MIN_CLEARANCE = 0.8;
+  const relaxed = candidates.map(([x, z]) => {
+    let px = x, pz = z;
+    for (let iter = 0; iter < 12; iter++) {
+      const inside = pointInPolygon(px, pz, cornersM);
+      const clearance = inside ? _distToPolyEdge(px, pz, cornersM) : 0;
+      if (inside && clearance >= MIN_CLEARANCE) break;
+      px = px + 0.25 * (cx - px);
+      pz = pz + 0.25 * (cz - pz);
+    }
+    return [px, pz];
+  });
+
+  const MIN_SPACING = 1.5;
+  const kept = [];
+  for (const p of relaxed) {
+    const tooClose = kept.some(q => Math.hypot(p[0] - q[0], p[1] - q[1]) < MIN_SPACING);
+    if (!tooClose) kept.push(p);
+  }
+  return kept;
+}
+
+function buildTeleportCircles(cornersM, floorY, parentGroup) {
+  if (!cornersM || cornersM.length < 3) return null;
+  const n = cornersM.length;
+  const cx = cornersM.reduce((s, p) => s + p[0], 0) / n;
+  const cz = cornersM.reduce((s, p) => s + p[1], 0) / n;
+
+  const positions = _pickWaypoints(cornersM).map(
+    ([x, z]) => new THREE.Vector3(x, floorY + 0.01, z)
+  );
+
+  // Invisible floor helper for hover raycasts
+  const fhVerts = [];
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    const [x0, z0] = cornersM[i];
+    const [x1, z1] = cornersM[j];
+    fhVerts.push(cx, floorY, cz, x0, floorY, z0, x1, floorY, z1);
+  }
+  const fhGeom = new THREE.BufferGeometry();
+  fhGeom.setAttribute('position', new THREE.Float32BufferAttribute(fhVerts, 3));
+  const floorHelper = new THREE.Mesh(fhGeom, new THREE.MeshBasicMaterial({
+    visible: false, side: THREE.DoubleSide,
+  }));
+  parentGroup.add(floorHelper);
+
+  const discGeom = new THREE.CircleGeometry(0.28, 40);
+  discGeom.rotateX(-Math.PI / 2);
+  const ringGeom = new THREE.RingGeometry(0.24, 0.28, 40);
+  ringGeom.rotateX(-Math.PI / 2);
+
+  const circles = positions.map((p, i) => {
+    const disc = new THREE.Mesh(discGeom, new THREE.MeshBasicMaterial({
+      color: 0x2a7fff, transparent: true, opacity: 0.55, side: THREE.DoubleSide,
+      depthWrite: false, depthTest: false,
+    }));
+    disc.position.copy(p);
+    disc.visible = false;
+    disc.renderOrder = 100;
+    disc.userData.teleportIndex = i;
+    parentGroup.add(disc);
+
+    const ring = new THREE.Mesh(ringGeom, new THREE.MeshBasicMaterial({
+      color: 0x7fbfff, transparent: true, opacity: 0.95, side: THREE.DoubleSide,
+      depthWrite: false, depthTest: false,
+    }));
+    ring.position.copy(p);
+    ring.position.y += 0.003;
+    ring.visible = false;
+    ring.renderOrder = 101;
+    parentGroup.add(ring);
+
+    return { disc, ring };
+  });
+
+  return { floorHelper, circles, positions, floorY };
+}
+
+let teleportState = null;
+const _tpRay = new THREE.Raycaster();
+const _tpNdc = new THREE.Vector2();
+let _tpHoveredIdx = -1;
+
+function _setTeleportVisibility(overFloor) {
+  if (!teleportState) return -1;
+  let standingIdx = -1, best = 0.5;
+  teleportState.positions.forEach((p, i) => {
+    const d = Math.hypot(splatCamera.position.x - p.x, splatCamera.position.z - p.z);
+    if (d < best) { best = d; standingIdx = i; }
+  });
+  teleportState.circles.forEach((c, i) => {
+    const visible = overFloor && i !== standingIdx && !isBirdsEye;
+    c.disc.visible = visible;
+    c.ring.visible = visible;
+  });
+  return standingIdx;
+}
+
+function updateTeleportHover(e) {
+  if (!teleportState || !splatCamera) return;
+  if (isBirdsEye) { _setTeleportVisibility(false); _tpHoveredIdx = -1; return; }
+
+  const rect = splatRenderer.domElement.getBoundingClientRect();
+  _tpNdc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+  _tpNdc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+  _tpRay.setFromCamera(_tpNdc, splatCamera);
+
+  const overFloor = _tpRay.intersectObject(teleportState.floorHelper, false).length > 0;
+  const standingIdx = _setTeleportVisibility(overFloor);
+
+  _tpHoveredIdx = -1;
+  if (overFloor) {
+    const discs = teleportState.circles
+      .map((c, i) => ({ disc: c.disc, i }))
+      .filter(x => x.i !== standingIdx)
+      .map(x => x.disc);
+    const hit = _tpRay.intersectObjects(discs, false);
+    if (hit.length > 0) _tpHoveredIdx = hit[0].object.userData.teleportIndex;
+  }
+
+  teleportState.circles.forEach((c, i) => {
+    c.disc.material.opacity = (i === _tpHoveredIdx) ? 0.85 : 0.55;
+  });
+  if (_tpHoveredIdx >= 0) splatRenderer.domElement.style.cursor = 'pointer';
+  else if (splatRenderer.domElement.style.cursor === 'pointer') splatRenderer.domElement.style.cursor = '';
+}
+
+function teleportToHovered() {
+  if (_tpHoveredIdx < 0 || !teleportState || !splatCamera || !splatControls) return false;
+  const p = teleportState.positions[_tpHoveredIdx];
+  const dx = p.x - splatCamera.position.x;
+  const dz = p.z - splatCamera.position.z;
+  splatCamera.position.x = p.x;
+  splatCamera.position.z = p.z;
+  splatControls.target.x += dx;
+  splatControls.target.z += dz;
+  splatControls.update();
+  _tpHoveredIdx = -1;
+  return true;
 }
 
 // --- Measurements ---
@@ -1431,18 +1432,11 @@ window.toggleViewMode = function() {
     splatControls.rotateSpeed = 0.5;
     splatControls.update();
 
-    // Clip splats to room bounding box so BEV shows a clean floor plan
-    if (splatMeshRef && currentRoomGeometry) {
-      const rg = currentRoomGeometry;
-      const MARGIN = 0.15; // 6 inches inward
-      let mnX = Infinity, mxX = -Infinity, mnZ = Infinity, mxZ = -Infinity;
-      rg.cornersM.forEach(([x, z]) => { mnX = Math.min(mnX, x); mxX = Math.max(mxX, x); mnZ = Math.min(mnZ, z); mxZ = Math.max(mxZ, z); });
-      splatMeshRef.material.uniforms.clipMin.value.set(mnX + MARGIN, rg.floorY + MARGIN, mnZ + MARGIN);
-      splatMeshRef.material.uniforms.clipMax.value.set(mxX - MARGIN, rg.avgCeilingY - MARGIN, mxZ - MARGIN);
-    }
-
     btn.classList.add('active');
     btn.textContent = '360 Tour';
+
+    // Swap to the bbox-filtered splat scene (hides splats outside room + ceiling).
+    _swapSplatScene(true);
   } else {
     if (savedInteriorCamPos) {
       splatCamera.position.copy(savedInteriorCamPos);
@@ -1455,14 +1449,11 @@ window.toggleViewMode = function() {
     splatControls.rotateSpeed = -0.3;
     splatControls.update();
 
-    // Restore full rendering (no clip)
-    if (splatMeshRef) {
-      splatMeshRef.material.uniforms.clipMin.value.set(-1e10, -1e10, -1e10);
-      splatMeshRef.material.uniforms.clipMax.value.set(1e10, 1e10, 1e10);
-    }
-
     btn.classList.remove('active');
     btn.textContent = 'Birds Eye View';
+
+    // Restore the full splat scene for interior tour view.
+    _swapSplatScene(false);
   }
 };
 

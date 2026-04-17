@@ -312,6 +312,10 @@ let measurementGroup = null;
 let measurementsVisible = true;
 let currentData = null;
 let activeRoomIndex = -1;
+// Tracks the room whose geometry is currently loaded on screen. Distinct from
+// activeRoomIndex (which _selectRoom sets before calling loadRoom). We save the
+// outgoing room's camera state into roomCache[_loadedRoomIndex], not activeRoomIndex.
+let _loadedRoomIndex = -1;
 let isHD = false;
 let currentTextureUrls = null;
 let currentScanId = null;
@@ -992,6 +996,19 @@ function initThree() {
     }
   });
 
+  // Teleport circles: hover on floor + click to transport
+  renderer.domElement.addEventListener('mousemove', updateTeleportHover);
+  let _tpDown = null;
+  renderer.domElement.addEventListener('pointerdown', (e) => {
+    _tpDown = { x: e.clientX, y: e.clientY };
+  });
+  renderer.domElement.addEventListener('pointerup', (e) => {
+    if (!_tpDown) return;
+    const dx = e.clientX - _tpDown.x, dy = e.clientY - _tpDown.y;
+    _tpDown = null;
+    if (Math.hypot(dx, dy) < 5) teleportToHovered();
+  });
+
   animate();
 }
 
@@ -1089,11 +1106,11 @@ function animate() {
     forward.normalize();
     const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
     const delta = new THREE.Vector3();
-    // Desktop arrow keys
-    if (_keys['arrowup']) delta.add(forward.clone().multiplyScalar(MOVE_SPEED));
-    if (_keys['arrowdown']) delta.add(forward.clone().multiplyScalar(-MOVE_SPEED));
-    if (_keys['arrowleft']) delta.add(right.clone().multiplyScalar(-MOVE_SPEED));
-    if (_keys['arrowright']) delta.add(right.clone().multiplyScalar(MOVE_SPEED));
+    // Desktop arrow keys + WASD
+    if (_keys['arrowup'] || _keys['w']) delta.add(forward.clone().multiplyScalar(MOVE_SPEED));
+    if (_keys['arrowdown'] || _keys['s']) delta.add(forward.clone().multiplyScalar(-MOVE_SPEED));
+    if (_keys['arrowleft'] || _keys['a']) delta.add(right.clone().multiplyScalar(-MOVE_SPEED));
+    if (_keys['arrowright'] || _keys['d']) delta.add(right.clone().multiplyScalar(MOVE_SPEED));
     // Mobile joystick (dz = forward/back, dx = strafe)
     if (_joystick.active) {
       delta.add(forward.clone().multiplyScalar(-_joystick.dz * MOVE_SPEED));
@@ -1134,10 +1151,15 @@ async function loadRoom(index) {
   const room = currentData.rooms[index];
   if (!scene) initThree();
 
-  // Save camera state for outgoing room
-  if (activeRoomIndex >= 0 && roomCache[activeRoomIndex]) {
-    roomCache[activeRoomIndex].camPos = camera.position.clone();
-    roomCache[activeRoomIndex].camTarget = controls.target.clone();
+  // Save camera state for the truly-outgoing room. Use _loadedRoomIndex, not
+  // activeRoomIndex (which was already updated to `index` by _selectRoom). In
+  // birds-eye mode, save the saved interior position instead of the current
+  // high-altitude birds-eye position so returning doesn't strand the user.
+  if (_loadedRoomIndex >= 0 && _loadedRoomIndex !== index && roomCache[_loadedRoomIndex]) {
+    const savePos = (isBirdsEye && savedInteriorCamPos) ? savedInteriorCamPos : camera.position;
+    const saveTgt = (isBirdsEye && savedInteriorCamTarget) ? savedInteriorCamTarget : controls.target;
+    roomCache[_loadedRoomIndex].camPos = savePos.clone();
+    roomCache[_loadedRoomIndex].camTarget = saveTgt.clone();
   }
 
   // Hide everything currently visible
@@ -1145,6 +1167,7 @@ async function loadRoom(index) {
     if (c.contentGroup) c.contentGroup.visible = false;
     if (c.measureGroup) c.measureGroup.visible = false;
     if (c.hdGroup) c.hdGroup.visible = false;
+    if (c.teleport?.group) c.teleport.group.visible = false;
   });
   if (activeContentGroup) { activeContentGroup.visible = false; activeContentGroup = null; }
   loadedMeshGroup = null;
@@ -1205,11 +1228,14 @@ async function loadRoom(index) {
     loadedMeshGroup = activeContentGroup;
     cached.measureGroup.visible = measurementsVisible;
     measurementGroup = cached.measureGroup;
+    teleportState = cached.teleport || null;
+    if (teleportState?.group) teleportState.group.visible = true;
 
     camera.position.copy(cached.camPos);
     controls.target.copy(cached.camTarget);
     controls.update();
     updateIsoView(room);
+    _loadedRoomIndex = index;
     return;
   }
 
@@ -1305,6 +1331,11 @@ async function loadRoom(index) {
   // Isometric mini-view
   updateIsoView(room);
 
+  // Build teleport circles (up to 3 floor waypoints). Attach to scene, not
+  // contentGroup — otherwise the HD toggle (which hides contentGroup) also
+  // hides the circles.
+  teleportState = buildTeleportCircles(cornersM, floorY, scene);
+
   // Cache
   roomCache[index] = {
     contentGroup,
@@ -1313,8 +1344,10 @@ async function loadRoom(index) {
     camTarget: controls.target.clone(),
     isHD: false,
     hdGroup: null,
+    teleport: teleportState,
   };
   loadedMeshGroup = contentGroup;
+  _loadedRoomIndex = index;
 
   // Auto-enable HD on desktop; show toast on mobile
   if (hasOBJ && textureUrls.obj_standard) {
@@ -1325,6 +1358,227 @@ async function loadRoom(index) {
       showToast('HD mode available on browser only');
     }
   }
+}
+
+// ============================================================
+// Teleport circles (floor waypoints)
+// ============================================================
+// Up to 3 blue discs placed on the floor; visible only while cursor hovers
+// the floor polygon. Click to teleport camera X/Z (keeping eye height).
+// Placement: pick the 3 polygon vertices forming the largest inscribed triangle,
+// then inset each toward the room centroid so discs sit comfortably inside.
+
+// Distance from (px, pz) to the nearest polygon edge (meters). Returns the
+// minimum segment distance — used to ensure waypoints have wall clearance.
+function _distToPolyEdge(px, pz, poly) {
+  let best = Infinity;
+  const n = poly.length;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const [x1, z1] = poly[j], [x2, z2] = poly[i];
+    const dx = x2 - x1, dz = z2 - z1;
+    const l2 = dx * dx + dz * dz;
+    let t = l2 > 0 ? ((px - x1) * dx + (pz - z1) * dz) / l2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    const qx = x1 + t * dx, qz = z1 + t * dz;
+    const d = Math.hypot(px - qx, pz - qz);
+    if (d < best) best = d;
+  }
+  return best;
+}
+
+function _pickWaypoints(cornersM) {
+  const n = cornersM.length;
+  const cx = cornersM.reduce((s, p) => s + p[0], 0) / n;
+  const cz = cornersM.reduce((s, p) => s + p[1], 0) / n;
+
+  // Principal axis via 2D PCA of corner coordinates (centered).
+  let Sxx = 0, Szz = 0, Sxz = 0;
+  for (const [x, z] of cornersM) {
+    const dx = x - cx, dz = z - cz;
+    Sxx += dx * dx; Szz += dz * dz; Sxz += dx * dz;
+  }
+  const tr = Sxx + Szz, det = Sxx * Szz - Sxz * Sxz;
+  const disc = Math.max(0, tr * tr / 4 - det);
+  const lambda1 = tr / 2 + Math.sqrt(disc);
+  let ux, uz;
+  if (Math.abs(Sxz) > 1e-6) { ux = lambda1 - Szz; uz = Sxz; }
+  else { ux = Sxx >= Szz ? 1 : 0; uz = Sxx >= Szz ? 0 : 1; }
+  const L = Math.hypot(ux, uz) || 1; ux /= L; uz /= L;
+
+  // Extent of polygon along principal axis.
+  let minP = Infinity, maxP = -Infinity;
+  for (const [x, z] of cornersM) {
+    const p = (x - cx) * ux + (z - cz) * uz;
+    if (p < minP) minP = p;
+    if (p > maxP) maxP = p;
+  }
+  const half = (maxP - minP) / 2;
+
+  // Three candidates along the axis, spaced at ±half-extent/2 from the center.
+  // Center first, then ±half-extent/2 along axis. Center-first ordering means
+  // that if the room is small and the ±axis candidates end up within
+  // MIN_SPACING of the centroid, we keep the center disc and drop the others,
+  // rather than keeping an off-center disc.
+  const t = 0.5;
+  const candidates = [
+    [cx, cz],
+    [cx - t * half * ux, cz - t * half * uz],
+    [cx + t * half * ux, cz + t * half * uz],
+  ];
+
+  // Relax each candidate toward centroid until it is inside the polygon and
+  // at least MIN_CLEARANCE from any wall. This keeps discs away from walls/
+  // counters/appliances (which sit along the walls in kitchens).
+  const MIN_CLEARANCE = 0.8;
+  const relaxed = candidates.map(([x, z]) => {
+    let px = x, pz = z;
+    for (let iter = 0; iter < 12; iter++) {
+      const inside = pointInPolygon(px, pz, cornersM);
+      const clearance = inside ? _distToPolyEdge(px, pz, cornersM) : 0;
+      if (inside && clearance >= MIN_CLEARANCE) break;
+      px = px + 0.25 * (cx - px);
+      pz = pz + 0.25 * (cz - pz);
+    }
+    return [px, pz];
+  });
+
+  // Dedupe: drop any candidate within MIN_SPACING of one we already kept.
+  // In a small room all three collapse to the centroid; this collapses to one
+  // disc. In a long room they stay separated and we keep all three.
+  const MIN_SPACING = 1.5;
+  const kept = [];
+  for (const p of relaxed) {
+    const tooClose = kept.some(q => Math.hypot(p[0] - q[0], p[1] - q[1]) < MIN_SPACING);
+    if (!tooClose) kept.push(p);
+  }
+  return kept;
+}
+
+// Build the teleport circle system in its own THREE.Group attached to `scene`.
+// Keeping the group separate from contentGroup/hdGroup means the HD toggle
+// (which hides contentGroup) doesn't hide the circles.
+function buildTeleportCircles(cornersM, floorY, scene) {
+  if (!cornersM || cornersM.length < 3) return null;
+  const n = cornersM.length;
+  const cx = cornersM.reduce((s, p) => s + p[0], 0) / n;
+  const cz = cornersM.reduce((s, p) => s + p[1], 0) / n;
+
+  const positions = _pickWaypoints(cornersM).map(
+    ([x, z]) => new THREE.Vector3(x, floorY + 0.01, z)
+  );
+
+  const group = new THREE.Group();
+  scene.add(group);
+
+  // Invisible floor helper — raycast target so hover only triggers over floor.
+  const fhVerts = [];
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    const [x0, z0] = cornersM[i];
+    const [x1, z1] = cornersM[j];
+    fhVerts.push(cx, floorY, cz, x0, floorY, z0, x1, floorY, z1);
+  }
+  const fhGeom = new THREE.BufferGeometry();
+  fhGeom.setAttribute('position', new THREE.Float32BufferAttribute(fhVerts, 3));
+  const floorHelper = new THREE.Mesh(fhGeom, new THREE.MeshBasicMaterial({
+    visible: false, side: THREE.DoubleSide,
+  }));
+  group.add(floorHelper);
+
+  const discGeom = new THREE.CircleGeometry(0.28, 40);
+  discGeom.rotateX(-Math.PI / 2);
+  const ringGeom = new THREE.RingGeometry(0.24, 0.28, 40);
+  ringGeom.rotateX(-Math.PI / 2);
+
+  const circles = positions.map((p, i) => {
+    const disc = new THREE.Mesh(discGeom, new THREE.MeshBasicMaterial({
+      color: 0x2a7fff, transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthWrite: false, depthTest: false,
+    }));
+    disc.position.copy(p);
+    disc.visible = false;
+    disc.renderOrder = 10;
+    disc.userData.teleportIndex = i;
+    group.add(disc);
+
+    const ring = new THREE.Mesh(ringGeom, new THREE.MeshBasicMaterial({
+      color: 0x7fbfff, transparent: true, opacity: 0.95, side: THREE.DoubleSide, depthWrite: false, depthTest: false,
+    }));
+    ring.position.copy(p);
+    ring.position.y += 0.003;
+    ring.visible = false;
+    ring.renderOrder = 11;
+    group.add(ring);
+
+    return { disc, ring };
+  });
+
+  return { group, floorHelper, circles, positions, floorY };
+}
+
+// Active teleport state (points at the current room's circles). Updated on room load.
+let teleportState = null;
+const _tpRay = new THREE.Raycaster();
+const _tpNdc = new THREE.Vector2();
+let _tpHoveredIdx = -1;
+
+function _setTeleportVisibility(overFloor) {
+  if (!teleportState) return;
+  // Hide the circle closest to current camera position (within 0.5m) — "standing on it"
+  let standingIdx = -1;
+  let best = 0.5;
+  teleportState.positions.forEach((p, i) => {
+    const d = Math.hypot(camera.position.x - p.x, camera.position.z - p.z);
+    if (d < best) { best = d; standingIdx = i; }
+  });
+  teleportState.circles.forEach((c, i) => {
+    const visible = overFloor && i !== standingIdx && !isBirdsEye;
+    c.disc.visible = visible;
+    c.ring.visible = visible;
+  });
+  return standingIdx;
+}
+
+function updateTeleportHover(e) {
+  if (!teleportState || !camera) return;
+  if (isBirdsEye) { _setTeleportVisibility(false); _tpHoveredIdx = -1; return; }
+
+  const rect = renderer.domElement.getBoundingClientRect();
+  _tpNdc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+  _tpNdc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+  _tpRay.setFromCamera(_tpNdc, camera);
+
+  const overFloor = _tpRay.intersectObject(teleportState.floorHelper, false).length > 0;
+  const standingIdx = _setTeleportVisibility(overFloor);
+
+  _tpHoveredIdx = -1;
+  if (overFloor) {
+    const discs = teleportState.circles
+      .map((c, i) => ({ disc: c.disc, i }))
+      .filter(x => x.i !== standingIdx)
+      .map(x => x.disc);
+    const hit = _tpRay.intersectObjects(discs, false);
+    if (hit.length > 0) _tpHoveredIdx = hit[0].object.userData.teleportIndex;
+  }
+
+  teleportState.circles.forEach((c, i) => {
+    c.disc.material.opacity = (i === _tpHoveredIdx) ? 0.85 : 0.55;
+  });
+  if (_tpHoveredIdx >= 0) renderer.domElement.style.cursor = 'pointer';
+  else if (renderer.domElement.style.cursor === 'pointer') renderer.domElement.style.cursor = '';
+}
+
+function teleportToHovered() {
+  if (_tpHoveredIdx < 0 || !teleportState || !camera || !controls) return false;
+  const p = teleportState.positions[_tpHoveredIdx];
+  const dx = p.x - camera.position.x;
+  const dz = p.z - camera.position.z;
+  camera.position.x = p.x;
+  camera.position.z = p.z;
+  controls.target.x += dx;
+  controls.target.z += dz;
+  controls.update();
+  _tpHoveredIdx = -1;
+  return true;
 }
 
 // Build a horizontal polygon surface at a given Y height using fan triangulation.
