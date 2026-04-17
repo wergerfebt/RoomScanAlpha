@@ -1493,6 +1493,22 @@ async def request_org(request: Request, authorization: str = Header(None)) -> di
     return {"request_id": str(req_id), "status": "pending"}
 
 
+BCC_EMAIL = "notifications@roomscanalpha.com"
+
+
+def _make_mail(from_email, to_emails, subject, html_content):
+    """Create a SendGrid Mail with BCC to notifications inbox."""
+    from sendgrid.helpers.mail import Mail, Bcc
+    mail = Mail(
+        from_email=from_email,
+        to_emails=to_emails,
+        subject=subject,
+        html_content=html_content,
+    )
+    mail.add_bcc(Bcc(BCC_EMAIL))
+    return mail
+
+
 def _send_org_request_emails(req_id, org_name, acct_email, acct_name, acct_phone, acct_address):
     """Send request confirmation to requester + approval notification to admin."""
     sendgrid_key = os.environ.get("SENDGRID_API_KEY", "")
@@ -1500,7 +1516,6 @@ def _send_org_request_emails(req_id, org_name, acct_email, acct_name, acct_phone
         return
     try:
         from sendgrid import SendGridAPIClient
-        from sendgrid.helpers.mail import Mail
 
         sg = SendGridAPIClient(sendgrid_key)
         base_url = os.environ.get("SERVICE_URL", "https://scan-api-839349778883.us-central1.run.app")
@@ -1516,7 +1531,7 @@ def _send_org_request_emails(req_id, org_name, acct_email, acct_name, acct_phone
 </p>
 <p style="font-size:13px;color:#888;margin-top:24px">— The Quoterra Team</p>
 """
-        sg.send(Mail(
+        sg.send(_make_mail(
             from_email="notifications@roomscanalpha.com",
             to_emails=acct_email,
             subject=f"Request received: {org_name}",
@@ -1539,7 +1554,7 @@ def _send_org_request_emails(req_id, org_name, acct_email, acct_name, acct_phone
 </a>
 <p style="margin-top:16px;font-size:13px;color:#888">Request ID: {req_id}</p>
 """
-        sg.send(Mail(
+        sg.send(_make_mail(
             from_email="notifications@roomscanalpha.com",
             to_emails="jake@roomscanalpha.com",
             subject=f"Contractor Request: {org_name}",
@@ -1619,7 +1634,6 @@ def approve_org_request(request_id: str) -> str:
     if sendgrid_key:
         try:
             from sendgrid import SendGridAPIClient
-            from sendgrid.helpers.mail import Mail
 
             base_url = os.environ.get("SERVICE_URL", "https://scan-api-839349778883.us-central1.run.app")
             org_url = f"{base_url}/org"
@@ -1638,7 +1652,7 @@ def approve_org_request(request_id: str) -> str:
 <p style="font-size:13px;color:#888;margin-top:24px">— The Quoterra Team</p>
 """
             sg = SendGridAPIClient(sendgrid_key)
-            sg.send(Mail(
+            sg.send(_make_mail(
                 from_email="notifications@roomscanalpha.com",
                 to_emails=email,
                 subject=f"Approved: {org_name} is ready!",
@@ -1868,7 +1882,6 @@ async def invite_org_member(request: Request, authorization: str = Header(None))
     if sendgrid_key and invite_token:
         try:
             from sendgrid import SendGridAPIClient
-            from sendgrid.helpers.mail import Mail
 
             base_url = os.environ.get("SERVICE_URL", "https://scan-api-839349778883.us-central1.run.app")
             invite_url = f"{base_url}/invite?token={invite_token}"
@@ -1885,7 +1898,7 @@ async def invite_org_member(request: Request, authorization: str = Header(None))
 <p style="font-size:13px;color:#888;margin-top:24px">— The Quoterra Team</p>
 """
             sg = SendGridAPIClient(sendgrid_key)
-            sg.send(Mail(
+            sg.send(_make_mail(
                 from_email="notifications@roomscanalpha.com",
                 to_emails=invite_email,
                 subject=f"You're invited to {org_name} on Quoterra",
@@ -2672,7 +2685,6 @@ def _send_bid_accepted_emails(*, rfq_id, rfq_title, rfq_desc, rfq_addr, rfq_crea
         return
     try:
         from sendgrid import SendGridAPIClient
-        from sendgrid.helpers.mail import Mail
 
         sg = SendGridAPIClient(sendgrid_key)
         base_url = os.environ.get("SERVICE_URL", "https://scan-api-839349778883.us-central1.run.app")
@@ -2723,7 +2735,7 @@ def _send_bid_accepted_emails(*, rfq_id, rfq_title, rfq_desc, rfq_addr, rfq_crea
 </a>
 <p style="font-size:13px;color:#888;margin-top:24px">&mdash; The Quoterra Team</p>
 """
-            sg.send(Mail(
+            sg.send(_make_mail(
                 from_email="notifications@roomscanalpha.com",
                 to_emails=email_addr,
                 subject=f"You won the job: {rfq_title}",
@@ -2753,7 +2765,7 @@ def _send_bid_accepted_emails(*, rfq_id, rfq_title, rfq_desc, rfq_addr, rfq_crea
 </a>
 <p style="font-size:13px;color:#888;margin-top:24px">&mdash; The Quoterra Team</p>
 """
-            sg.send(Mail(
+            sg.send(_make_mail(
                 from_email="notifications@roomscanalpha.com",
                 to_emails=ho_email,
                 subject=f"You hired {org_name} for {rfq_title}",
@@ -2775,7 +2787,7 @@ def _send_bid_accepted_emails(*, rfq_id, rfq_title, rfq_desc, rfq_addr, rfq_crea
 </a>
 <p style="font-size:13px;color:#888;margin-top:24px">&mdash; The Quoterra Team</p>
 """
-            sg.send(Mail(
+            sg.send(_make_mail(
                 from_email="notifications@roomscanalpha.com",
                 to_emails=email_addr,
                 subject=f"Update on {rfq_title}",
