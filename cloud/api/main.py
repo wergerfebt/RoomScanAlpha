@@ -908,14 +908,17 @@ async def submit_bid(
         homeowner_email = None
         org_name = None
         try:
+            # Try homeowner_account_id first, fall back to user_id (Firebase UID)
             cursor.execute(
-                """SELECT a.email FROM rfqs r
-                   JOIN accounts a ON a.id = r.homeowner_account_id
+                """SELECT COALESCE(ha.email, ua.email)
+                   FROM rfqs r
+                   LEFT JOIN accounts ha ON ha.id = r.homeowner_account_id
+                   LEFT JOIN accounts ua ON ua.firebase_uid = r.user_id
                    WHERE r.id = %s""",
                 (rfq_id,),
             )
             he_row = cursor.fetchone()
-            if he_row:
+            if he_row and he_row[0]:
                 homeowner_email = he_row[0]
             if org_id:
                 cursor.execute("SELECT name FROM organizations WHERE id = %s", (org_id,))

@@ -200,7 +200,7 @@
   <div class="main-panel">
     <div class="top-bar" id="top-bar">
       <span class="room-name" id="room-name">Loading...</span>
-      <button class="btn btn-toggle" id="btn-measures" onclick="toggleMeasurements()" style="display:none">Show Measurements</button>
+      <button class="btn btn-toggle active" id="btn-measures" onclick="toggleMeasurements()" style="display:none">Hide Measurements</button>
       <button class="btn btn-toggle" id="btn-view-mode" onclick="toggleViewMode()" style="display:none">Birds Eye View</button>
       <!-- Orientation controls removed — splat is in ARKit frame, no manual alignment needed -->
     </div>
@@ -279,7 +279,7 @@ function getSplatUrl() {
 // --- State ---
 let currentData = null;
 let activeRoomIndex = -1;
-let measurementsVisible = false;
+let measurementsVisible = true;
 let isBirdsEye = false;
 let savedInteriorCamPos = null;
 let savedInteriorCamTarget = null;
@@ -817,6 +817,8 @@ function renderSplatData(buffer) {
     uniforms: {
       viewport: { value: new THREE.Vector2(container.clientWidth, container.clientHeight) },
       focal: { value: new THREE.Vector2(1, 1) },
+      clipMin: { value: new THREE.Vector3(-1e10, -1e10, -1e10) },
+      clipMax: { value: new THREE.Vector3(1e10, 1e10, 1e10) },
     },
     vertexShader: `
       precision highp float;
@@ -824,6 +826,8 @@ function renderSplatData(buffer) {
       uniform mat4 projectionMatrix;
       uniform vec2 viewport;
       uniform vec2 focal;
+      uniform vec3 clipMin; // BEV bounding box clip (set to -1e10 = disabled)
+      uniform vec3 clipMax; // BEV bounding box clip (set to 1e10 = disabled)
 
       attribute vec2 position;
       attribute vec3 splatCenter;
@@ -862,6 +866,11 @@ function renderSplatData(buffer) {
         vec4 viewCenter4 = modelViewMatrix * vec4(splatCenter, 1.0);
         vec3 tc = viewCenter4.xyz;
         if (tc.z > -0.1) { gl_Position = vec4(0.0, 0.0, 2.0, 1.0); return; }
+        if (splatCenter.x < clipMin.x || splatCenter.x > clipMax.x ||
+            splatCenter.y < clipMin.y || splatCenter.y > clipMax.y ||
+            splatCenter.z < clipMin.z || splatCenter.z > clipMax.z) {
+          gl_Position = vec4(0.0, 0.0, 2.0, 1.0); return;
+        }
 
         mat3 W = mat3(modelViewMatrix);
         vec3 wr0 = vec3(W[0][0], W[1][0], W[2][0]);
@@ -954,7 +963,7 @@ function renderSplatData(buffer) {
     const rg = currentRoomGeometry;
     const cx = rg.cornersM.reduce((s, p) => s + p[0], 0) / rg.cornersM.length;
     const cz = rg.cornersM.reduce((s, p) => s + p[1], 0) / rg.cornersM.length;
-    const eyeHeight = rg.floorY + Math.min(1.83, rg.ceilingHeightM * 0.65); // 6ft eye level
+    const eyeHeight = rg.floorY + Math.min(1.52, rg.ceilingHeightM * 0.55); // 5ft eye level
     // Look toward midpoint of first wall
     const [wx0, wz0] = rg.cornersM[0];
     const [wx1, wz1] = rg.cornersM[1];
@@ -1129,8 +1138,21 @@ function animate() {
       delta.add(right.clone().multiplyScalar(_joystick.dx * MOVE_SPEED));
     }
 
+    // +/- keys adjust height
+    const HEIGHT_STEP = 0.02;
+    if (_keys['='] || _keys['+']) { delta.y += HEIGHT_STEP; }
+    if (_keys['-'] || _keys['_']) { delta.y -= HEIGHT_STEP; }
+
     if (delta.lengthSq() > 0) {
-      // Wall collision disabled — splat and room polygon may be in different coordinate systems
+      // Clamp to room polygon in 360 Tour mode
+      if (!isBirdsEye && currentRoomPolygonM && currentRoomGeometry) {
+        const rg = currentRoomGeometry;
+        const newX = splatCamera.position.x + delta.x;
+        const newY = splatCamera.position.y + delta.y;
+        const newZ = splatCamera.position.z + delta.z;
+        if (!pointInPolygon(newX, newZ, currentRoomPolygonM)) { delta.x = 0; delta.z = 0; }
+        if (newY < rg.floorY + 0.3 || newY > rg.avgCeilingY - 0.1) delta.y = 0;
+      }
       splatCamera.position.add(delta);
       splatControls.target.add(delta);
     }
@@ -1142,6 +1164,30 @@ function animate() {
     }
 
     splatControls.update();
+
+    // Clamp camera after orbit rotation to keep inside room polygon
+    if (!isBirdsEye && currentRoomPolygonM && currentRoomGeometry) {
+      const rg = currentRoomGeometry;
+      // If orbit pushed camera outside the polygon, snap back to last valid position
+      if (!pointInPolygon(splatCamera.position.x, splatCamera.position.z, currentRoomPolygonM)) {
+        splatCamera.position.copy(savedInteriorCamPos || splatCamera.position);
+        splatControls.target.copy(savedInteriorCamTarget || splatControls.target);
+      } else {
+        // Save valid position for rollback
+        if (!savedInteriorCamPos) savedInteriorCamPos = splatCamera.position.clone();
+        if (!savedInteriorCamTarget) savedInteriorCamTarget = splatControls.target.clone();
+        savedInteriorCamPos.copy(splatCamera.position);
+        savedInteriorCamTarget.copy(splatControls.target);
+      }
+      // Clamp Y
+      const cy = splatCamera.position.y;
+      if (cy < rg.floorY + 0.3 || cy > rg.avgCeilingY - 0.1) {
+        const clampedY = Math.max(rg.floorY + 0.3, Math.min(rg.avgCeilingY - 0.1, cy));
+        const dy = clampedY - cy;
+        splatCamera.position.y = clampedY;
+        splatControls.target.y += dy;
+      }
+    }
   }
 
   // Update splat uniforms (focal length changes with FOV/resize)
@@ -1347,17 +1393,17 @@ window.toggleViewMode = function() {
     savedInteriorCamTarget = splatControls.target.clone();
     savedInteriorFov = splatCamera.fov;
 
-    // Compute bounding box from splat group (includes orientation transform)
+    // Use room polygon for birds eye positioning (splat bbox includes outliers)
     let center, maxSpan, minY = 0;
-    const splatBox = new THREE.Box3();
-    if (splatMeshRef) {
-      splatBox.setFromObject(splatMeshRef);
-      center = new THREE.Vector3();
-      const sz = new THREE.Vector3();
-      splatBox.getCenter(center);
-      splatBox.getSize(sz);
-      maxSpan = Math.max(sz.x, sz.z, 2);
-      minY = splatBox.min.y;
+    if (currentRoomGeometry) {
+      const rg = currentRoomGeometry;
+      const cx = rg.cornersM.reduce((s, p) => s + p[0], 0) / rg.cornersM.length;
+      const cz = rg.cornersM.reduce((s, p) => s + p[1], 0) / rg.cornersM.length;
+      let mnX = Infinity, mxX = -Infinity, mnZ = Infinity, mxZ = -Infinity;
+      rg.cornersM.forEach(([x, z]) => { mnX = Math.min(mnX, x); mxX = Math.max(mxX, x); mnZ = Math.min(mnZ, z); mxZ = Math.max(mxZ, z); });
+      center = new THREE.Vector3(cx, 0, cz);
+      maxSpan = Math.max(mxX - mnX, mxZ - mnZ, 2);
+      minY = rg.floorY;
     } else if (currentRoomPolygonM && currentRoomPolygonM.length >= 3) {
       let mnX = Infinity, mxX = -Infinity, mnZ = Infinity, mxZ = -Infinity;
       currentRoomPolygonM.forEach(([x, z]) => { mnX = Math.min(mnX, x); mxX = Math.max(mxX, x); mnZ = Math.min(mnZ, z); mxZ = Math.max(mxZ, z); });
@@ -1368,7 +1414,7 @@ window.toggleViewMode = function() {
       maxSpan = 5;
     }
 
-    const camHeight = maxSpan * 2.5;
+    const camHeight = maxSpan * 2.0;
     splatCamera.position.set(center.x, camHeight, center.z);
     splatControls.target.set(center.x, minY, center.z);
 
@@ -1385,6 +1431,16 @@ window.toggleViewMode = function() {
     splatControls.rotateSpeed = 0.5;
     splatControls.update();
 
+    // Clip splats to room bounding box so BEV shows a clean floor plan
+    if (splatMeshRef && currentRoomGeometry) {
+      const rg = currentRoomGeometry;
+      const MARGIN = 0.15; // 6 inches inward
+      let mnX = Infinity, mxX = -Infinity, mnZ = Infinity, mxZ = -Infinity;
+      rg.cornersM.forEach(([x, z]) => { mnX = Math.min(mnX, x); mxX = Math.max(mxX, x); mnZ = Math.min(mnZ, z); mxZ = Math.max(mxZ, z); });
+      splatMeshRef.material.uniforms.clipMin.value.set(mnX + MARGIN, rg.floorY + MARGIN, mnZ + MARGIN);
+      splatMeshRef.material.uniforms.clipMax.value.set(mxX - MARGIN, rg.avgCeilingY - MARGIN, mxZ - MARGIN);
+    }
+
     btn.classList.add('active');
     btn.textContent = '360 Tour';
   } else {
@@ -1398,6 +1454,12 @@ window.toggleViewMode = function() {
     splatControls.enablePan = false;
     splatControls.rotateSpeed = -0.3;
     splatControls.update();
+
+    // Restore full rendering (no clip)
+    if (splatMeshRef) {
+      splatMeshRef.material.uniforms.clipMin.value.set(-1e10, -1e10, -1e10);
+      splatMeshRef.material.uniforms.clipMax.value.set(1e10, 1e10, 1e10);
+    }
 
     btn.classList.remove('active');
     btn.textContent = 'Birds Eye View';
