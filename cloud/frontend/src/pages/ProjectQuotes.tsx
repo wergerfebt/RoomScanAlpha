@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useParams, Link } from "react-router-dom";
 import Layout from "../components/Layout";
 import FilterSidebar, { type FilterValues } from "../components/FilterSidebar";
@@ -46,6 +46,31 @@ export default function ProjectQuotes() {
       })
       .catch((err) => setError(err.message || "Failed to load quotes"))
       .finally(() => setLoading(false));
+  }, [rfqId]);
+
+  const [hiring, setHiring] = useState(false);
+
+  const handleHire = useCallback(async (bidId: string, contractorName: string) => {
+    if (!rfqId) return;
+    if (!confirm(`Accept the quote from ${contractorName}? Other bidders will be notified.`)) return;
+    setHiring(true);
+    try {
+      await apiFetch(`/api/rfqs/${rfqId}/accept-bid`, {
+        method: "POST",
+        body: JSON.stringify({ bid_id: bidId }),
+      });
+      // Reload bids to reflect updated statuses
+      const rfqData = await apiFetch<{ rfqs: { id: string; bid_view_token: string | null }[] }>("/api/rfqs");
+      const rfq = rfqData.rfqs.find((r) => r.id === rfqId);
+      const token = rfq?.bid_view_token;
+      if (token) {
+        const d = await apiFetch<BidsResponse>(`/api/rfqs/${rfqId}/bids?token=${encodeURIComponent(token)}`);
+        setData(d);
+      }
+    } catch (err) {
+      alert("Failed to accept quote. Please try again.");
+    }
+    setHiring(false);
   }, [rfqId]);
 
   const bids = data?.bids || [];
@@ -155,6 +180,7 @@ export default function ProjectQuotes() {
                 contractor={bid.contractor}
                 bid={bid}
                 isLowest={bid.price_cents === lowestPrice && sorted.length > 1}
+                onHire={bid.status !== "accepted" && !hiring ? handleHire : undefined}
               />
             ))}
           </div>

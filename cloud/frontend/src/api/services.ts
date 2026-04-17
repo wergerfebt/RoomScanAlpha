@@ -12,5 +12,6 @@ export const SERVICES = [
   "Electrical",
   "HVAC",
   "Window & Door",
+  "Carpet Cleaning",
   "General Renovation",
 ];

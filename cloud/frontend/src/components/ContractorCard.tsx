@@ -30,6 +30,7 @@ export interface Bid {
   description: string | null;
   pdf_url: string | null;
   received_at: string | null;
+  status?: string | null;
   contractor: Contractor;
 }
 
@@ -279,15 +280,17 @@ export default function ContractorCard({
               </button>
             )}
 
-            {/* Get a Quote CTA */}
-            <a
-              href="/info"
-              onClick={(e) => e.stopPropagation()}
-              className="contractor-card-hire-btn"
-              style={{ display: "block", textAlign: "center", textDecoration: "none", marginTop: 10 }}
-            >
-              Get a Quote from {c.name || "this Contractor"}
-            </a>
+            {/* Get a Quote CTA — only in search, not in quotes view */}
+            {!bid && (
+              <a
+                href="/info"
+                onClick={(e) => e.stopPropagation()}
+                className="contractor-card-hire-btn"
+                style={{ display: "block", textAlign: "center", textDecoration: "none", marginTop: 10 }}
+              >
+                Get a Quote from {c.name || "this Contractor"}
+              </a>
+            )}
 
             {/* View profile link */}
             <Link
