@@ -903,8 +903,33 @@ async def submit_bid(
 
         cursor.execute("SELECT received_at FROM bids WHERE id = %s", (bid_id,))
         received_at = cursor.fetchone()[0]
+
+        # Get homeowner email + org name for notification
+        homeowner_email = None
+        org_name = None
+        try:
+            cursor.execute(
+                """SELECT a.email FROM rfqs r
+                   JOIN accounts a ON a.id = r.homeowner_account_id
+                   WHERE r.id = %s""",
+                (rfq_id,),
+            )
+            he_row = cursor.fetchone()
+            if he_row:
+                homeowner_email = he_row[0]
+            if org_id:
+                cursor.execute("SELECT name FROM organizations WHERE id = %s", (org_id,))
+                org_row = cursor.fetchone()
+                if org_row:
+                    org_name = org_row[0]
+        except Exception:
+            pass
     finally:
         conn.close()
+
+    # Notify homeowner of new bid
+    if homeowner_email:
+        _send_bid_received_email(homeowner_email, rfq_id, org_name or "A contractor", price_cents)
 
     return {
         "id": bid_id,
@@ -1494,6 +1519,7 @@ async def request_org(request: Request, authorization: str = Header(None)) -> di
 
 
 BCC_EMAIL = "notifications@roomscanalpha.com"
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://roomscanalpha.com")
 
 
 def _make_mail(from_email, to_emails, subject, html_content):
@@ -1507,6 +1533,38 @@ def _make_mail(from_email, to_emails, subject, html_content):
     )
     mail.add_bcc(Bcc(BCC_EMAIL))
     return mail
+
+
+def _send_bid_received_email(homeowner_email, rfq_id, org_name, price_cents):
+    """Notify homeowner that a contractor submitted a bid."""
+    sendgrid_key = os.environ.get("SENDGRID_API_KEY", "")
+    if not sendgrid_key:
+        return
+    try:
+        from sendgrid import SendGridAPIClient
+
+        price_str = f"${price_cents / 100:,.0f}"
+        quotes_url = f"https://roomscanalpha.com/projects/{rfq_id}/quotes"
+        html = f"""
+<h2>New Quote Received</h2>
+<p style="font-size:15px;color:#333;line-height:1.6">
+  <strong>{org_name}</strong> submitted a quote of <strong>{price_str}</strong> for your project.
+</p>
+<a href="{quotes_url}" style="display:inline-block;padding:14px 32px;background:#0055cc;color:#fff;
+   text-decoration:none;font-weight:700;font-size:16px;border-radius:8px;margin-top:16px">
+  View Quotes
+</a>
+<p style="font-size:13px;color:#888;margin-top:24px">— The Quoterra Team</p>
+"""
+        sg = SendGridAPIClient(sendgrid_key)
+        sg.send(_make_mail(
+            from_email="notifications@roomscanalpha.com",
+            to_emails=homeowner_email,
+            subject=f"New quote from {org_name}",
+            html_content=html,
+        ))
+    except Exception as e:
+        print(f"Failed to send bid received email: {e}")
 
 
 def _send_org_request_emails(req_id, org_name, acct_email, acct_name, acct_phone, acct_address):
@@ -1635,8 +1693,7 @@ def approve_org_request(request_id: str) -> str:
         try:
             from sendgrid import SendGridAPIClient
 
-            base_url = os.environ.get("SERVICE_URL", "https://scan-api-839349778883.us-central1.run.app")
-            org_url = f"{base_url}/org"
+            org_url = f"{FRONTEND_URL}/org"
 
             approval_html = f"""
 <h2>You're approved!</h2>
@@ -1883,8 +1940,7 @@ async def invite_org_member(request: Request, authorization: str = Header(None))
         try:
             from sendgrid import SendGridAPIClient
 
-            base_url = os.environ.get("SERVICE_URL", "https://scan-api-839349778883.us-central1.run.app")
-            invite_url = f"{base_url}/invite?token={invite_token}"
+            invite_url = f"{FRONTEND_URL}/invite?token={invite_token}"
             invite_html = f"""
 <h2>You've been invited!</h2>
 <p style="font-size:15px;color:#333;line-height:1.6">

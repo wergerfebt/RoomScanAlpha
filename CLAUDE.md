@@ -25,10 +25,12 @@ cd cloud/frontend
 npm run build
 firebase deploy --only hosting
 
-# GS Processor (GPU — Gaussian Splatting)
+# GS Processor (GPU — Gaussian Splatting, Vertex AI)
 cd cloud/gs-processor
-gcloud run deploy gs-processor --source . --region us-central1 --project roomscanalpha \
-  --gpu=1 --gpu-type=nvidia-l4 --cpu=8 --memory=32Gi --concurrency=1 --timeout=3600
+gcloud builds submit --tag us-central1-docker.pkg.dev/roomscanalpha/gs-pipeline/gs-processor:latest \
+  --project roomscanalpha --timeout=3600 --machine-type=e2-highcpu-32
+# Then submit a test job:
+python submit_job.py --scan_id SCAN_ID --room_id ROOM_ID --rfq_id RFQ_ID
 
 # Reprocess a scan
 cd cloud/processor
@@ -63,7 +65,8 @@ Cloud Run: scan-processor (OIDC-protected, 8 vCPU / 16GB / concurrency=1)
     → Merges keyframes (continuous numbering) → re-textures with all frames
     → Overwrites textured outputs in GCS
 
-Cloud Run: gs-processor (OIDC-protected, 8 vCPU / 32GB / L4 GPU / concurrency=1)
+Vertex AI Custom Job: gs-processor (g2-standard-8, L4 GPU, on-demand)
+  → Triggered by scan-processor via Vertex AI API after mesh processing
   → Download scan data from GCS
   → HEVC video → extract frames → sharpness filter + stride-4 subsampling
   → ALIKED feature extraction (GPU, 8192 keypoints, 1600px)
@@ -72,7 +75,7 @@ Cloud Run: gs-processor (OIDC-protected, 8 vCPU / 32GB / L4 GPU / concurrency=1)
   → FastGS training (GPU, 30K iterations, color correction)
   → Procrustes alignment to ARKit world frame (post-training)
   → Upload .splat to GCS
-  → ~18 min end-to-end, scales to zero when idle
+  → ~18 min end-to-end, auto-terminates after completion, ~$0.35/job
 
 Cloud Run: scan-api (public)
   → Firebase Auth JWT on all endpoints
@@ -99,7 +102,7 @@ React SPA (Firebase Hosting: roomscanalpha.com / roomscanalpha.web.app)
 |---------|-----|------|---------|
 | scan-api | `https://scan-api-839349778883.us-central1.run.app` | Firebase JWT | REST API + web viewer |
 | scan-processor | `https://scan-processor-839349778883.us-central1.run.app` | OIDC (Cloud Tasks) | Scan processing + OpenMVS |
-| gs-processor | TBD | OIDC (Cloud Tasks) | Gaussian Splatting (L4 GPU) |
+| gs-processor | Vertex AI Custom Job | Service Account | Gaussian Splatting (L4 GPU) |
 | Firebase Hosting | `https://roomscanalpha.com` / `https://roomscanalpha.web.app` | — | React SPA frontend |
 | Cloud SQL | `roomscanalpha:us-central1:roomscanalpha-db` | IAM | PostgreSQL (db: `quoterra`) |
 | GCS | `gs://roomscanalpha-scans/` | IAM | Scan storage + portfolio images |
@@ -126,9 +129,11 @@ React SPA (Firebase Hosting: roomscanalpha.com / roomscanalpha.web.app)
 
 ### Gaussian Splatting Pipeline (Production)
 
-**Service: gs-processor** (Cloud Run with L4 GPU)
+**Service: gs-processor** (Vertex AI Custom Job with L4 GPU)
 - Source: `cloud/gs-processor/`
-- Triggered by Cloud Tasks from scan-processor after mesh processing completes
+- Image: `us-central1-docker.pkg.dev/roomscanalpha/gs-pipeline/gs-processor:latest`
+- Triggered by scan-processor via `submit_job.py` after mesh processing completes
+- Runs on g2-standard-8 (8 vCPU, 32GB RAM, 1x L4 GPU), auto-terminates
 - Produces a `.splat` file aligned to ARKit world frame for the 3D viewer
 
 **Pipeline stages:**
@@ -179,14 +184,16 @@ React SPA (Firebase Hosting: roomscanalpha.com / roomscanalpha.web.app)
 
 ### Gaussian Splat Viewer
 
-**3D Gaussian Splatting viewer** (`splat_viewer.html`) at `/splat/{rfq_id}` for viewing `.splat` files as an alternative to OBJ meshes. Uses proper 3DGS rendering math for photorealistic room visualization.
+**3D Gaussian Splatting viewer** (`splat_viewer.html`) at `/splat/{rfq_id}` for viewing `.splat` files as an alternative to OBJ meshes. Uses proper 3DGS rendering math for photorealistic room visualization. Linked from contractor view via "View Splat" button (shown only for rooms with `.splat` files).
 
-- **Rendering**: Three.js `RawShaderMaterial` (GLSL ES 1.00) with instanced billboards. Vertex shader builds 3D covariance from quaternion + scale, projects to 2D via Jacobian, computes eigenvalues for billboard sizing. Fragment shader uses Mahalanobis distance (conic) for elliptical Gaussian falloff. Premultiplied alpha blending (`ONE, ONE_MINUS_SRC_ALPHA`).
-- **Scale detection**: Auto-detects linear vs log-encoded scales (GLOMAP outputs linear, standard 3DGS uses log). Filters outlier splats (position >50 units, scale >1.0, alpha <10).
+- **Rendering**: Three.js `RawShaderMaterial` (GLSL ES 1.00) with ~520K instanced billboards. Vertex shader builds 3D covariance from quaternion + scale, projects to 2D via Jacobian, computes eigenvalues for billboard sizing. Fragment shader uses Mahalanobis distance (conic) for elliptical Gaussian falloff. Premultiplied alpha blending (`ONE, ONE_MINUS_SRC_ALPHA`).
+- **Scale detection**: Auto-detects linear vs log-encoded scales (GLOMAP/Procrustes outputs linear, standard 3DGS uses log). Filters outlier splats (position >50m, scale >1.0, alpha <10).
 - **Depth sorting**: Web Worker with O(n) counting sort (16-bit quantized). Worker receives camera matrix, sorts + reorders all attribute buffers off main thread, transfers results back. Main thread only does buffer upload (~5ms), never blocks on sort.
-- **Room alignment**: Cyan wireframe overlay of room polygon in the 3D scene. Orientation controls (rotation, translation, scale) to align splat with room geometry. "Snap to Center" aligns splat bbox center to room polygon centroid. Values persist to localStorage.
-- **Features**: Locked to single room per splat. Same sidebar (job info, floor plan, metrics), isometric 3D model thumbnail, bird's eye view, WASD/arrow movement, measurements toggle.
+- **Room alignment**: Splat and room polygon are both in ARKit world frame (Y-up, meters) — no manual alignment needed. Cyan wireframe overlay of room polygon rendered directly in the 3D scene for visual verification. Camera positioned at room polygon centroid at 6ft eye level, looking toward first wall (matches OBJ viewer positioning).
+- **Room filtering**: Sidebar and floor plan only show rooms with `.splat` files available (`has_splat` field from API). Room switching disabled — viewer locked to the room whose splat is loaded.
+- **Features**: Same sidebar (job info, floor plan, metrics), isometric 3D model thumbnail, bird's eye view, WASD/arrow movement, measurements toggle.
 - **File proxy**: `.splat` files served via the same proxy endpoint as OBJ/MTL. Splats stored in GCS at `scans/{rfq_id}/{scan_id}/room_scan_glomap.splat`.
+- **GPU usage**: ~520K splats with per-vertex covariance computation is GPU-intensive (~5-6GB GPU memory in Firefox). Future optimization: pre-compute covariance on CPU and store in GPU texture to simplify vertex shader.
 
 ### Admin Component Annotator
 

@@ -202,7 +202,7 @@
       <span class="room-name" id="room-name">Loading...</span>
       <button class="btn btn-toggle" id="btn-measures" onclick="toggleMeasurements()" style="display:none">Show Measurements</button>
       <button class="btn btn-toggle" id="btn-view-mode" onclick="toggleViewMode()" style="display:none">Birds Eye View</button>
-      <button class="btn btn-toggle" id="btn-orient" onclick="toggleOrientPanel()">Orientation</button>
+      <!-- Orientation controls removed — splat is in ARKit frame, no manual alignment needed -->
     </div>
     <div class="viewer-container" id="viewer-container">
       <div class="loading" id="viewer-loading">Loading Gaussian Splat...</div>
@@ -221,48 +221,7 @@
         <canvas id="iso-full-canvas"></canvas>
       </div>
 
-      <div class="orient-panel" id="orient-panel">
-        <h4>Splat Orientation</h4>
-        <div class="orient-row">
-          <label>Rotate X</label>
-          <input type="range" id="orient-rx" min="-180" max="180" value="0" step="1">
-          <span class="val" id="orient-rx-val">0</span>
-        </div>
-        <div class="orient-row">
-          <label>Rotate Y</label>
-          <input type="range" id="orient-ry" min="-180" max="180" value="0" step="1">
-          <span class="val" id="orient-ry-val">0</span>
-        </div>
-        <div class="orient-row">
-          <label>Rotate Z</label>
-          <input type="range" id="orient-rz" min="-180" max="180" value="0" step="1">
-          <span class="val" id="orient-rz-val">0</span>
-        </div>
-        <div class="orient-row">
-          <label>Offset X</label>
-          <input type="range" id="orient-tx" min="-20" max="20" value="0" step="0.05">
-          <span class="val" id="orient-tx-val">0</span>
-        </div>
-        <div class="orient-row">
-          <label>Offset Y</label>
-          <input type="range" id="orient-ty" min="-20" max="20" value="0" step="0.05">
-          <span class="val" id="orient-ty-val">0</span>
-        </div>
-        <div class="orient-row">
-          <label>Offset Z</label>
-          <input type="range" id="orient-tz" min="-20" max="20" value="0" step="0.05">
-          <span class="val" id="orient-tz-val">0</span>
-        </div>
-        <div class="orient-row">
-          <label>Scale</label>
-          <input type="range" id="orient-scale" min="0.1" max="5" value="1" step="0.05">
-          <span class="val" id="orient-scale-val">1</span>
-        </div>
-        <button class="orient-reset" onclick="snapToCenter()">Snap to Center</button>
-        <button class="orient-reset" onclick="resetOrientation()">Reset</button>
-        <button class="orient-reset" onclick="saveOrientation()">Save</button>
-        <button class="orient-reset" onclick="logOrientation()" style="margin-left:4px">Log</button>
-      </div>
+      <!-- Orientation panel removed -->
 
       <div class="wasd-keys" id="wasd-keys">
         <div class="wasd-key blank"></div>
@@ -337,7 +296,7 @@ let splatScene = null;
 let splatCamera = null;
 let splatRenderer = null;
 let splatControls = null;
-let splatGroup = null; // Group wrapping the splat for orientation transforms
+let splatMeshRef = null; // Direct reference to the splat mesh in the scene
 let roomWireframeGroup = null; // Room polygon wireframe in main scene (fixed, not affected by orientation)
 
 // Isometric
@@ -347,8 +306,7 @@ let isoRoomGroup = null, isoMeasureGroup = null;
 let isoCenter = null, isoSpan = 1;
 let isoFullscreen = false;
 
-// Orientation
-const orient = { rx: 0, ry: 0, rz: 0, tx: 0, ty: 0, tz: 0, scale: 1 };
+// (orientation controls removed)
 
 // --- Utility ---
 function esc(s) { const el = document.createElement('span'); el.textContent = s || ''; return el.innerHTML; }
@@ -374,7 +332,7 @@ async function init() {
     // Find the room matching ROOM_ID or SCAN_ID, default to first room
     let roomIdx = 0;
     if (currentData.rooms) {
-      const idx = currentData.rooms.findIndex(r => r.scan_id === SCAN_ID || r.room_id === ROOM_ID);
+      const idx = currentData.rooms.findIndex(r => r.scan_id === ROOM_ID);
       if (idx >= 0) roomIdx = idx;
     }
     await loadRoom(roomIdx);
@@ -634,7 +592,8 @@ async function initSplatViewer() {
   splatScene.background = new THREE.Color(0x000000); // Pure black — easy to distinguish from white splats
 
   splatCamera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.05, 500);
-  splatCamera.position.set(0, 1.5, 0);
+  // Initial position will be overridden by renderSplatData once splat loads
+  splatCamera.position.set(0, 0, 0);
 
   splatRenderer = new THREE.WebGLRenderer({ antialias: true });
   splatRenderer.setSize(container.clientWidth, container.clientHeight);
@@ -656,14 +615,12 @@ async function initSplatViewer() {
   splatControls.enableZoom = false;
   splatControls.enablePan = false;
   splatControls.rotateSpeed = -0.3;
-  splatControls.target.set(0, 1.5, -0.01);
+  splatControls.target.set(0, 0, -0.01);
 
   // Lighting for isometric overlay (splat doesn't need lights)
   splatScene.add(new THREE.AmbientLight(0xffffff, 1.0));
 
-  // Create a group that will hold the splat mesh for orientation transforms
-  splatGroup = new THREE.Group();
-  splatScene.add(splatGroup);
+  // Splats added directly to scene (no group wrapper)
 
   // Measurement scene (separate from splat scene but uses same camera)
   measureScene = new THREE.Scene();
@@ -981,21 +938,55 @@ function renderSplatData(buffer) {
 
   const mesh = new THREE.Mesh(splatInstancedGeo, splatMaterial);
   mesh.frustumCulled = false;
-  splatGroup.add(mesh);
-  splatGroup._splatMesh = mesh;
-  splatGroup._splatMaterial = splatMaterial;
+  splatScene.add(mesh);
+  splatMeshRef = mesh;
 
   // Bounding box + camera
   const bbox = new THREE.Box3();
   for (let i = 0; i < numSplats; i++) bbox.expandByPoint(new THREE.Vector3(centers[i*3], centers[i*3+1], centers[i*3+2]));
   const center = new THREE.Vector3(), size = new THREE.Vector3();
   bbox.getCenter(center); bbox.getSize(size);
-  splatGroup._bboxCenter = center.clone();
+  // bbox center stored for reference
   console.log('Splat bounds:', { center: center.toArray(), size: size.toArray() });
 
-  // Position camera at splat center, looking along -Z (Three.js/ARKit forward)
-  splatCamera.position.set(center.x, center.y, center.z);
-  splatControls.target.set(center.x, center.y, center.z - 1.0);
+  // Position camera using room polygon (same as contractor OBJ viewer)
+  if (currentRoomGeometry) {
+    const rg = currentRoomGeometry;
+    const cx = rg.cornersM.reduce((s, p) => s + p[0], 0) / rg.cornersM.length;
+    const cz = rg.cornersM.reduce((s, p) => s + p[1], 0) / rg.cornersM.length;
+    const eyeHeight = rg.floorY + Math.min(1.83, rg.ceilingHeightM * 0.65); // 6ft eye level
+    // Look toward midpoint of first wall
+    const [wx0, wz0] = rg.cornersM[0];
+    const [wx1, wz1] = rg.cornersM[1];
+    const lookX = (wx0 + wx1) / 2, lookZ = (wz0 + wz1) / 2;
+    const dx = lookX - cx, dz = lookZ - cz;
+    const dist = Math.sqrt(dx * dx + dz * dz) || 1;
+    const tx = cx + dx / dist, tz = cz + dz / dist; // 1m away for stable lookAt
+
+    // Recreate controls to fully clear internal state
+    splatControls.dispose();
+    splatCamera.position.set(cx, eyeHeight, cz);
+    splatCamera.lookAt(tx, eyeHeight, tz);
+    splatControls = new OrbitControls(splatCamera, splatRenderer.domElement);
+    splatControls.target.set(tx, eyeHeight, tz);
+    splatControls.enableDamping = true;
+    splatControls.dampingFactor = 0.1;
+    splatControls.enableZoom = false;
+    splatControls.enablePan = false;
+    splatControls.rotateSpeed = -0.3;
+    splatControls.update();
+
+    console.log('Camera pos:', {x: cx.toFixed(2), y: eyeHeight.toFixed(2), z: cz.toFixed(2)});
+    console.log('Look dir:', {dx: (dx/dist).toFixed(3), dz: (dz/dist).toFixed(3)});
+    console.log('Room polygon (meters):', rg.cornersM.map(c => `(${c[0].toFixed(2)}, ${c[1].toFixed(2)})`).join(', '));
+    console.log('Room Y: floor=', rg.floorY.toFixed(2), 'ceil=', rg.avgCeilingY.toFixed(2));
+  } else {
+    splatControls.enabled = false;
+    splatCamera.position.set(center.x, center.y, center.z);
+    splatControls.target.set(center.x, center.y, center.z - 0.01);
+    splatCamera.lookAt(center.x, center.y, center.z - 0.01);
+    splatControls.enabled = true;
+  }
   splatControls.update();
 
   window._updateSplatUniforms = () => {
@@ -1026,13 +1017,15 @@ function renderSplatData(buffer) {
   };
 
   requestSort();
+  console.log('Splat mesh added directly to scene (no group transform)');
   showToast(`Loaded ${numSplats.toLocaleString()} Gaussian splats`);
 }
 
 function requestSort() {
   if (sortRunning || !sortWorker || !splatCamera) return;
   sortRunning = true;
-  const mv = new THREE.Matrix4().multiplyMatrices(splatCamera.matrixWorldInverse, splatGroup.matrixWorld);
+  // No group transform — splats are in world space, just use camera inverse
+  const mv = splatCamera.matrixWorldInverse;
   sortWorker.postMessage({ sort: Array.from(mv.elements) });
 }
 
@@ -1065,7 +1058,7 @@ function onResize() {
 const _keys = {};
 window.addEventListener('keydown', e => { _keys[e.key.toLowerCase()] = true; });
 window.addEventListener('keyup', e => { _keys[e.key.toLowerCase()] = false; });
-const MOVE_SPEED = 0.12; // ~4x faster than default for splat navigation
+const MOVE_SPEED = 0.03;
 
 // Virtual joystick
 const _joystick = { dx: 0, dz: 0, active: false };
@@ -1357,8 +1350,8 @@ window.toggleViewMode = function() {
     // Compute bounding box from splat group (includes orientation transform)
     let center, maxSpan, minY = 0;
     const splatBox = new THREE.Box3();
-    if (splatGroup && splatGroup.children.length > 0) {
-      splatBox.setFromObject(splatGroup);
+    if (splatMeshRef) {
+      splatBox.setFromObject(splatMeshRef);
       center = new THREE.Vector3();
       const sz = new THREE.Vector3();
       splatBox.getCenter(center);
@@ -1411,104 +1404,7 @@ window.toggleViewMode = function() {
   }
 };
 
-// --- Orientation Controls ---
-window.toggleOrientPanel = function() {
-  const panel = document.getElementById('orient-panel');
-  const btn = document.getElementById('btn-orient');
-  panel.classList.toggle('active');
-  btn.classList.toggle('active');
-};
-
-function setupOrientControls() {
-  const sliders = ['rx', 'ry', 'rz', 'tx', 'ty', 'tz', 'scale'];
-  sliders.forEach(id => {
-    const el = document.getElementById('orient-' + id);
-    if (!el) return;
-    el.addEventListener('input', () => {
-      const val = parseFloat(el.value);
-      orient[id] = val;
-      document.getElementById('orient-' + id + '-val').textContent =
-        id === 'scale' ? val.toFixed(2) : (id.startsWith('t') ? val.toFixed(1) : Math.round(val) + '\u00B0');
-      applyOrientation();
-    });
-  });
-}
-
-function applyOrientation() {
-  if (!splatGroup) return;
-  splatGroup.rotation.set(
-    orient.rx * Math.PI / 180,
-    orient.ry * Math.PI / 180,
-    orient.rz * Math.PI / 180
-  );
-  splatGroup.position.set(orient.tx, orient.ty, orient.tz);
-  splatGroup.scale.setScalar(orient.scale);
-}
-
-window.resetOrientation = function() {
-  const defaults = { rx: 0, ry: 0, rz: 0, tx: 0, ty: 0, tz: 0, scale: 1 };
-  Object.assign(orient, defaults);
-  Object.keys(defaults).forEach(id => {
-    const el = document.getElementById('orient-' + id);
-    if (el) el.value = defaults[id];
-    const valEl = document.getElementById('orient-' + id + '-val');
-    if (valEl) valEl.textContent = id === 'scale' ? '1' : '0';
-  });
-  applyOrientation();
-};
-
-window.logOrientation = function() {
-  console.log('Splat orientation:', JSON.stringify(orient, null, 2));
-  showToast('Orientation logged to console');
-};
-
-window.snapToCenter = function() {
-  // Compute offset so splat bbox center overlaps room polygon centroid
-  if (!splatGroup._bboxCenter || !currentRoomGeometry) {
-    showToast('Need both splat and room data loaded'); return;
-  }
-  const sc = splatGroup._bboxCenter;
-  const rg = currentRoomGeometry;
-  const cx = rg.cornersM.reduce((s, p) => s + p[0], 0) / rg.cornersM.length;
-  const cz = rg.cornersM.reduce((s, p) => s + p[1], 0) / rg.cornersM.length;
-  const cy = (rg.floorY + rg.avgCeilingY) / 2;
-
-  orient.tx = cx - sc.x;
-  orient.ty = cy - sc.y;
-  orient.tz = cz - sc.z;
-  updateOrientSliders();
-  applyOrientation();
-  showToast('Snapped splat center to room center');
-};
-
-window.saveOrientation = function() {
-  const key = `splat-orient-${SCAN_ID}-${ROOM_ID}`;
-  localStorage.setItem(key, JSON.stringify(orient));
-  showToast('Orientation saved');
-};
-
-function loadSavedOrientation() {
-  const key = `splat-orient-${SCAN_ID}-${ROOM_ID}`;
-  const saved = localStorage.getItem(key);
-  if (saved) {
-    try {
-      Object.assign(orient, JSON.parse(saved));
-      updateOrientSliders();
-      applyOrientation();
-      console.log('Loaded saved orientation:', orient);
-    } catch (e) { /* ignore */ }
-  }
-}
-
-function updateOrientSliders() {
-  ['rx', 'ry', 'rz', 'tx', 'ty', 'tz', 'scale'].forEach(id => {
-    const el = document.getElementById('orient-' + id);
-    if (el) el.value = orient[id];
-    const valEl = document.getElementById('orient-' + id + '-val');
-    if (valEl) valEl.textContent = id === 'scale' ? orient[id].toFixed(2) :
-      (id.startsWith('t') ? orient[id].toFixed(1) : Math.round(orient[id]) + '\u00B0');
-  });
-}
+// (Orientation controls removed — splat is in ARKit frame, no manual alignment needed)
 
 // --- Isometric 3D Room View ---
 
@@ -1732,9 +1628,7 @@ window.toggleIsoFullscreen = function() {
 // --- Expose to window ---
 window.toggleMeasurements = window.toggleMeasurements;
 window.toggleViewMode = window.toggleViewMode;
-window.toggleOrientPanel = window.toggleOrientPanel;
-window.resetOrientation = window.resetOrientation;
-window.logOrientation = window.logOrientation;
+// orientation controls removed
 window.toggleIsoFullscreen = window.toggleIsoFullscreen;
 
 window.toggleSidebar = function() {
@@ -1763,8 +1657,6 @@ window.closeFpFullscreen = function() {
 };
 
 // --- Start ---
-setupOrientControls();
-loadSavedOrientation();
 init();
 </script>
 </body>
