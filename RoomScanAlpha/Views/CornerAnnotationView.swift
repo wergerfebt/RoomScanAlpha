@@ -7,6 +7,7 @@ struct CornerAnnotationView: View {
     let viewModel: ScanViewModel
     @State private var annotationVM = CornerAnnotationViewModel()
     @State private var scnView: ARSCNView?
+    @State private var showTutorial: Bool = !UserDefaults.standard.bool(forKey: "hasSeenCornerTutorial")
 
     let onDone: (CornerAnnotation?) -> Void
     let onSkip: () -> Void
@@ -36,6 +37,15 @@ struct CornerAnnotationView: View {
                 controlBar
                     .padding(.bottom, 32)
             }
+            .dynamicTypeSize(.large ... .accessibility2)
+        }
+        .sheet(isPresented: $showTutorial) {
+            CornerTracingTutorialOverlay(
+                onDismiss: {
+                    showTutorial = false
+                    UserDefaults.standard.set(true, forKey: "hasSeenCornerTutorial")
+                }
+            )
         }
     }
 
@@ -61,105 +71,139 @@ struct CornerAnnotationView: View {
     // MARK: - Prompt Banner
 
     private var promptBanner: some View {
-        Group {
-            if annotationVM.isClosed {
-                HStack(spacing: 8) {
+        HStack(alignment: .top, spacing: 10) {
+            Group {
+                if annotationVM.isClosed {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundStyle(.green)
-                    Text("Room traced — \(String(format: "%.1f", annotationVM.polygonAreaM2)) m²")
+                } else if annotationVM.canClose {
+                    Image(systemName: "checkmark.seal")
+                        .foregroundStyle(.blue)
+                } else {
+                    Image(systemName: "scope")
+                        .foregroundStyle(.white)
                 }
-            } else if annotationVM.cornerCount == 0 {
-                Text("Aim at each ceiling corner and tap Lock Corner")
-            } else {
-                Text("\(annotationVM.cornerCount) corner\(annotationVM.cornerCount == 1 ? "" : "s") placed")
             }
+            .font(.title3)
+
+            Text(bannerText)
+                .font(.headline)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Button {
+                showTutorial = true
+            } label: {
+                Image(systemName: "info.circle")
+                    .font(.title3)
+                    .foregroundStyle(.white.opacity(0.9))
+            }
+            .accessibilityLabel("Show corner-tracing tutorial")
         }
-        .font(.subheadline)
-        .fontWeight(.medium)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 14)
+        .frame(maxWidth: 360, alignment: .leading)
         .background(.ultraThinMaterial)
-        .clipShape(Capsule())
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .padding(.horizontal, 16)
+    }
+
+    private var finishRoomTint: Color {
+        if annotationVM.cornerCount >= 4 { return .green }
+        if annotationVM.cornerCount == 3 { return .blue }
+        return .gray
+    }
+
+    private var finishRoomAccessibility: String {
+        if annotationVM.cornerCount >= 4 {
+            return "Finish room — close the polygon"
+        }
+        if annotationVM.cornerCount == 3 {
+            return "Finish room as a triangle, or add another corner"
+        }
+        return "Finish room — add at least 3 corners first"
+    }
+
+    private var bannerText: String {
+        if annotationVM.isClosed {
+            return "Room traced — \(String(format: "%.1f", annotationVM.polygonAreaM2)) m². Tap Done to continue."
+        }
+        switch annotationVM.cornerCount {
+        case 0:
+            return "Point at a ceiling corner, then tap Add Corner."
+        case 1, 2:
+            let noun = annotationVM.cornerCount == 1 ? "corner" : "corners"
+            return "\(annotationVM.cornerCount) \(noun) added — keep going until every wall is traced."
+        case 3:
+            return "3 corners added — tap Finish Room when you've traced every wall. Add more for an L-shape or larger room."
+        default:
+            return "\(annotationVM.cornerCount) corners added — tap Finish Room to close the shape."
+        }
     }
 
     // MARK: - Control Bar
 
     private var controlBar: some View {
-        VStack(spacing: 12) {
-            if !annotationVM.isClosed {
-                // Main action row
-                HStack(spacing: 16) {
-                    // Undo
+        VStack(spacing: 14) {
+            if annotationVM.isClosed {
+                // Closed polygon: offer the Done action prominently.
+                Button {
+                    onDone(annotationVM.cornerAnnotation)
+                } label: {
+                    Label("Done", systemImage: "checkmark.circle.fill")
+                }
+                .largeCapsuleButton(role: .primary, tint: .green)
+                .disabled(!annotationVM.canDone)
+                .opacity(annotationVM.canDone ? 1 : 0.5)
+                .accessibilityLabel("Done — continue to room naming")
+                .padding(.horizontal, 24)
+            } else {
+                // Fixed layout: Finish Room always in the primary slot, Add Corner
+                // always in the secondary row. Finish Room's color tiers by corner
+                // count (grey <3, blue =3 rare triangle, green ≥4 normal room).
+                Button {
+                    annotationVM.closePolygon()
+                    updateSceneNodes()
+                } label: {
+                    Label("Finish Room", systemImage: "checkmark.seal.fill")
+                }
+                .largeCapsuleButton(role: .primary, tint: finishRoomTint)
+                .disabled(!annotationVM.canClose)
+                .opacity(annotationVM.canClose ? 1 : 0.55)
+                .accessibilityLabel(finishRoomAccessibility)
+                .padding(.horizontal, 24)
+
+                HStack(spacing: 12) {
                     Button {
                         undoCorner()
                     } label: {
                         Label("Undo", systemImage: "arrow.uturn.backward")
-                            .font(.subheadline)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 10)
-                            .background(.ultraThinMaterial)
-                            .clipShape(Capsule())
+                            .frame(maxWidth: .infinity)
                     }
+                    .largeCapsuleButton(role: .secondary)
                     .disabled(annotationVM.cornerCount == 0)
-                    .opacity(annotationVM.cornerCount == 0 ? 0.4 : 1)
+                    .opacity(annotationVM.cornerCount == 0 ? 0.5 : 1)
+                    .accessibilityLabel("Remove last corner")
 
-                    // Lock Corner
                     Button {
                         lockCorner()
                     } label: {
-                        Label("Lock Corner", systemImage: "scope")
-                            .font(.headline)
-                            .padding(.horizontal, 24)
-                            .padding(.vertical, 14)
-                            .background(.ultraThinMaterial)
-                            .clipShape(Capsule())
+                        Label("Add Corner", systemImage: "scope")
+                            .frame(maxWidth: .infinity)
                     }
-
-                    // Close Trace
-                    Button {
-                        annotationVM.closePolygon()
-                        updateSceneNodes()
-                    } label: {
-                        Label("Close", systemImage: "arrow.triangle.turn.up.right.diamond")
-                            .font(.subheadline)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 10)
-                            .background(.ultraThinMaterial)
-                            .clipShape(Capsule())
-                    }
-                    .disabled(!annotationVM.canClose)
-                    .opacity(annotationVM.canClose ? 1 : 0.4)
+                    .largeCapsuleButton(role: .secondary, tint: .yellow)
+                    .accessibilityLabel("Add corner at crosshair")
                 }
+                .padding(.horizontal, 24)
             }
 
-            // Bottom row: Skip / Redo / Done
+            // Footer: Skip / Start Over
             HStack(spacing: 20) {
-                Button("Skip") {
-                    onSkip()
-                }
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+                Button("Skip corner tracing") { onSkip() }
+                    .largeCapsuleButton(role: .tertiary)
 
-                Button("Redo Scan") {
-                    onRedo()
-                }
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-
-                if annotationVM.isClosed {
-                    Button {
-                        onDone(annotationVM.cornerAnnotation)
-                    } label: {
-                        Label("Done", systemImage: "checkmark.circle.fill")
-                            .font(.headline)
-                            .padding(.horizontal, 24)
-                            .padding(.vertical, 12)
-                            .background(.ultraThinMaterial)
-                            .clipShape(Capsule())
-                    }
-                    .disabled(!annotationVM.canDone)
-                    .opacity(annotationVM.canDone ? 1 : 0.4)
-                }
+                Button("Start Over") { onRedo() }
+                    .largeCapsuleButton(role: .tertiary)
             }
         }
     }
@@ -255,7 +299,7 @@ struct CornerAnnotationView: View {
 
         // Place corner spheres
         for (i, corner) in corners.enumerated() {
-            let sphere = SCNSphere(radius: 0.02)
+            let sphere = SCNSphere(radius: 0.04)
             let material = SCNMaterial()
             material.diffuse.contents = UIColor.systemYellow
             sphere.materials = [material]
@@ -264,20 +308,32 @@ struct CornerAnnotationView: View {
             node.position = SCNVector3(corner.x, corner.y, corner.z)
             node.name = "\(annotationTag)_sphere_\(i)"
 
-            // Number label
+            // Number label — larger font + dark outline plane for contrast.
             let text = SCNText(string: "\(i + 1)", extrusionDepth: 0.001)
-            text.font = UIFont.systemFont(ofSize: 0.03, weight: .bold)
-            text.firstMaterial?.diffuse.contents = UIColor.white
+            text.font = UIFont.systemFont(ofSize: 0.06, weight: .bold)
+            let labelMat = SCNMaterial()
+            labelMat.diffuse.contents = UIColor.white
+            labelMat.emission.contents = UIColor.white
+            text.firstMaterial = labelMat
             let textNode = SCNNode(geometry: text)
-            textNode.position = SCNVector3(0.025, 0.025, 0)
-            textNode.scale = SCNVector3(1, 1, 1)
+            textNode.position = SCNVector3(0.05, 0.05, 0)
 
-            // Billboard constraint so label always faces camera
+            // Billboard constraint so label always faces camera.
             let billboard = SCNBillboardConstraint()
             billboard.freeAxes = .all
             textNode.constraints = [billboard]
 
             node.addChildNode(textNode)
+
+            // Brief pulse on placement — only the most recently added corner.
+            if i == corners.count - 1 {
+                let pulse = SCNAction.sequence([
+                    SCNAction.scale(to: 1.4, duration: 0.12),
+                    SCNAction.scale(to: 1.0, duration: 0.18)
+                ])
+                node.runAction(pulse)
+            }
+
             scnView.scene.rootNode.addChildNode(node)
         }
 

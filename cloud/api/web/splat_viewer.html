@@ -929,17 +929,46 @@ function animate() {
     if (_keys['-'] || _keys['_']) { delta.y -= HEIGHT_STEP; }
 
     if (delta.lengthSq() > 0) {
-      // Clamp to room polygon in 360 Tour mode
+      // Clamp to room polygon in 360 Tour mode with wall-sliding: if a
+      // diagonal move would cross a wall, try each axis alone so narrow
+      // hallways remain walkable.
       if (!isBirdsEye && currentRoomPolygonM && currentRoomGeometry) {
         const rg = currentRoomGeometry;
         const newX = splatCamera.position.x + delta.x;
         const newY = splatCamera.position.y + delta.y;
         const newZ = splatCamera.position.z + delta.z;
-        if (!pointInPolygon(newX, newZ, currentRoomPolygonM)) { delta.x = 0; delta.z = 0; }
+        if (!pointInPolygon(newX, newZ, currentRoomPolygonM)) {
+          const slideX = pointInPolygon(newX, splatCamera.position.z, currentRoomPolygonM);
+          const slideZ = pointInPolygon(splatCamera.position.x, newZ, currentRoomPolygonM);
+          if (slideX) { delta.z = 0; }
+          else if (slideZ) { delta.x = 0; }
+          else { delta.x = 0; delta.z = 0; }
+        }
         if (newY < rg.floorY + 0.3 || newY > rg.avgCeilingY - 0.1) delta.y = 0;
       }
       splatCamera.position.add(delta);
       splatControls.target.add(delta);
+    }
+
+    // Soft wall repulsion — if the camera is close to a polygon edge, push it
+    // inward a little each frame. Creates a cushion so the camera can't get
+    // pinned against a wall and lose the ability to move in narrow passages.
+    if (!isBirdsEye && currentRoomPolygonM && pointInPolygon(splatCamera.position.x, splatCamera.position.z, currentRoomPolygonM)) {
+      const REPEL_MARGIN = 0.15;
+      const REPEL_CAP = 0.02;
+      const near = _nearestEdgePoint(splatCamera.position.x, splatCamera.position.z, currentRoomPolygonM);
+      if (near.dist < REPEL_MARGIN) {
+        const dx = splatCamera.position.x - near.qx;
+        const dz = splatCamera.position.z - near.qz;
+        const d = Math.hypot(dx, dz) || 1;
+        const push = Math.min(REPEL_MARGIN - near.dist, REPEL_CAP);
+        const pushX = dx / d * push;
+        const pushZ = dz / d * push;
+        splatCamera.position.x += pushX;
+        splatCamera.position.z += pushZ;
+        splatControls.target.x += pushX;
+        splatControls.target.z += pushZ;
+      }
     }
 
     // Key indicators
@@ -948,17 +977,36 @@ function animate() {
       if (el) el.classList.toggle('active', !!_keys[k]);
     }
 
+    // Pre-orbit: remember camera position so we can revert a rotation that
+    // would push the camera outside the polygon. OrbitControls rotates the
+    // camera around its target, so a rotation can physically move the camera
+    // by up to 2×target-distance. Near a wall, that exits the polygon.
+    const preOrbitX = splatCamera.position.x;
+    const preOrbitY = splatCamera.position.y;
+    const preOrbitZ = splatCamera.position.z;
+
     splatControls.update();
 
-    // Clamp camera after orbit rotation to keep inside room polygon
+    // Post-orbit: if the rotation displaced the camera outside the polygon,
+    // revert only its position — preserve the new look direction so the user
+    // can still rotate their view without being blocked near walls.
     if (!isBirdsEye && currentRoomPolygonM && currentRoomGeometry) {
       const rg = currentRoomGeometry;
-      // If orbit pushed camera outside the polygon, snap back to last valid position
       if (!pointInPolygon(splatCamera.position.x, splatCamera.position.z, currentRoomPolygonM)) {
-        splatCamera.position.copy(savedInteriorCamPos || splatCamera.position);
-        splatControls.target.copy(savedInteriorCamTarget || splatControls.target);
+        // Capture the current look direction from the rotated camera.
+        const lookDir = new THREE.Vector3();
+        splatCamera.getWorldDirection(lookDir);
+        // Restore pre-orbit position, then reset the target so it stays on the
+        // look ray (OrbitControls derives its spherical coords from camera -
+        // target on the next update).
+        splatCamera.position.set(preOrbitX, preOrbitY, preOrbitZ);
+        splatControls.target.set(
+          preOrbitX + lookDir.x * 0.01,
+          preOrbitY + lookDir.y * 0.01,
+          preOrbitZ + lookDir.z * 0.01
+        );
       } else {
-        // Save valid position for rollback
+        // Save valid state for BirdsEye-exit restoration.
         if (!savedInteriorCamPos) savedInteriorCamPos = splatCamera.position.clone();
         if (!savedInteriorCamTarget) savedInteriorCamTarget = splatControls.target.clone();
         savedInteriorCamPos.copy(splatCamera.position);
@@ -1137,64 +1185,87 @@ function _distToPolyEdge(px, pz, poly) {
   return best;
 }
 
-// Three waypoints spaced along the polygon's principal axis, then relaxed
-// toward the centroid until each has at least MIN_CLEARANCE from any wall.
-// Keeps discs centered between walls (away from appliances/counters that line
-// the walls in kitchens), rather than picking corners.
+// Nearest point on the polygon boundary. Returns {dist, qx, qz}. Used for
+// soft wall repulsion so we can push the camera inward along the edge normal.
+function _nearestEdgePoint(px, pz, poly) {
+  let best = Infinity, bestQX = 0, bestQZ = 0;
+  const n = poly.length;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const [x1, z1] = poly[j], [x2, z2] = poly[i];
+    const dx = x2 - x1, dz = z2 - z1;
+    const l2 = dx * dx + dz * dz;
+    let t = l2 > 0 ? ((px - x1) * dx + (pz - z1) * dz) / l2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    const qx = x1 + t * dx, qz = z1 + t * dz;
+    const d = Math.hypot(px - qx, pz - qz);
+    if (d < best) { best = d; bestQX = qx; bestQZ = qz; }
+  }
+  return { dist: best, qx: bestQX, qz: bestQZ };
+}
+
+// Pole-of-inaccessibility waypoint picker. For each candidate point on a
+// bbox grid, compute distance to the nearest polygon edge — the "clearance".
+// Greedily pick the point with the largest clearance (widest open area, even
+// in L-shaped rooms whose centroid may fall outside the polygon), then pick
+// the next-best candidate that also satisfies MIN_SPACING from earlier picks.
+// Returns 1–3 points in descending quality order.
 function _pickWaypoints(cornersM) {
   const n = cornersM.length;
-  const cx = cornersM.reduce((s, p) => s + p[0], 0) / n;
-  const cz = cornersM.reduce((s, p) => s + p[1], 0) / n;
+  if (n < 3) return [];
 
-  let Sxx = 0, Szz = 0, Sxz = 0;
+  let mnX = Infinity, mxX = -Infinity, mnZ = Infinity, mxZ = -Infinity;
   for (const [x, z] of cornersM) {
-    const dx = x - cx, dz = z - cz;
-    Sxx += dx * dx; Szz += dz * dz; Sxz += dx * dz;
+    if (x < mnX) mnX = x; if (x > mxX) mxX = x;
+    if (z < mnZ) mnZ = z; if (z > mxZ) mxZ = z;
   }
-  const tr = Sxx + Szz, det = Sxx * Szz - Sxz * Sxz;
-  const disc = Math.max(0, tr * tr / 4 - det);
-  const lambda1 = tr / 2 + Math.sqrt(disc);
-  let ux, uz;
-  if (Math.abs(Sxz) > 1e-6) { ux = lambda1 - Szz; uz = Sxz; }
-  else { ux = Sxx >= Szz ? 1 : 0; uz = Sxx >= Szz ? 0 : 1; }
-  const L = Math.hypot(ux, uz) || 1; ux /= L; uz /= L;
 
-  let minP = Infinity, maxP = -Infinity;
-  for (const [x, z] of cornersM) {
-    const p = (x - cx) * ux + (z - cz) * uz;
-    if (p < minP) minP = p;
-    if (p > maxP) maxP = p;
+  const GRID = 40;
+  const stepX = (mxX - mnX) / GRID;
+  const stepZ = (mxZ - mnZ) / GRID;
+  const candidates = [];
+  for (let i = 0; i <= GRID; i++) {
+    for (let j = 0; j <= GRID; j++) {
+      const x = mnX + i * stepX;
+      const z = mnZ + j * stepZ;
+      if (!pointInPolygon(x, z, cornersM)) continue;
+      candidates.push({ x, z, d: _distToPolyEdge(x, z, cornersM) });
+    }
   }
-  const half = (maxP - minP) / 2;
 
-  // Center first so small rooms collapse to a single center disc after dedupe.
-  const t = 0.5;
-  const candidates = [
-    [cx, cz],
-    [cx - t * half * ux, cz - t * half * uz],
-    [cx + t * half * ux, cz + t * half * uz],
-  ];
+  if (candidates.length === 0) {
+    const cx = cornersM.reduce((s, p) => s + p[0], 0) / n;
+    const cz = cornersM.reduce((s, p) => s + p[1], 0) / n;
+    return [[cx, cz]];
+  }
 
   const MIN_CLEARANCE = 0.8;
-  const relaxed = candidates.map(([x, z]) => {
-    let px = x, pz = z;
-    for (let iter = 0; iter < 12; iter++) {
-      const inside = pointInPolygon(px, pz, cornersM);
-      const clearance = inside ? _distToPolyEdge(px, pz, cornersM) : 0;
-      if (inside && clearance >= MIN_CLEARANCE) break;
-      px = px + 0.25 * (cx - px);
-      pz = pz + 0.25 * (cz - pz);
-    }
-    return [px, pz];
-  });
-
   const MIN_SPACING = 1.5;
-  const kept = [];
-  for (const p of relaxed) {
-    const tooClose = kept.some(q => Math.hypot(p[0] - q[0], p[1] - q[1]) < MIN_SPACING);
-    if (!tooClose) kept.push(p);
+  const MAX_WAYPOINTS = 3;
+
+  const picked = [];
+  for (let iter = 0; iter < MAX_WAYPOINTS; iter++) {
+    let bestScore = -Infinity, bestCandidate = null;
+    for (const c of candidates) {
+      if (c.d < MIN_CLEARANCE) continue;
+      let minDistToPicked = Infinity;
+      for (const p of picked) {
+        const dist = Math.hypot(c.x - p[0], c.z - p[1]);
+        if (dist < minDistToPicked) minDistToPicked = dist;
+      }
+      if (picked.length > 0 && minDistToPicked < MIN_SPACING) continue;
+      const score = picked.length === 0 ? c.d : Math.min(c.d, minDistToPicked);
+      if (score > bestScore) { bestScore = score; bestCandidate = c; }
+    }
+    if (!bestCandidate) break;
+    picked.push([bestCandidate.x, bestCandidate.z]);
   }
-  return kept;
+
+  if (picked.length === 0) {
+    let best = candidates[0];
+    for (const c of candidates) if (c.d > best.d) best = c;
+    picked.push([best.x, best.z]);
+  }
+  return picked;
 }
 
 function buildTeleportCircles(cornersM, floorY, parentGroup) {

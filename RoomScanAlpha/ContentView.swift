@@ -52,7 +52,14 @@ struct ContentView: View {
                     sessionManager: sessionManager,
                     viewModel: viewModel,
                     onContinueScanning: {
-                        // Return to scan-ready so user presses "Start Scan" to resume
+                        // Return to scanReady so the user sees the Start Scan button
+                        // again. Session is still running; resumeSession() preserves
+                        // the world coordinate system and existing HEVC capture.
+                        //
+                        // Intentionally DO NOT clear localHoles / localUncoveredFaces /
+                        // localUncoveredCount — those stay visible as AR markers during
+                        // the re-scan so the user can walk toward each gap. The next
+                        // analyzer run (after stop-scan) overwrites them.
                         viewModel.uncoveredFaces = [:]
                         viewModel.coverageRatio = 0
                         viewModel.isAnalyzingCoverage = false
@@ -60,7 +67,6 @@ struct ContentView: View {
                         viewModel.state = .scanReady
                     },
                     onLooksGood: {
-                        // Frame selection already ran during handleStopScan — proceed directly
                         // Session is still running (never paused), so annotation has live AR
                         viewModel.state = .annotatingCorners
                     }
@@ -68,25 +74,6 @@ struct ContentView: View {
             case .capturingPanorama:
                 // Deprecated: panorama replaced by denser walk-around capture
                 EmptyView()
-            case .relocalizingForRescan:
-                RelocalizationView(
-                    sessionManager: sessionManager,
-                    onRelocalized: {
-                        viewModel.state = .rescanningGaps
-                    },
-                    onCancel: {
-                        sessionManager.pauseSession()
-                        viewModel.state = .viewingResults
-                    }
-                )
-            case .rescanningGaps:
-                GapRescanView(
-                    sessionManager: sessionManager,
-                    viewModel: viewModel,
-                    uncoveredFaces: viewModel.cloudCoverageResult?.uncoveredFaces ?? [],
-                    holeFaces: viewModel.cloudCoverageResult?.holeFaces ?? [],
-                    onStop: { handleStopRescan() }
-                )
             case .annotatingCorners:
                 CornerAnnotationView(
                     sessionManager: sessionManager,
@@ -129,9 +116,6 @@ struct ContentView: View {
                     onScanAnother: {
                         // Keep same RFQ, go to scanReady for another room
                         viewModel.prepareScan()
-                    },
-                    onRescanGaps: {
-                        handleRescanGaps()
                     }
                 )
             }
@@ -187,10 +171,47 @@ struct ContentView: View {
 
     private func handleStopScan() {
         sessionManager.isCapturing = false
-        // Snapshot mesh but do NOT pause — session stays running during annotation
+        // Snapshot mesh but do NOT pause — session stays running through coverage
+        // review and annotation (pausing between capture + export causes 1-2ft
+        // texture misalignment on resume).
         sessionManager.snapshotMeshAnchors()
-        // Go straight to annotation (matching original working flow)
-        viewModel.state = .annotatingCorners
+
+        guard viewModel.useInlineCoverageReview else {
+            viewModel.state = .annotatingCorners
+            return
+        }
+
+        // Kick off on-device coverage analysis. State flips to reviewingCoverage
+        // immediately so the user sees the loading UI; analyzer populates the
+        // ViewModel when it finishes (~2-5s on A15).
+        let meshAnchors = sessionManager.lastMeshAnchors
+        let poses = sessionManager.frameCaptureManager.poseSamples
+        viewModel.isAnalyzingCoverage = true
+        viewModel.coverageRatio = 0
+        viewModel.localUncoveredFaces = []
+        viewModel.localUncoveredCount = 0
+        viewModel.state = .reviewingCoverage
+
+        MeshCoverageAnalyzer.analyze(
+            meshAnchors: meshAnchors,
+            poseSamples: poses
+        ) { result in
+            viewModel.coverageRatio = result.coverageRatio
+            viewModel.uncoveredFaces = result.uncoveredFaces
+            viewModel.localUncoveredCount = result.uncoveredCount
+            viewModel.localUncoveredFaces = MeshCoverageAnalyzer.buildUncoveredFaces(
+                result: result,
+                meshAnchors: meshAnchors
+            )
+            viewModel.enclosureCompleteness = result.enclosureCompleteness
+            viewModel.missingEnclosureDirections = result.enclosureDirections
+                .filter { !$0.value }
+                .map { $0.key }
+            viewModel.hasEnoughCameraMotion = result.hasEnoughCameraMotion
+            viewModel.localHoles = result.holes
+            viewModel.isAnalyzingCoverage = false
+            print("[RoomScanAlpha] Inline coverage: \(Int(result.coverageRatio * 100))% texture, \(result.holes.count) holes, motion=\(result.hasEnoughCameraMotion)")
+        }
     }
 
     private func handleRedoScan() {
@@ -223,139 +244,8 @@ struct ContentView: View {
         saveWorldMapInBackground()
     }
 
-    private func checkCoverageAutomatically(scanId: String, rfqId: String) {
-        viewModel.isCheckingCoverage = true
-        viewModel.coverageError = nil
-
-        Task {
-            do {
-                let result = try await CloudUploader.shared.checkCoverage(scanId: scanId, rfqId: rfqId)
-                viewModel.cloudCoverageResult = result
-                viewModel.isCheckingCoverage = false
-                print("[RoomScanAlpha] Auto coverage check: \(Int(result.coverageRatio * 100))%, \(result.uncoveredCount) gaps")
-            } catch {
-                viewModel.coverageError = error.localizedDescription
-                viewModel.isCheckingCoverage = false
-                print("[RoomScanAlpha] Auto coverage check failed: \(error)")
-            }
-        }
-    }
-
-    private func handleStopRescan() {
-        sessionManager.isCapturing = false
-        sessionManager.snapshotMeshAnchors()
-        let supplementalCount = sessionManager.frameCaptureManager.keyframeCount
-        sessionManager.pauseSession()
-        print("[RoomScanAlpha] Gap rescan stopped — \(supplementalCount) supplemental frames")
-
-        guard supplementalCount > 0 else {
-            print("[RoomScanAlpha] No supplemental frames captured — skipping upload")
-            viewModel.hasCompletedRescan = true
-            viewModel.state = .viewingResults
-            return
-        }
-
-        // Package and upload supplemental data
-        startSupplementalExport()
-    }
-
-    private func startSupplementalExport() {
-        viewModel.state = .uploading
-        viewModel.uploadStatus = "Packaging supplemental scan..."
-        viewModel.uploadProgress = 0.0
-        viewModel.uploadError = nil
-
-        let captureManager = sessionManager.frameCaptureManager
-        let meshAnchors = sessionManager.lastMeshAnchors
-
-        Task.detached {
-            do {
-                guard let captureResult = await captureManager.finalizeCapture() else {
-                    throw ScanPackager.PackageError.captureFinalizationFailed
-                }
-
-                let result = try ScanPackager.package(
-                    captureResult: captureResult,
-                    meshAnchors: meshAnchors,
-                    scanDuration: 0,
-                    rfqContext: nil,
-                    cornerAnnotation: nil,
-                    onProgress: { message in
-                        Task { @MainActor in
-                            viewModel.uploadStatus = message
-                        }
-                    }
-                )
-                await MainActor.run {
-                    let sizeMB = result.totalSizeBytes / 1024 / 1024
-                    print("[RoomScanAlpha] Supplemental export: \(sizeMB)MB")
-                    startSupplementalUpload(scanDirectoryURL: result.directoryURL)
-                }
-            } catch {
-                await MainActor.run {
-                    viewModel.uploadError = error.localizedDescription
-                    viewModel.uploadStatus = "Export failed"
-                    print("[RoomScanAlpha] Supplemental export error: \(error)")
-                }
-            }
-        }
-    }
-
-    private func startSupplementalUpload(scanDirectoryURL: URL) {
-        guard let rfqId = viewModel.selectedRFQ?.id,
-              let scanId = viewModel.lastScanId else {
-            viewModel.uploadError = "Missing RFQ or scan ID"
-            viewModel.uploadStatus = "Upload failed"
-            return
-        }
-
-        viewModel.uploadStatus = "Uploading supplemental scan..."
-
-        Task {
-            do {
-                _ = try await CloudUploader.shared.uploadSupplemental(
-                    scanDirectoryURL: scanDirectoryURL,
-                    rfqId: rfqId,
-                    scanId: scanId,
-                    onProgress: { status, fraction in
-                        viewModel.uploadStatus = status
-                        viewModel.uploadProgress = fraction
-                    }
-                )
-                viewModel.uploadStatus = "Reprocessing..."
-                print("[RoomScanAlpha] Supplemental upload complete — polling for results")
-
-                // Poll for reprocessing completion, then re-check coverage
-                startPolling(scanId: scanId, rfqId: rfqId)
-            } catch {
-                viewModel.uploadError = error.localizedDescription
-                viewModel.uploadStatus = "Upload failed"
-                viewModel.hasCompletedRescan = true
-                viewModel.state = .viewingResults
-                print("[RoomScanAlpha] Supplemental upload error: \(error)")
-            }
-        }
-    }
-
-    private func handleRescanGaps() {
-        guard let rfqId = viewModel.selectedRFQ?.id else { return }
-        let worldMapURL = ARSessionManager.worldMapURL(rfqId: rfqId)
-
-        guard FileManager.default.fileExists(atPath: worldMapURL.path) else {
-            print("[RoomScanAlpha] No world map found at \(worldMapURL.path)")
-            viewModel.coverageError = "No saved world map — cannot relocalize"
-            return
-        }
-
-        do {
-            try sessionManager.startRelocalized(worldMapURL: worldMapURL)
-            viewModel.state = .relocalizingForRescan
-            print("[RoomScanAlpha] Starting relocalization from saved world map")
-        } catch {
-            print("[RoomScanAlpha] Failed to load world map: \(error)")
-            viewModel.coverageError = "Failed to load world map: \(error.localizedDescription)"
-        }
-    }
+    // Cloud-side coverage check + gap-rescan flow removed — on-device coverage
+    // review (see `CoverageReviewView`) handles all gap detection pre-upload.
 
     /// Save the ARWorldMap to disk after pausing the session.
     /// Runs in background — does not block the scan flow.
@@ -494,17 +384,8 @@ struct ContentView: View {
                 viewModel.saveToHistory(scanId: scanId, status: result.status)
                 print("[RoomScanAlpha] Scan result: \(result.status)")
 
-                if result.status == "complete" || result.status == "scan_ready" {
-                    // Use inline coverage if available (no separate /coverage call needed)
-                    if let inlineCov = result.inlineCoverage {
-                        viewModel.cloudCoverageResult = inlineCov
-                        print("[RoomScanAlpha] Inline coverage: \(Int(inlineCov.coverageRatio * 100))%")
-                    } else {
-                        // Fallback: call /coverage endpoint (old processor without inline coverage)
-                        checkCoverageAutomatically(scanId: scanId, rfqId: rfqId)
-                    }
-                } else if result.status == "metrics_ready" {
-                    // Legacy: two-phase pipeline fallback. Show fast results, keep polling.
+                if result.status == "metrics_ready" {
+                    // Two-phase pipeline fallback: keep polling until texturing completes.
                     print("[RoomScanAlpha] metrics_ready — continuing to poll for complete...")
                     do {
                         let finalResult = try await CloudUploader.shared.pollForComplete(
@@ -512,11 +393,6 @@ struct ContentView: View {
                         )
                         viewModel.scanResult = finalResult
                         viewModel.saveToHistory(scanId: scanId, status: finalResult.status)
-                        if let inlineCov = finalResult.inlineCoverage {
-                            viewModel.cloudCoverageResult = inlineCov
-                        } else {
-                            checkCoverageAutomatically(scanId: scanId, rfqId: rfqId)
-                        }
                     } catch {
                         print("[RoomScanAlpha] Phase 2 polling timed out: \(error)")
                     }

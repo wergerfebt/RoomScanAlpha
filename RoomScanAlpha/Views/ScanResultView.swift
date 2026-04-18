@@ -6,7 +6,6 @@ struct ScanResultView: View {
     let meshAnchors: [ARMeshAnchor]
     let onDone: () -> Void
     let onScanAnother: (() -> Void)?
-    var onRescanGaps: (() -> Void)?
 
     @State private var showMeshViewer = false
     @State private var showFloorPlan = false
@@ -46,57 +45,9 @@ struct ScanResultView: View {
                     processingView
                 }
 
-                // Action buttons — only shown after coverage is resolved
                 if canProceed {
-                    if !meshAnchors.isEmpty {
-                        Button {
-                            showMeshViewer = true
-                        } label: {
-                            Label("View 3D Scan", systemImage: "cube")
-                                .font(.headline)
-                                .frame(maxWidth: .infinity)
-                                .padding()
-                                .background(.blue.opacity(0.1))
-                                .foregroundStyle(.blue)
-                                .clipShape(RoundedRectangle(cornerRadius: 12))
-                        }
-                        .padding(.horizontal, 40)
-                    }
-
-                    if floorPlanPolygon != nil {
-                        Button {
-                            showFloorPlan = true
-                        } label: {
-                            Label("View Floor Plan", systemImage: "square.split.bottomrightquarter")
-                                .font(.headline)
-                                .frame(maxWidth: .infinity)
-                                .padding()
-                                .background(.indigo.opacity(0.1))
-                                .foregroundStyle(.indigo)
-                                .clipShape(RoundedRectangle(cornerRadius: 12))
-                        }
-                        .padding(.horizontal, 40)
-                    }
-
-                    if let onScanAnother {
-                        Button(action: onScanAnother) {
-                            Label("Scan Another Room", systemImage: "plus.viewfinder")
-                                .font(.headline)
-                                .frame(maxWidth: .infinity)
-                                .padding()
-                                .background(.green.opacity(0.1))
-                                .foregroundStyle(.green)
-                                .clipShape(RoundedRectangle(cornerRadius: 12))
-                        }
-                        .padding(.horizontal, 40)
-                    }
-
-                    Button(action: onDone) {
-                        Label("Done", systemImage: "house")
-                            .primaryButtonStyle()
-                    }
-                    .padding(.horizontal, 40)
-                    .padding(.bottom, 40)
+                    footerActions
+                        .padding(.bottom, 40)
                 }
             }
         }
@@ -129,31 +80,16 @@ struct ScanResultView: View {
                 MeshViewerSheet(meshAnchors: [], meshUrl: url)
             }
         }
+        .dynamicTypeSize(.large ... .accessibility2)
     }
 
-    /// Action buttons (Done, Scan Another, etc.) are hidden until coverage is resolved:
-    /// either coverage >= 90%, coverage check failed (let them proceed), or scan processing failed.
+    /// Action buttons (Done, Scan Another, etc.) are hidden only while the scan
+    /// is still processing. On-device inline coverage review runs pre-upload
+    /// (see `CoverageReviewView`), so cloud coverage is informational here —
+    /// it no longer gates progress.
     private var canProceed: Bool {
-        // User completed a gap re-scan — always let them proceed
-        if viewModel.hasCompletedRescan { return true }
-        // Failed scans — let user proceed
-        if let result = viewModel.scanResult, result.status == "failed" {
-            return true
-        }
-        // Coverage check failed — don't block the user
-        if viewModel.coverageError != nil && viewModel.cloudCoverageResult == nil {
-            return true
-        }
-        // Accurate UV-based coverage (from /coverage endpoint after texturing)
-        if let coverage = viewModel.cloudCoverageResult {
-            return coverage.coverageRatio >= 0.90
-        }
-        // Fast camera-viability coverage (from Phase 1 metrics_ready)
-        if let fastCov = viewModel.scanResult?.fastCoverage {
-            return fastCov.coverageRatio >= 0.90
-        }
-        // Still processing or checking coverage
-        return false
+        // Always let the user proceed once the scan result has landed.
+        viewModel.scanResult != nil
     }
 
     // MARK: - Processing
@@ -201,15 +137,16 @@ struct ScanResultView: View {
     private func readyView(result: CloudUploader.ScanResult) -> some View {
         VStack(spacing: 20) {
             Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 56))
+                .font(.system(size: 48))
                 .foregroundStyle(.green)
 
             Text("Scan Complete")
                 .font(.title2)
                 .fontWeight(.bold)
 
-            // Coverage (shown first — primary actionable info)
-            coverageSection
+            // Primary action surface — Scope of Work is what the user needs to
+            // complete before moving on. Shown first so it's above the fold.
+            scopeSelectionView
 
             // Room Dimensions
             VStack(alignment: .leading, spacing: 12) {
@@ -275,9 +212,6 @@ struct ScanResultView: View {
                 .padding(.horizontal, 24)
             }
 
-            // Scope of Work
-            scopeSelectionView
-
             // Scan stats
             VStack(spacing: 4) {
                 Text("\(viewModel.keyframeCount) keyframes  •  \(viewModel.meshTriangleCount) triangles")
@@ -290,127 +224,51 @@ struct ScanResultView: View {
         }
     }
 
-    // MARK: - Coverage Check
+    // MARK: - Footer Actions
 
-    private var coverageSection: some View {
-        VStack(spacing: 12) {
-            if let result = viewModel.cloudCoverageResult {
-                // Accurate UV-based coverage (available after texturing completes)
-                let pct = Int(result.coverageRatio * 100)
-                HStack {
-                    Image(systemName: pct >= 90 ? "checkmark.shield.fill" : "exclamationmark.triangle.fill")
-                        .foregroundStyle(pct >= 90 ? .green : .orange)
-                    Text("\(pct)% Coverage")
-                        .font(.headline)
-                    Spacer()
-                    VStack(alignment: .trailing, spacing: 2) {
-                        Text("\(result.uncoveredCount) untextured")
-                            .foregroundStyle(.orange)
-                        if result.holeCount > 0 {
-                            Text("\(result.holeCount) mesh holes")
-                                .foregroundStyle(.red)
-                        }
-                    }
-                    .font(.caption)
-                }
+    /// Primary "Done" to submit, secondary "Scan Another Room", and tertiary
+    /// inline links for the viewers. Scope of Work has already been saved
+    /// inline at the top of the screen, so the footer doesn't duplicate it.
+    private var footerActions: some View {
+        VStack(spacing: 14) {
+            Button(action: onDone) {
+                Label("Done", systemImage: "checkmark.circle.fill")
+            }
+            .largeCapsuleButton(role: .primary, tint: .green)
+            .padding(.horizontal, 24)
 
-                if pct < 90, !viewModel.hasCompletedRescan, let onRescanGaps {
-                    Button(action: onRescanGaps) {
-                        Label("Re-scan Gaps", systemImage: "camera.viewfinder")
-                            .font(.headline)
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(.orange.opacity(0.1))
-                            .foregroundStyle(.orange)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                    }
+            if let onScanAnother {
+                Button(action: onScanAnother) {
+                    Label("Scan Another Room", systemImage: "plus.viewfinder")
                 }
-            } else if let fastCov = viewModel.scanResult?.fastCoverage {
-                // Fast camera-viability coverage (available immediately with metrics_ready)
-                let pct = Int(fastCov.coverageRatio * 100)
-                HStack {
-                    Image(systemName: pct >= 90 ? "checkmark.shield.fill" : "exclamationmark.triangle.fill")
-                        .foregroundStyle(pct >= 90 ? .green : .orange)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("\(pct)% Coverage")
-                            .font(.headline)
-                        if viewModel.scanResult?.status == "metrics_ready" {
-                            Text("Refining coverage...")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    Spacer()
-                    Text("\(fastCov.uncoveredCount) gaps")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                }
-
-                if pct < 90, !viewModel.hasCompletedRescan, let onRescanGaps, viewModel.scanResult?.status != "metrics_ready" {
-                    Button(action: onRescanGaps) {
-                        Label("Re-scan Gaps", systemImage: "camera.viewfinder")
-                            .font(.headline)
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(.orange.opacity(0.1))
-                            .foregroundStyle(.orange)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                    }
-                }
-            } else if viewModel.isCheckingCoverage {
-                HStack(spacing: 12) {
-                    ProgressView()
-                    Text("Checking coverage...")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-            } else if let error = viewModel.coverageError {
-                // Coverage check failed — show retry button
-                Button {
-                    checkCoverage()
-                } label: {
-                    Label("Retry Coverage Check", systemImage: "arrow.clockwise")
-                        .font(.subheadline)
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(.purple.opacity(0.1))
-                        .foregroundStyle(.purple)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                }
-                // Error text is shown below via the separate error view
-                let _ = error  // suppress unused warning
+                .largeCapsuleButton(role: .secondary)
+                .padding(.horizontal, 24)
             }
 
-            if let error = viewModel.coverageError {
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(.red)
+            HStack(spacing: 24) {
+                if !meshAnchors.isEmpty {
+                    Button {
+                        showMeshViewer = true
+                    } label: {
+                        Label("View 3D Scan", systemImage: "cube")
+                            .font(.footnote)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                }
+
+                if floorPlanPolygon != nil {
+                    Button {
+                        showFloorPlan = true
+                    } label: {
+                        Label("Floor Plan", systemImage: "square.split.bottomrightquarter")
+                            .font(.footnote)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                }
             }
-        }
-        .padding()
-        .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .padding(.horizontal, 24)
-    }
-
-    private func checkCoverage() {
-        guard let rfqId = viewModel.selectedRFQ?.id,
-              let scanId = viewModel.lastScanId ?? viewModel.scanResult?.scanId else { return }
-
-        viewModel.isCheckingCoverage = true
-        viewModel.coverageError = nil
-
-        Task {
-            do {
-                let result = try await CloudUploader.shared.checkCoverage(scanId: scanId, rfqId: rfqId)
-                viewModel.cloudCoverageResult = result
-                viewModel.isCheckingCoverage = false
-                print("[RoomScanAlpha] Coverage check: \(Int(result.coverageRatio * 100))%, \(result.uncoveredCount) gaps")
-            } catch {
-                viewModel.coverageError = error.localizedDescription
-                viewModel.isCheckingCoverage = false
-                print("[RoomScanAlpha] Coverage check failed: \(error)")
-            }
+            .padding(.top, 4)
         }
     }
 
@@ -479,18 +337,12 @@ struct ScanResultView: View {
                 Button {
                     saveScope()
                 } label: {
-                    HStack {
-                        Image(systemName: scopeSaved ? "checkmark.circle.fill" : "square.and.arrow.up")
-                        Text(scopeSaved ? "Scope Saved" : "Save Scope")
-                    }
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                    .background(scopeSaved ? .green.opacity(0.1) : .blue.opacity(0.1))
-                    .foregroundStyle(scopeSaved ? .green : .blue)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    Label(
+                        scopeSaved ? "Scope Saved" : "Save Scope of Work",
+                        systemImage: scopeSaved ? "checkmark.circle.fill" : "square.and.arrow.up"
+                    )
                 }
+                .largeCapsuleButton(role: .primary, tint: scopeSaved ? .green : .blue)
                 .disabled(scopeSaved)
             }
         }

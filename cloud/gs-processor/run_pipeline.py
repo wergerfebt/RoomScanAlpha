@@ -19,6 +19,7 @@ from scipy.spatial import KDTree
 import pycolmap
 from PIL import Image
 import subprocess
+from google.cloud import storage
 
 # Add hloc to path
 sys.path.insert(0, os.environ.get('HLOC_DIR', '/opt/Hierarchical-Localization'))
@@ -28,7 +29,8 @@ sys.path.insert(0, os.environ.get('HLOC_DIR', '/opt/Hierarchical-Localization'))
 # ============================================================
 SCAN_ID = os.environ.get('SCAN_ID', 'b069da20-8f00-4d9b-9d13-6a7b82bc52ba')
 ROOM_ID = os.environ.get('ROOM_ID', '66abbeb4-d916-4e04-b735-ae67bceb9066')
-GCS_BASE_TEMPLATE = 'gs://roomscanalpha-scans/scans/{scan_id}/{room_id}'
+GCS_BUCKET = 'roomscanalpha-scans'
+GCS_PREFIX_TEMPLATE = 'scans/{scan_id}/{room_id}'
 
 SHARPNESS_CULL_PERCENT = 20
 FRAME_STRIDE = 4
@@ -103,13 +105,22 @@ def pull_and_extract(scan_id, room_id, stride):
     import cv2
     t0 = time.time()
 
-    gcs_base = GCS_BASE_TEMPLATE.format(scan_id=scan_id, room_id=room_id)
+    prefix = GCS_PREFIX_TEMPLATE.format(scan_id=scan_id, room_id=room_id)
     scan_raw = f'{WORK_DIR}/scan_raw'
     os.makedirs(scan_raw, exist_ok=True)
 
-    # Pull from GCS
-    subprocess.run(f'gsutil -m cp -r {gcs_base}/* {scan_raw}/', shell=True, check=True)
-    step(t0, 'GCS pull done')
+    client = storage.Client()
+    bucket = client.bucket(GCS_BUCKET)
+    n = 0
+    for blob in bucket.list_blobs(prefix=prefix + '/'):
+        rel = blob.name[len(prefix) + 1:]
+        if not rel or rel.endswith('/'):
+            continue
+        dest = os.path.join(scan_raw, rel)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        blob.download_to_filename(dest)
+        n += 1
+    step(t0, f'GCS pull done ({n} files)')
 
     # Extract zips
     import zipfile
@@ -482,6 +493,43 @@ class ColorCorrector:
         with open(p, 'w') as f:
             f.write(src)
     print('[patch] color correction')
+
+    # Flatten loss (LighthouseGS §3.2): penalize min-axis scale → disk-shaped Gaussians
+    p = f'{FASTGS_DIR}/train.py'
+    with open(p) as f:
+        src = f.read()
+    if 'L_flatten' not in src:
+        src = src.replace(
+            '        corrected = color_corrector.apply(image, viewpoint_cam)\n'
+            '        Ll1 = l1_loss(corrected, gt_image)\n'
+            '        ssim_value = fast_ssim(corrected.unsqueeze(0), gt_image.unsqueeze(0))\n'
+            '        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_value)\n'
+            '        loss.backward()',
+            '        corrected = color_corrector.apply(image, viewpoint_cam)\n'
+            '        Ll1 = l1_loss(corrected, gt_image)\n'
+            '        ssim_value = fast_ssim(corrected.unsqueeze(0), gt_image.unsqueeze(0))\n'
+            '        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_value)\n'
+            '        L_flatten = gaussians.get_scaling.min(dim=1).values.mean()\n'
+            '        loss = loss + 0.05 * L_flatten\n'
+            '        loss.backward()'
+        )
+        with open(p, 'w') as f:
+            f.write(src)
+    print('[patch] flatten loss')
+
+    # Stable pruning (LighthouseGS §3.2): retain oversized Gaussians with opacity > 0.5
+    p = f'{FASTGS_DIR}/scene/gaussian_model.py'
+    with open(p) as f:
+        src = f.read()
+    if 'stable pruning' not in src:
+        src = src.replace(
+            '            big_points_ws = self.get_scaling.max(dim=1).values > 0.1 * extent',
+            '            # stable pruning: retain oversized Gaussians with opacity > 0.5\n'
+            '            big_points_ws = (self.get_scaling.max(dim=1).values > 0.1 * extent) & (self.get_opacity.squeeze() < 0.5)'
+        )
+        with open(p, 'w') as f:
+            f.write(src)
+    print('[patch] stable pruning')
 
 
 def train_fastgs(data_path, iterations):

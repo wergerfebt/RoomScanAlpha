@@ -404,6 +404,9 @@ async def process_scan(request: Request) -> dict:
         # Optionally enqueue standard texture for web viewer (not on critical path)
         _enqueue_texture_task(scan_id, rfq_id, blob_path)
 
+        # Optionally enqueue Gaussian Splatting job (not on critical path)
+        _submit_gs_job(scan_id, rfq_id)
+
         return {"status": "complete", "scan_id": scan_id, "rfq_ready": rfq_ready}
 
 
@@ -517,6 +520,57 @@ def _enqueue_texture_task(scan_id: str, rfq_id: str, blob_path: str) -> None:
         print(f"[Processor] Enqueued Phase 2 texture task for scan {scan_id}")
     except Exception as e:
         print(f"[Processor] Warning: Failed to enqueue texture task: {e}")
+
+
+def _submit_gs_job(scan_id: str, rfq_id: str) -> None:
+    """Submit a Vertex AI Custom Job for Gaussian Splatting.
+
+    Non-fatal on failure — the scan remains fully functional with OBJ mesh.
+    The .splat file is an optional enhancement for the 3D viewer.
+    """
+    gs_enabled = os.environ.get("GS_ENABLED", "false").lower() == "true"
+    if not gs_enabled:
+        return
+
+    try:
+        from google.cloud import aiplatform
+        import time
+
+        gs_image = os.environ.get(
+            "GS_IMAGE",
+            "us-central1-docker.pkg.dev/roomscanalpha/gs-pipeline/gs-processor:latest",
+        )
+
+        aiplatform.init(
+            project=PROJECT_ID,
+            location=REGION,
+            staging_bucket=f"gs://{BUCKET_NAME}",
+        )
+
+        job = aiplatform.CustomJob(
+            display_name=f"gs-{scan_id[:8]}-{int(time.time())}",
+            worker_pool_specs=[{
+                "machine_spec": {
+                    "machine_type": "g2-standard-8",
+                    "accelerator_type": "NVIDIA_L4",
+                    "accelerator_count": 1,
+                },
+                "replica_count": 1,
+                "container_spec": {
+                    "image_uri": gs_image,
+                    "env": [
+                        {"name": "SCAN_ID", "value": rfq_id},
+                        {"name": "ROOM_ID", "value": scan_id},
+                        {"name": "RFQ_ID", "value": rfq_id},
+                    ],
+                },
+            }],
+        )
+
+        job.submit()
+        print(f"[Processor] Submitted GS job for scan {scan_id}: {job.resource_name}")
+    except Exception as e:
+        print(f"[Processor] Warning: Failed to submit GS job: {e}")
 
 
 def _update_texture_status(scan_id: str, rfq_id: str, texture_manifest: Optional[dict]) -> None:

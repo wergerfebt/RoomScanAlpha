@@ -205,6 +205,9 @@ final class ARSessionManager: NSObject, ARSessionDelegate {
 
     var onSessionInterrupted: (() -> Void)?
     var onSessionResumed: (() -> Void)?
+    /// Fires on every ARKit tracking-state change. Consumers use `.normal` to
+    /// hide the "Starting camera…" overlay once the session is ready.
+    var onTrackingStateChange: ((ARCamera.TrackingState) -> Void)?
 
     func sessionWasInterrupted(_ session: ARSession) {
         print("[RoomScanAlpha] AR session interrupted")
@@ -214,5 +217,9 @@ final class ARSessionManager: NSObject, ARSessionDelegate {
     func sessionInterruptionEnded(_ session: ARSession) {
         print("[RoomScanAlpha] AR session interruption ended")
         onSessionResumed?()
+    }
+
+    func session(_ session: ARSession, cameraDidChangeTrackingState camera: ARCamera) {
+        onTrackingStateChange?(camera.trackingState)
     }
 }

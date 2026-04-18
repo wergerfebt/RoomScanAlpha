@@ -5,11 +5,26 @@
 import ARKit
 import simd
 
+/// Minimal camera metadata kept in memory across a scan so the on-device
+/// coverage analyzer can run without re-reading the HEVC video's sidecar files.
+struct CameraPoseSample {
+    let transform: simd_float4x4
+    let intrinsics: simd_float3x3
+    let imageWidth: Int
+    let imageHeight: Int
+}
+
 final class FrameCaptureManager {
 
     private(set) var videoWriter = VideoFrameWriter(depthInterval: 1)
 
     private var lastCaptureTime: TimeInterval = 0
+
+    /// Sampled camera poses (~1 per 10 captured frames) for on-device coverage analysis.
+    /// Cleared on `reset()`.
+    private(set) var poseSamples: [CameraPoseSample] = []
+    /// Every Nth captured frame is stored as a pose sample. 10 → ~1Hz at 10fps capture.
+    private let poseSampleStride: Int = 10
 
     /// Called when the frame cap is reached. The session manager should stop capture.
     var onCapReached: (() -> Void)?
@@ -31,6 +46,7 @@ final class FrameCaptureManager {
         videoWriter = VideoFrameWriter(depthInterval: 1)
         lastCaptureTime = 0
         capNotified = false
+        poseSamples.removeAll(keepingCapacity: true)
     }
 
     /// Evaluate an ARFrame and write it to the HEVC video if enough time has elapsed.
@@ -82,6 +98,16 @@ final class FrameCaptureManager {
 
         if success {
             lastCaptureTime = frame.timestamp
+
+            // Cache a lightweight pose sample for on-device coverage analysis.
+            if videoWriter.frameCount % poseSampleStride == 1 {
+                poseSamples.append(CameraPoseSample(
+                    transform: frame.camera.transform,
+                    intrinsics: frame.camera.intrinsics,
+                    imageWidth: CVPixelBufferGetWidth(frame.capturedImage),
+                    imageHeight: CVPixelBufferGetHeight(frame.capturedImage)
+                ))
+            }
 
             if videoWriter.frameCount % 100 == 0 {
                 print("[RoomScanAlpha] Frame \(videoWriter.frameCount) captured (HEVC, depth: \(videoWriter.depthFrameCount))")

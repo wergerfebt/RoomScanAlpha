@@ -50,5 +50,6 @@ struct RoomLabelView: View {
             Spacer()
         }
         .padding()
+        .dynamicTypeSize(.large ... .accessibility2)
     }
 }

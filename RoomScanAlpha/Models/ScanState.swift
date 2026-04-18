@@ -33,8 +33,6 @@ enum ScanState {
     case reviewingCoverage
     case annotatingCorners
     case capturingPanorama  // Deprecated: kept for backward compat, no longer used in flow
-    case relocalizingForRescan  // Loading ARWorldMap and waiting for relocalization
-    case rescanningGaps         // Relocalized — capturing supplemental frames at gap locations
     case labelingRoom
     case exporting
     case uploading

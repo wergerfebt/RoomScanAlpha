@@ -56,7 +56,7 @@ Cloud Run: scan-processor (OIDC-protected, 8 vCPU / 16GB / concurrency=1)
   → Download scan.zip → parse PLY → compute room metrics (imperial)
   → OpenMVS TextureMesh: decimate to 50K faces (preview) + 300K (HD)
     → Produces OBJ + MTL + texture atlas JPG(s) per resolution level
-  → WTA texture projection (fallback): per-surface JPEGs from annotation corners
+  → WTA texture projection (fallback): per-surface JPEGs from annotation corners (killed)
   → Upload textured mesh + atlas to GCS
   → Write results to Cloud SQL → FCM notification to app
   → Enqueue gs-processor via Cloud Tasks for Gaussian Splatting

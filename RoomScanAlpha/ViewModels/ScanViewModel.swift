@@ -1,6 +1,14 @@
 import SwiftUI
 import ARKit
 
+/// Movement coaching shown during scan. Drives `ScanCoachOverlay` copy.
+enum ScanCoachingState: String, Equatable {
+    case getStarted
+    case walkSlowly
+    case keepMoving
+    case enoughCoverage
+}
+
 /// Orchestrates the room scan lifecycle: AR capture, export, upload, and result polling.
 ///
 /// Owns all scan session state and is the single source of truth for what ContentView displays.
@@ -63,17 +71,27 @@ final class ScanViewModel {
     var uncoveredFaces: [UUID: Set<Int>] = [:]
     var coverageRatio: Float = 0.0
     var isAnalyzingCoverage: Bool = false
+    /// World-space vertex triangles for the inline coverage AR overlay. Adapter over
+    /// `uncoveredFaces` that reuses the `GapRescanView` overlay-mesh builder.
+    var localUncoveredFaces: [CloudUploader.UncoveredFace] = []
+    /// Total faces analyzed in the most recent coverage pass — used for the uncovered-count display.
+    var localUncoveredCount: Int = 0
+    /// Enclosure-based "room completeness" — 0..1 fraction of the 6 room-shell
+    /// directions where the mesh extends past the camera path. Detects missing
+    /// walls that camera-viability coverage cannot see.
+    var enclosureCompleteness: Float = 0
+    /// Per-direction captured/missing map matching `EnclosureDirection`.
+    var missingEnclosureDirections: [MeshCoverageAnalyzer.EnclosureDirection] = []
+    /// Whether the user walked far enough for the enclosure metric to be meaningful.
+    var hasEnoughCameraMotion: Bool = false
+    /// World-space hole points from the ray-cast detector. Each is a red
+    /// marker position rendered in AR so the user can walk toward the gap.
+    var localHoles: [MeshCoverageAnalyzer.HoleSample] = []
+    /// Feature flag: run on-device coverage review after stop-scan. Disable to restore
+    /// the previous "straight to annotation" flow.
+    var useInlineCoverageReview: Bool = true
     /// Set to true when returning from coverage review to rescan. Cleared on new scan.
     var isResumingFromCoverage: Bool = false
-
-    // MARK: - Cloud Coverage Check
-
-    /// Uncovered face data from cloud coverage endpoint, for AR overlay rendering.
-    var cloudCoverageResult: CloudUploader.CoverageResult?
-    var isCheckingCoverage: Bool = false
-    var coverageError: String?
-    /// Set after user completes a gap re-scan — unlocks action buttons regardless of coverage.
-    var hasCompletedRescan: Bool = false
 
     // MARK: - UI Flags
 
@@ -81,6 +99,36 @@ final class ScanViewModel {
     var showInterruptionAlert = false
     var showLowStorageAlert = false
     var showCapReachedAlert = false
+
+    /// True once ARKit reports a `.normal` tracking state after start/resume.
+    /// Drives the "Starting camera…" overlay on `ScanningView`.
+    var isARSessionReady: Bool = false
+
+    // MARK: - Scan Coaching
+
+    /// Current coaching message shown by `ScanCoachOverlay`.
+    var coachingState: ScanCoachingState = .getStarted
+
+    /// Initial "walk slowly" coaching duration before stale-detection kicks in.
+    private static let walkSlowlyDuration: TimeInterval = 8.0
+    /// Rolling window length for detecting stalled movement.
+    private static let coachingStaleWindow: TimeInterval = 3.0
+    /// Triangle delta below this within `coachingStaleWindow` counts as stalled.
+    private static let coachingTriangleStallDelta = 500
+    /// Keyframe delta below this within `coachingStaleWindow` counts as stalled.
+    private static let coachingFrameStallDelta = 2
+    /// Keyframe threshold for "enough coverage" — must be met together with the
+    /// triangle and anchor thresholds below (AND, not OR). Gates `.enoughCoverage`.
+    private static let enoughCoverageKeyframes = 500
+    /// Triangle threshold for "enough coverage" — AND'd with keyframes + anchors.
+    private static let enoughCoverageTriangles = 200_000
+    /// Mesh-anchor threshold. Sparse anchors (<8) usually means only one side of
+    /// the room has been scanned, so withhold the "you're done" signal.
+    private static let enoughCoverageAnchors = 8
+
+    private var coachingCheckpointTime: Date?
+    private var coachingCheckpointTriangles: Int = 0
+    private var coachingCheckpointFrames: Int = 0
 
     private var scanStartTime: Date?
 
@@ -110,16 +158,27 @@ final class ScanViewModel {
         panoramaFrameCount = 0
         scanStartTime = nil
         isResumingFromCoverage = false
-        cloudCoverageResult = nil
-        isCheckingCoverage = false
-        coverageError = nil
-        hasCompletedRescan = false
+        localUncoveredFaces = []
+        localUncoveredCount = 0
+        enclosureCompleteness = 0
+        missingEnclosureDirections = []
+        hasEnoughCameraMotion = false
+        localHoles = []
+        coachingState = .getStarted
+        coachingCheckpointTime = nil
+        coachingCheckpointTriangles = 0
+        coachingCheckpointFrames = 0
         state = .scanReady
     }
 
     /// Begin AR capture. Transitions from scanReady → scanning.
     func startScan() {
-        scanStartTime = Date()
+        let now = Date()
+        scanStartTime = now
+        coachingState = .walkSlowly
+        coachingCheckpointTime = now
+        coachingCheckpointTriangles = 0
+        coachingCheckpointFrames = 0
         state = .scanning
     }
 
@@ -184,10 +243,61 @@ final class ScanViewModel {
     func updateMeshStats(triangleCount: Int, anchorCount: Int) {
         meshTriangleCount = triangleCount
         meshAnchorCount = anchorCount
+        evaluateCoaching()
     }
 
     func updateKeyframeCount(_ count: Int) {
         keyframeCount = count
+        evaluateCoaching()
+    }
+
+    /// Update `coachingState` based on scan time + mesh/keyframe deltas over a rolling window.
+    /// Called after every mesh/keyframe update.
+    private func evaluateCoaching() {
+        guard state == .scanning, let start = scanStartTime else { return }
+        let now = Date()
+        let elapsed = now.timeIntervalSince(start)
+
+        // Stay on "walk slowly" during initial ramp-up.
+        if elapsed < Self.walkSlowlyDuration {
+            if coachingState != .walkSlowly { coachingState = .walkSlowly }
+            coachingCheckpointTime = now
+            coachingCheckpointTriangles = meshTriangleCount
+            coachingCheckpointFrames = keyframeCount
+            return
+        }
+
+        // Terminal coaching: enough coverage captured. All three basic thresholds
+        // must clear before we tell the user they're done — a single cheap signal
+        // (e.g. triangles) can fire from one close-up wall and undersells the task.
+        // The inline coverage review handles the final "missing walls" check.
+        if keyframeCount >= Self.enoughCoverageKeyframes
+            && meshTriangleCount >= Self.enoughCoverageTriangles
+            && meshAnchorCount >= Self.enoughCoverageAnchors {
+            if coachingState != .enoughCoverage { coachingState = .enoughCoverage }
+            return
+        }
+
+        // Rolling stale-window check.
+        let checkpoint = coachingCheckpointTime ?? start
+        let windowElapsed = now.timeIntervalSince(checkpoint)
+        guard windowElapsed >= Self.coachingStaleWindow else { return }
+
+        let triDelta = meshTriangleCount - coachingCheckpointTriangles
+        let frameDelta = keyframeCount - coachingCheckpointFrames
+        let stalled = triDelta < Self.coachingTriangleStallDelta
+            && frameDelta < Self.coachingFrameStallDelta
+
+        if stalled {
+            if coachingState != .keepMoving { coachingState = .keepMoving }
+        } else {
+            // Moving again — suppress stall nag back to neutral walk coaching.
+            if coachingState == .keepMoving { coachingState = .walkSlowly }
+        }
+
+        coachingCheckpointTime = now
+        coachingCheckpointTriangles = meshTriangleCount
+        coachingCheckpointFrames = keyframeCount
     }
 
     /// Check if device has enough free disk space for the export package.
