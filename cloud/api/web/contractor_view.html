@@ -2096,6 +2096,16 @@ window.toggleHD = function() {
   btn.textContent = isHD ? 'HD On' : 'HD';
 
   const cached = roomCache[activeRoomIndex];
+  console.log('[toggleHD]', {
+    isHD,
+    activeRoomIndex,
+    hasCached: !!cached,
+    contentGroupChildren: cached?.contentGroup?.children.length,
+    contentGroupVisible: cached?.contentGroup?.visible,
+    hdGroupChildren: cached?.hdGroup?.children.length,
+    hdGroupVisible: cached?.hdGroup?.visible,
+    objStandard: currentTextureUrls.obj_standard,
+  });
 
   if (isHD && currentTextureUrls.obj_standard) {
     if (cached?.contentGroup) cached.contentGroup.visible = false;
@@ -2120,6 +2130,13 @@ window.toggleHD = function() {
     if (cached) cached.isHD = false;
     document.getElementById('viewer-spinner').style.display = 'none';
   }
+
+  console.log('[toggleHD after]', {
+    isHD,
+    contentGroupVisible: cached?.contentGroup?.visible,
+    hdGroupVisible: cached?.hdGroup?.visible,
+    activeContentGroup: activeContentGroup === cached?.contentGroup ? 'content' : (activeContentGroup === cached?.hdGroup ? 'hd' : '?'),
+  });
 };
 
 function showToast(msg, duration = 3000) {
