@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import Layout from "../components/Layout";
 import FloorPlan from "../components/FloorPlan";
 import ContractorBidForm, { parseBidDescription } from "../components/ContractorBidForm";
+import Inbox from "./Inbox";
 import { apiFetch } from "../api/client";
 import AddressAutocomplete from "../components/AddressAutocomplete";
 import Lightbox, { type LightboxItem } from "../components/Lightbox";
@@ -88,7 +89,7 @@ interface OrgService {
   years_experience: number | null;
 }
 
-type Tab = "jobs" | "settings" | "gallery" | "members" | "services";
+type Tab = "inbox" | "jobs" | "settings" | "gallery" | "members" | "services";
 
 export default function OrgDashboard() {
   const [org, setOrg] = useState<OrgData | null>(null);
@@ -119,18 +120,17 @@ export default function OrgDashboard() {
     );
   }
 
+  if (tab === "inbox") return <Inbox />;
+  if (tab === "jobs") return <Layout><OrgJobsWorkspace /></Layout>;
+
   return (
     <Layout>
-      {tab === "jobs" ? (
-        <OrgJobsWorkspace />
-      ) : (
-        <div style={{ maxWidth: 800, margin: "0 auto", padding: "32px 24px 60px" }}>
-          {tab === "settings" && <OrgSettings org={org} onUpdate={setOrg} />}
-          {tab === "gallery" && <OrgGallery />}
-          {tab === "members" && <OrgMembers />}
-          {tab === "services" && <OrgServices />}
-        </div>
-      )}
+      <div style={{ maxWidth: 800, margin: "0 auto", padding: "32px 24px 60px" }}>
+        {tab === "settings" && <OrgSettings org={org} onUpdate={setOrg} />}
+        {tab === "gallery" && <OrgGallery />}
+        {tab === "members" && <OrgMembers />}
+        {tab === "services" && <OrgServices />}
+      </div>
     </Layout>
   );
 }

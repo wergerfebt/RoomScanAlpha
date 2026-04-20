@@ -8,6 +8,7 @@ interface OrgInfo {
 }
 
 const NAV_TABS: Array<{ key: string; label: string }> = [
+  { key: "inbox",    label: "Inbox" },
   { key: "jobs",     label: "Jobs" },
   { key: "gallery",  label: "Gallery" },
   { key: "members",  label: "Team" },

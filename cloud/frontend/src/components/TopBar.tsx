@@ -69,6 +69,14 @@ export default function TopBar() {
 
         {/* Nav links */}
         <nav style={{ display: "flex", alignItems: "center", gap: 10, marginLeft: "auto" }}>
+          {!loading && user && (
+            <Link to="/inbox" className="topbar-icon-btn" aria-label="Inbox" title="Inbox">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M22 12h-6l-2 3h-4l-2-3H2" />
+                <path d="M5.45 5.11L2 12v6a2 2 0 002 2h16a2 2 0 002-2v-6l-3.45-6.89A2 2 0 0016.76 4H7.24a2 2 0 00-1.79 1.11z" />
+              </svg>
+            </Link>
+          )}
           {!loading && user && org && (
             <Link to="/org?tab=jobs" className="topbar-workspace-chip" title={`Switch to ${org.name} workspace`}>
               <span className="topbar-workspace-icon">
@@ -111,6 +119,13 @@ const WORKSPACE_CHIP_CSS = `
   font-size: 10px; font-weight: 700; flex-shrink: 0;
 }
 .topbar-workspace-icon img { width: 26px; height: 26px; object-fit: cover; }
+.topbar-icon-btn {
+  width: 36px; height: 36px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--q-ink-soft); text-decoration: none;
+  transition: background 0.15s, color 0.15s;
+}
+.topbar-icon-btn:hover { background: var(--q-surface-muted); color: var(--q-ink); text-decoration: none; }
 @media (max-width: 640px) {
   .topbar-workspace-label { display: none; }
   .topbar-workspace-chip { padding: 4px; }

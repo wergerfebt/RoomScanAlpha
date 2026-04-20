@@ -5,6 +5,7 @@ import Projects from "./pages/Projects";
 import ProjectDetail from "./pages/ProjectDetail";
 import ProjectQuotes from "./pages/ProjectQuotes";
 import Search from "./pages/Search";
+import Inbox from "./pages/Inbox";
 import Account from "./pages/Account";
 import OrgDashboard from "./pages/OrgDashboard";
 import OrgProfile from "./pages/OrgProfile";
@@ -40,6 +41,14 @@ export default function App() {
         element={
           <ProtectedRoute>
             <ProjectQuotes />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/inbox"
+        element={
+          <ProtectedRoute>
+            <Inbox />
           </ProtectedRoute>
         }
       />
