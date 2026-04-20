@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import Layout from "../components/Layout";
 import Lightbox, { type LightboxItem } from "../components/Lightbox";
+import { useAuth } from "../hooks/useAuth";
+import { apiFetch } from "../api/client";
 
 interface OrgProfile {
   id: string;
@@ -62,13 +64,80 @@ function isOpenNow(hours: Record<string, string>): { open: boolean; todayHours: 
   return { open, todayHours };
 }
 
+interface RfqOption { id: string; title: string | null; address: string | null }
+
 export default function OrgProfilePage() {
   const { orgId } = useParams<{ orgId: string }>();
+  const navigate = useNavigate();
+  const { user } = useAuth();
   const [org, setOrg] = useState<OrgProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [serviceFilter, setServiceFilter] = useState<string>("all");
+  const [messaging, setMessaging] = useState(false);
+  const [rfqOptions, setRfqOptions] = useState<RfqOption[] | null>(null);
+  const [rfqLoading, setRfqLoading] = useState(false);
+  const [startError, setStartError] = useState("");
+  const [starting, setStarting] = useState(false);
+
+  async function openMessage() {
+    if (!user) { navigate(`/login?redirect=${encodeURIComponent(location.pathname)}`); return; }
+    setMessaging(true);
+    setStartError("");
+    if (!rfqOptions) {
+      setRfqLoading(true);
+      try {
+        const data = await apiFetch<{ rfqs: RfqOption[] }>("/api/rfqs");
+        setRfqOptions(data.rfqs);
+      } catch {
+        setRfqOptions([]);
+      }
+      setRfqLoading(false);
+    }
+  }
+
+  async function startConversation(rfqId: string) {
+    if (!orgId) return;
+    setStarting(true);
+    setStartError("");
+    try {
+      const conv = await apiFetch<{ id: string }>("/api/conversations", {
+        method: "POST",
+        body: JSON.stringify({ rfq_id: rfqId, org_id: orgId }),
+      });
+      navigate(`/inbox?thread=${conv.id}`);
+    } catch (err: unknown) {
+      setStartError((err as Error).message || "Could not start conversation");
+    }
+    setStarting(false);
+  }
+
+  async function startGeneralInquiry() {
+    if (!orgId || !org) return;
+    setStarting(true);
+    setStartError("");
+    try {
+      // Create a lightweight RFQ so the backend has something to attach the
+      // thread to. The homeowner can flesh it out later or delete it.
+      const rfq = await apiFetch<{ id: string }>("/api/rfqs", {
+        method: "POST",
+        body: JSON.stringify({
+          title: `Inquiry — ${org.name}`,
+          description: `General inquiry to ${org.name}.`,
+          address: "",
+        }),
+      });
+      const conv = await apiFetch<{ id: string }>("/api/conversations", {
+        method: "POST",
+        body: JSON.stringify({ rfq_id: rfq.id, org_id: orgId }),
+      });
+      navigate(`/inbox?thread=${conv.id}`);
+    } catch (err: unknown) {
+      setStartError((err as Error).message || "Could not start inquiry");
+    }
+    setStarting(false);
+  }
 
   useEffect(() => {
     fetch(`/api/orgs/${orgId}`)
@@ -133,11 +202,82 @@ export default function OrgProfilePage() {
 
         {/* Links */}
         <div className="org-profile-links">
+          <button
+            type="button"
+            className="btn btn-primary"
+            style={{ fontSize: 13, padding: "6px 14px" }}
+            onClick={openMessage}
+          >
+            Message
+          </button>
           {org.website_url && <a href={org.website_url} target="_blank" rel="noopener noreferrer" className="btn" style={{ fontSize: 13, padding: "6px 14px" }}>Website</a>}
           {org.yelp_url && <a href={org.yelp_url} target="_blank" rel="noopener noreferrer" className="btn" style={{ fontSize: 13, padding: "6px 14px" }}>Yelp</a>}
           {org.google_reviews_url && <a href={org.google_reviews_url} target="_blank" rel="noopener noreferrer" className="btn" style={{ fontSize: 13, padding: "6px 14px" }}>Google Reviews</a>}
         </div>
       </div>
+
+      {messaging && (
+        <div className="modal-overlay" style={{ zIndex: 2000 }} onClick={() => !starting && setMessaging(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 440 }}>
+            <button className="modal-close" onClick={() => setMessaging(false)} disabled={starting}>×</button>
+            <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 6 }}>Message {org.name}</h3>
+            <p style={{ fontSize: 13, color: "var(--q-ink-muted)", marginBottom: 16 }}>
+              Attach a project for richer context, or start a general inquiry.
+            </p>
+
+            {rfqLoading && <div className="page-loading" style={{ minHeight: 80 }}><div className="spinner" /></div>}
+
+            {!rfqLoading && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 360, overflowY: "auto" }}>
+                {rfqOptions && rfqOptions.length > 0 && (
+                  <>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: "var(--q-ink-muted)", letterSpacing: 0.3, textTransform: "uppercase", marginTop: 2 }}>
+                      Your projects
+                    </div>
+                    {rfqOptions.map((r) => (
+                      <button
+                        key={r.id}
+                        type="button"
+                        onClick={() => startConversation(r.id)}
+                        disabled={starting}
+                        style={{
+                          textAlign: "left", padding: "10px 14px", border: "none", cursor: "pointer",
+                          background: "var(--q-surface-muted)", borderRadius: 10, fontFamily: "inherit",
+                          boxShadow: "inset 0 0 0 0.5px var(--q-hairline)",
+                        }}
+                      >
+                        <div style={{ fontSize: 14, fontWeight: 700, color: "var(--q-ink)" }}>{r.title || "Untitled project"}</div>
+                        {r.address && <div style={{ fontSize: 12, color: "var(--q-ink-muted)", marginTop: 2 }}>{r.address}</div>}
+                      </button>
+                    ))}
+                  </>
+                )}
+
+                <div style={{ fontSize: 11, fontWeight: 700, color: "var(--q-ink-muted)", letterSpacing: 0.3, textTransform: "uppercase", marginTop: rfqOptions && rfqOptions.length ? 10 : 2 }}>
+                  No project yet?
+                </div>
+                <button
+                  type="button"
+                  onClick={startGeneralInquiry}
+                  disabled={starting}
+                  style={{
+                    textAlign: "left", padding: "10px 14px", border: "none", cursor: "pointer",
+                    background: "var(--q-primary-soft)", borderRadius: 10, fontFamily: "inherit",
+                    boxShadow: "inset 0 0 0 0.5px var(--q-hairline)",
+                  }}
+                >
+                  <div style={{ fontSize: 14, fontWeight: 700, color: "var(--q-primary)" }}>Start a general inquiry</div>
+                  <div style={{ fontSize: 12, color: "var(--q-ink-muted)", marginTop: 2 }}>
+                    Ask {org.name} a question before scanning a room.
+                  </div>
+                </button>
+              </div>
+            )}
+
+            {startError && <div style={{ marginTop: 12, color: "var(--q-danger)", fontSize: 13 }}>{startError}</div>}
+          </div>
+        </div>
+      )}
 
       <div className="org-profile-body">
         {/* Left column */}

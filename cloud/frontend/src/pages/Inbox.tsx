@@ -34,7 +34,7 @@ interface ThreadSummary {
 
 interface Attachment {
   blob_path: string;
-  url?: string | null;
+  download_url?: string | null;
   content_type: string | null;
   name: string | null;
   size_bytes: number | null;
@@ -115,7 +115,11 @@ export default function Inbox() {
         setThreads(data.conversations);
         setEffectiveRole(data.role);
         if (!selectedId && data.conversations.length > 0) {
-          setParams({ thread: data.conversations[0].id }, { replace: true });
+          // Preserve existing params (like ?tab=inbox) when auto-selecting.
+          setParams((prev) => {
+            prev.set("thread", data.conversations[0].id);
+            return prev;
+          }, { replace: true });
         }
       })
       .catch((err) => { if (!cancelled) setError((err as Error).message || "Failed to load"); })
@@ -144,7 +148,10 @@ export default function Inbox() {
   }, [selectedId, detail]);
 
   function handleSelect(threadId: string) {
-    setParams({ thread: threadId }, { replace: true });
+    setParams((prev) => {
+      prev.set("thread", threadId);
+      return prev;
+    }, { replace: true });
   }
 
   async function handleSend(body: string, attachments: Attachment[]) {
@@ -367,21 +374,74 @@ function MessageItem({ msg, role }: { msg: Message; role: Role }) {
 }
 
 function AttachmentView({ att }: { att: Attachment }) {
-  const url = att.url || undefined;
+  const url = att.download_url || undefined;
   const isImage = (att.content_type || "").startsWith("image/");
+  const isPdf = (att.content_type || "") === "application/pdf";
+  const filename = att.name || (isPdf ? "Document.pdf" : "Attachment");
+
+  async function triggerDownload(e: React.MouseEvent) {
+    if (!url) return;
+    e.preventDefault();
+    try {
+      const resp = await fetch(url);
+      const blob = await resp.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objectUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(objectUrl);
+    } catch {
+      // Cross-origin download failed — fall back to opening in new tab.
+      window.open(url, "_blank", "noopener,noreferrer");
+    }
+  }
+
   if (isImage && url) {
     return (
-      <a href={url} target="_blank" rel="noopener noreferrer" className="ib-att ib-att-image">
-        <img src={url} alt={att.name || ""} />
-      </a>
+      <div className="ib-att ib-att-image">
+        <a href={url} target="_blank" rel="noopener noreferrer" aria-label={`Open ${filename}`}>
+          <img src={url} alt={filename} />
+        </a>
+        <button
+          type="button"
+          className="ib-att-download"
+          onClick={triggerDownload}
+          aria-label={`Download ${filename}`}
+          title="Download"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" /><path d="M7 10l5 5 5-5" /><path d="M12 15V3" />
+          </svg>
+        </button>
+      </div>
     );
   }
+
   return (
-    <a href={url} target="_blank" rel="noopener noreferrer" className="ib-att ib-att-file">
-      <span className="ib-att-ico">FILE</span>
-      <span className="ib-att-name">{att.name || "Attachment"}</span>
-    </a>
+    <div className="ib-att ib-att-file">
+      <span className="ib-att-ico">{isPdf ? "PDF" : "FILE"}</span>
+      <div className="ib-att-info">
+        <a href={url} target="_blank" rel="noopener noreferrer" className="ib-att-name">{filename}</a>
+        {att.size_bytes ? (
+          <span className="ib-att-size">{fmtFileSize(att.size_bytes)}</span>
+        ) : null}
+      </div>
+      <button type="button" className="ib-att-download" onClick={triggerDownload} title="Download" aria-label={`Download ${filename}`}>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" /><path d="M7 10l5 5 5-5" /><path d="M12 15V3" />
+        </svg>
+      </button>
+    </div>
   );
+}
+
+function fmtFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function formatEventBody(m: Message): string {
@@ -631,18 +691,53 @@ const IB_CSS = `
   background: var(--q-primary); color: var(--q-primary-ink); box-shadow: none;
 }
 .ib-bubble-text { white-space: pre-wrap; }
-.ib-bubble-atts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-.ib-att-image img { width: 120px; height: 90px; object-fit: cover; border-radius: 8px; display: block; }
+.ib-bubble-atts { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.ib-bubble:has(.ib-att-image:only-child) { padding: 4px; }
+
+.ib-att-image {
+  position: relative; display: block; border-radius: 12px; overflow: hidden;
+  line-height: 0;
+}
+.ib-att-image img {
+  display: block; width: 100%; height: auto;
+  max-height: 320px; object-fit: cover; border-radius: 12px;
+}
+.ib-att-download {
+  position: absolute; top: 8px; right: 8px; width: 28px; height: 28px;
+  border-radius: 50%; border: none; cursor: pointer;
+  background: rgba(20, 26, 22, 0.6); color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  opacity: 0; transition: opacity 0.15s, background 0.15s;
+  backdrop-filter: blur(6px);
+}
+.ib-att-image:hover .ib-att-download { opacity: 1; }
+.ib-att-download:hover { background: rgba(20, 26, 22, 0.85); }
+
 .ib-att-file {
-  display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px;
-  background: rgba(255,255,255,0.18); color: inherit; text-decoration: none;
-  border-radius: 8px; font-size: 12px;
+  display: flex; align-items: center; gap: 10px; padding: 8px 10px;
+  background: rgba(255,255,255,0.18); color: inherit;
+  border-radius: 10px; font-size: 12px;
 }
 .ib-msg:not(.is-mine) .ib-att-file { background: var(--q-surface-muted); }
 .ib-att-ico {
-  font-size: 9px; font-weight: 800; padding: 2px 4px; border-radius: 3px;
-  background: #C8342C; color: #fff; letter-spacing: 0.3px;
+  font-size: 9px; font-weight: 800; padding: 3px 5px; border-radius: 4px;
+  background: #C8342C; color: #fff; letter-spacing: 0.3px; flex-shrink: 0;
 }
+.ib-att-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ib-att-name {
+  font-size: 13px; font-weight: 600; color: inherit; text-decoration: none;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ib-att-name:hover { text-decoration: underline; }
+.ib-att-size { font-size: 11px; opacity: 0.7; }
+.ib-att-file .ib-att-download {
+  position: static; opacity: 1; width: 28px; height: 28px;
+  background: rgba(0,0,0,0.08); color: inherit;
+  backdrop-filter: none; flex-shrink: 0;
+}
+.ib-att-file .ib-att-download:hover { background: rgba(0,0,0,0.16); }
+.ib-msg.is-mine .ib-att-file .ib-att-download { background: rgba(255,255,255,0.2); color: #fff; }
+.ib-msg.is-mine .ib-att-file .ib-att-download:hover { background: rgba(255,255,255,0.32); }
 .ib-msg-time {
   font-size: 10px; color: var(--q-ink-muted); margin-top: 4px; padding: 0 4px;
 }

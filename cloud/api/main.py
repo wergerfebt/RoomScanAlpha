@@ -891,8 +891,29 @@ async def submit_bid(
             )
             contractor_id = str(cursor.fetchone()[0])
 
-        bid_id = str(uuid.uuid4())
-        pdf_url = None
+        # If the caller already has a pending bid for this RFQ (same org, or
+        # same contractor when no org), update it in place instead of creating
+        # a second row. Accepted/rejected bids stay frozen.
+        if org_id:
+            cursor.execute(
+                """SELECT id, pdf_url FROM bids
+                   WHERE rfq_id = %s AND org_id = %s AND status = 'pending'
+                   ORDER BY received_at DESC LIMIT 1""",
+                (rfq_id, org_id),
+            )
+        else:
+            cursor.execute(
+                """SELECT id, pdf_url FROM bids
+                   WHERE rfq_id = %s AND contractor_id = %s AND org_id IS NULL AND status = 'pending'
+                   ORDER BY received_at DESC LIMIT 1""",
+                (rfq_id, contractor_id),
+            )
+        existing = cursor.fetchone()
+        is_update = existing is not None
+
+        bid_id = str(existing[0]) if is_update else str(uuid.uuid4())
+        existing_pdf_url = existing[1] if is_update else None
+        pdf_url = existing_pdf_url  # keep prior PDF unless caller sends a new file
 
         if pdf and pdf.filename:
             blob_path = f"bids/{rfq_id}/{bid_id}.pdf"
@@ -911,11 +932,20 @@ async def submit_bid(
                 access_token=_credentials.token,
             )
 
-        cursor.execute(
-            """INSERT INTO bids (id, rfq_id, contractor_id, org_id, price_cents, description, pdf_url, received_at)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())""",
-            (bid_id, rfq_id, contractor_id, org_id, price_cents, description, pdf_url),
-        )
+        if is_update:
+            cursor.execute(
+                """UPDATE bids
+                   SET price_cents = %s, description = %s, pdf_url = %s,
+                       received_at = NOW(), rfq_modified_after_bid = FALSE
+                   WHERE id = %s""",
+                (price_cents, description, pdf_url, bid_id),
+            )
+        else:
+            cursor.execute(
+                """INSERT INTO bids (id, rfq_id, contractor_id, org_id, price_cents, description, pdf_url, received_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())""",
+                (bid_id, rfq_id, contractor_id, org_id, price_cents, description, pdf_url),
+            )
 
         # Auto-post the bid into the inbox conversation (creating it if needed).
         # Wrapped to avoid blocking the bid insert if anything goes wrong here.
