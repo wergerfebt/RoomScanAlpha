@@ -624,6 +624,13 @@ async def update_rfq(rfq_id: str, request: Request, authorization: str = Header(
         )
         flagged = cursor.rowcount
 
+        # Notify existing threads that the project changed
+        if flagged:
+            try:
+                _post_rfq_updated_event(cursor, rfq_id)
+            except Exception as e:
+                print(f"[Inbox] Failed to post rfq_updated event: {e}")
+
         conn.commit()
     finally:
         conn.close()
@@ -909,6 +916,18 @@ async def submit_bid(
                VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())""",
             (bid_id, rfq_id, contractor_id, org_id, price_cents, description, pdf_url),
         )
+
+        # Auto-post the bid into the inbox conversation (creating it if needed).
+        # Wrapped to avoid blocking the bid insert if anything goes wrong here.
+        if org_id:
+            try:
+                _post_bid_events(
+                    cursor, rfq_id=rfq_id, org_id=org_id, bid_id=bid_id,
+                    price_cents=price_cents, description=description, pdf_url=pdf_url,
+                )
+            except Exception as e:
+                print(f"[Inbox] Failed to post bid event: {e}")
+
         conn.commit()
 
         cursor.execute("SELECT received_at FROM bids WHERE id = %s", (bid_id,))
@@ -2694,6 +2713,19 @@ async def accept_bid(rfq_id: str, request: Request, authorization: str = Header(
         cursor.execute("UPDATE bids SET status = 'accepted' WHERE id = %s AND rfq_id = %s", (bid_id, rfq_id))
         cursor.execute("UPDATE bids SET status = 'rejected' WHERE rfq_id = %s AND id != %s AND status = 'pending'", (rfq_id, bid_id))
         cursor.execute("UPDATE rfqs SET hired_bid_id = %s, status = 'completed' WHERE id = %s", (bid_id, rfq_id))
+
+        # Post acceptance/rejection events into the relevant inbox threads
+        cursor.execute("SELECT org_id FROM bids WHERE id = %s", (bid_id,))
+        winning_org_row = cursor.fetchone()
+        if winning_org_row and winning_org_row[0]:
+            try:
+                _post_bid_decision_events(
+                    cursor, rfq_id=rfq_id, winning_bid_id=bid_id,
+                    winning_org_id=str(winning_org_row[0]),
+                )
+            except Exception as e:
+                print(f"[Inbox] Failed to post bid-decision events: {e}")
+
         conn.commit()
 
         # Fetch data for notification emails
@@ -3083,6 +3115,777 @@ async def update_org_services(request: Request, authorization: str = Header(None
         conn.close()
 
     return {"status": "updated", "count": len(service_ids)}
+
+
+# --- Conversations / Inbox ---
+#
+# A conversation is a persistent thread between one homeowner and one contractor
+# org, scoped to a single RFQ. Messages come in three kinds:
+#   - text: user-authored message with optional attachments (images + files)
+#   - event: system-generated lifecycle marker (bid submitted, accepted, etc.)
+#   - bid: rich bid card embedded in the thread (snapshot of a bids row)
+#
+# The design calls for unified inboxes on both sides. Threads surface unread
+# counts, last-message previews, and a derived kind label ('rfq' | 'bid' | 'won'
+# | 'msg') computed from the current bid state of the associated RFQ.
+
+ATTACHMENT_TYPES = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+    "image/heic": ".heic",
+    "application/pdf": ".pdf",
+}
+
+ATTACHMENT_MAX_SIGNED_URL_HOURS = 6
+
+
+def _sign_attachment_get(blob_path: str) -> str:
+    """Generate a short-lived signed read URL for an attachment blob."""
+    if not _credentials.token or not _credentials.valid:
+        _credentials.refresh(_auth_request)
+    bucket = storage_client.bucket(BUCKET_NAME)
+    return bucket.blob(blob_path).generate_signed_url(
+        version="v4",
+        expiration=datetime.timedelta(hours=ATTACHMENT_MAX_SIGNED_URL_HOURS),
+        method="GET",
+        service_account_email=SIGNING_SA_EMAIL,
+        access_token=_credentials.token,
+    )
+
+
+def _resolve_attachments(attachments: Optional[list]) -> list:
+    """Add signed `download_url` to each attachment entry for client rendering."""
+    if not attachments:
+        return []
+    out = []
+    for a in attachments:
+        if not isinstance(a, dict):
+            continue
+        entry = dict(a)
+        bp = a.get("blob_path")
+        if bp:
+            try:
+                entry["download_url"] = _sign_attachment_get(bp)
+            except Exception:
+                entry["download_url"] = None
+        out.append(entry)
+    return out
+
+
+def _event_preview(event_type: str, bid_snapshot: Optional[dict]) -> str:
+    """Short one-line preview text for an event message, used in thread lists."""
+    if event_type == "bid_submitted":
+        if bid_snapshot and bid_snapshot.get("price_cents"):
+            return f"New bid · ${bid_snapshot['price_cents'] / 100:,.0f}"
+        return "New bid submitted"
+    if event_type == "bid_accepted":
+        return "Hired — bid accepted"
+    if event_type == "bid_rejected":
+        return "Another contractor was selected"
+    if event_type == "rfq_updated":
+        return "Homeowner updated the project"
+    if event_type == "thread_started":
+        return "Conversation started"
+    return "Update"
+
+
+def _resolve_rfq_homeowner(cursor, rfq_id: str) -> Optional[str]:
+    """Return the RFQ owner's account_id, backfilling from legacy Firebase UID if possible."""
+    cursor.execute(
+        """SELECT r.homeowner_account_id, r.user_id, a.id
+           FROM rfqs r
+           LEFT JOIN accounts a ON a.firebase_uid = r.user_id
+           WHERE r.id = %s""",
+        (rfq_id,),
+    )
+    row = cursor.fetchone()
+    if not row:
+        return None
+    ho_account_id, legacy_uid, legacy_account_id = row
+    if ho_account_id:
+        return str(ho_account_id)
+    if legacy_account_id:
+        cursor.execute(
+            "UPDATE rfqs SET homeowner_account_id = %s WHERE id = %s",
+            (legacy_account_id, rfq_id),
+        )
+        return str(legacy_account_id)
+    return None
+
+
+def _ensure_conversation(cursor, rfq_id: str, homeowner_account_id: str, org_id: str) -> str:
+    """Upsert a conversation row for the (rfq, homeowner, org) tuple and return its id."""
+    cursor.execute(
+        """INSERT INTO conversations (rfq_id, homeowner_account_id, org_id)
+           VALUES (%s, %s, %s)
+           ON CONFLICT (rfq_id, homeowner_account_id, org_id)
+           DO UPDATE SET rfq_id = EXCLUDED.rfq_id
+           RETURNING id""",
+        (rfq_id, homeowner_account_id, org_id),
+    )
+    return str(cursor.fetchone()[0])
+
+
+def _insert_message(cursor, *, conversation_id: str, side: str, kind: str,
+                    sender_account_id: Optional[str] = None,
+                    body: Optional[str] = None,
+                    event_type: Optional[str] = None,
+                    bid_id: Optional[str] = None,
+                    bid_snapshot: Optional[dict] = None,
+                    attachments: Optional[list] = None) -> tuple[str, datetime.datetime]:
+    """Insert a message and update the conversation's last-message + unread counters.
+
+    Side semantics: 'homeowner' bumps org_unread_count; 'org' bumps homeowner_unread_count;
+    'system' bumps both (system events are informational for both parties).
+    """
+    preview_source = body if body else _event_preview(event_type, bid_snapshot)
+    preview = (preview_source or "")[:200]
+    cursor.execute(
+        """INSERT INTO messages (conversation_id, sender_account_id, side, kind, body,
+                                 event_type, bid_id, bid_snapshot, attachments)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+           RETURNING id, created_at""",
+        (
+            conversation_id,
+            sender_account_id,
+            side,
+            kind,
+            body,
+            event_type,
+            bid_id,
+            json.dumps(bid_snapshot) if bid_snapshot else None,
+            json.dumps(attachments) if attachments else None,
+        ),
+    )
+    mid, created_at = cursor.fetchone()
+
+    if side == "homeowner":
+        cursor.execute(
+            """UPDATE conversations
+               SET last_message_at = %s, last_message_preview = %s, last_message_side = %s,
+                   org_unread_count = org_unread_count + 1
+               WHERE id = %s""",
+            (created_at, preview, side, conversation_id),
+        )
+    elif side == "org":
+        cursor.execute(
+            """UPDATE conversations
+               SET last_message_at = %s, last_message_preview = %s, last_message_side = %s,
+                   homeowner_unread_count = homeowner_unread_count + 1
+               WHERE id = %s""",
+            (created_at, preview, side, conversation_id),
+        )
+    else:
+        cursor.execute(
+            """UPDATE conversations
+               SET last_message_at = %s, last_message_preview = %s, last_message_side = %s,
+                   homeowner_unread_count = homeowner_unread_count + 1,
+                   org_unread_count = org_unread_count + 1
+               WHERE id = %s""",
+            (created_at, preview, side, conversation_id),
+        )
+    return str(mid), created_at
+
+
+def _derive_thread_kind(latest_bid_status: Optional[str], is_hired: bool) -> tuple[str, str]:
+    """Map current bid state → (kind, kindLabel) for thread list display."""
+    if is_hired:
+        return "won", "Hired"
+    if latest_bid_status == "accepted":
+        return "won", "Hired"
+    if latest_bid_status == "pending":
+        return "bid", "Active bid"
+    if latest_bid_status == "rejected":
+        return "msg", "Closed"
+    return "rfq", "No bid yet"
+
+
+def _check_conversation_access(cursor, conversation_id: str, uid: str) -> tuple[str, str, dict]:
+    """Verify the caller can access the conversation. Returns (side, account_id, conversation_row).
+
+    side is 'homeowner' or 'org'. Raises 403 if the caller is neither the
+    homeowner nor a member of the conversation's org.
+    """
+    cursor.execute(
+        """SELECT id, rfq_id, homeowner_account_id, org_id,
+                  homeowner_last_read_at, org_last_read_at
+           FROM conversations WHERE id = %s""",
+        (conversation_id,),
+    )
+    row = cursor.fetchone()
+    if not row:
+        raise HTTPException(404, "Conversation not found")
+    conv = {
+        "id": str(row[0]), "rfq_id": str(row[1]),
+        "homeowner_account_id": str(row[2]), "org_id": str(row[3]),
+        "homeowner_last_read_at": row[4], "org_last_read_at": row[5],
+    }
+
+    cursor.execute("SELECT id FROM accounts WHERE firebase_uid = %s", (uid,))
+    acct = cursor.fetchone()
+    if not acct:
+        raise HTTPException(403, "No account found for caller")
+    account_id = str(acct[0])
+
+    if account_id == conv["homeowner_account_id"]:
+        return "homeowner", account_id, conv
+
+    cursor.execute(
+        """SELECT 1 FROM org_members
+           WHERE org_id = %s AND account_id = %s AND invite_status = 'accepted'""",
+        (conv["org_id"], account_id),
+    )
+    if cursor.fetchone():
+        return "org", account_id, conv
+
+    raise HTTPException(403, "Not a participant in this conversation")
+
+
+def _send_new_message_email(*, recipients: list, sender_name: str, rfq_title: str,
+                             preview: str, counterpart_label: str, is_for_homeowner: bool) -> None:
+    """Notify the opposite side that a new chat message was posted."""
+    sendgrid_key = os.environ.get("SENDGRID_API_KEY", "")
+    if not sendgrid_key or not recipients:
+        return
+    try:
+        from sendgrid import SendGridAPIClient
+
+        inbox_url = f"{FRONTEND_URL}/inbox" if is_for_homeowner else f"{FRONTEND_URL}/org?tab=inbox"
+        safe_preview = (preview or "").strip()[:280].replace("<", "&lt;").replace(">", "&gt;")
+        html = f"""
+<h2>New message from {sender_name}</h2>
+<p style="font-size:13px;color:#888;margin:4px 0 16px">Project: {rfq_title}</p>
+<div style="padding:14px 18px;background:#f5f6f8;border-radius:10px;font-size:15px;color:#333;line-height:1.5;margin:12px 0">
+  {safe_preview or '<em>(attachment sent)</em>'}
+</div>
+<a href="{inbox_url}" style="display:inline-block;padding:12px 28px;background:#0055cc;color:#fff;
+   text-decoration:none;font-weight:700;font-size:15px;border-radius:8px;margin-top:12px">
+  Open Inbox
+</a>
+<p style="font-size:12px;color:#888;margin-top:20px">Replying to this email does not send a reply — open the inbox to respond.</p>
+"""
+        sg = SendGridAPIClient(sendgrid_key)
+        for email_addr in recipients:
+            if not email_addr or "@unknown" in email_addr:
+                continue
+            sg.send(_make_mail(
+                from_email="notifications@roomscanalpha.com",
+                to_emails=email_addr,
+                subject=f"{sender_name}: {rfq_title}",
+                html_content=html,
+            ))
+    except Exception as e:
+        print(f"[Email] Failed to send new-message email: {e}")
+
+
+def _post_bid_events(cursor, *, rfq_id: str, org_id: str, bid_id: str,
+                     price_cents: int, description: Optional[str],
+                     pdf_url: Optional[str]) -> Optional[str]:
+    """Create (or ensure) a conversation and post bid_submitted event + bid card.
+
+    Returns the conversation_id, or None if the RFQ has no resolvable homeowner account.
+    """
+    homeowner_account_id = _resolve_rfq_homeowner(cursor, rfq_id)
+    if not homeowner_account_id:
+        return None
+    conv_id = _ensure_conversation(cursor, rfq_id, homeowner_account_id, org_id)
+    bid_snapshot = {
+        "price_cents": price_cents,
+        "description": description,
+        "pdf_url": pdf_url,
+    }
+    _insert_message(
+        cursor, conversation_id=conv_id, side="system", kind="event",
+        event_type="bid_submitted", bid_id=bid_id, bid_snapshot=bid_snapshot,
+    )
+    _insert_message(
+        cursor, conversation_id=conv_id, side="org", kind="bid",
+        bid_id=bid_id, bid_snapshot=bid_snapshot,
+    )
+    return conv_id
+
+
+def _post_bid_decision_events(cursor, *, rfq_id: str, winning_bid_id: str,
+                              winning_org_id: str) -> None:
+    """Post bid_accepted event to the winning thread; bid_rejected to losing threads."""
+    # Winning thread
+    cursor.execute(
+        """SELECT id FROM conversations
+           WHERE rfq_id = %s AND org_id = %s""",
+        (rfq_id, winning_org_id),
+    )
+    row = cursor.fetchone()
+    if row:
+        _insert_message(
+            cursor, conversation_id=str(row[0]), side="system", kind="event",
+            event_type="bid_accepted", bid_id=winning_bid_id,
+        )
+
+    # Losing threads — any conversation for this RFQ whose org is NOT the winner
+    cursor.execute(
+        """SELECT id FROM conversations
+           WHERE rfq_id = %s AND org_id != %s""",
+        (rfq_id, winning_org_id),
+    )
+    for loser_row in cursor.fetchall():
+        _insert_message(
+            cursor, conversation_id=str(loser_row[0]), side="system", kind="event",
+            event_type="bid_rejected",
+        )
+
+
+def _post_rfq_updated_event(cursor, rfq_id: str) -> None:
+    """Post an rfq_updated event into every conversation attached to this RFQ."""
+    cursor.execute("SELECT id FROM conversations WHERE rfq_id = %s", (rfq_id,))
+    for row in cursor.fetchall():
+        _insert_message(
+            cursor, conversation_id=str(row[0]), side="system", kind="event",
+            event_type="rfq_updated",
+        )
+
+
+@app.get("/api/inbox")
+def list_inbox(role: str = "auto", authorization: str = Header(None)) -> dict:
+    """Return the caller's conversation threads.
+
+    Query param `role`:
+      - 'homeowner': threads where caller is the homeowner
+      - 'org': threads for the caller's contractor org (any member can view)
+      - 'auto' (default): org if caller belongs to one, else homeowner
+    """
+    decoded = verify_firebase_token(authorization)
+    uid = decoded["uid"]
+    email = decoded.get("email", f"{uid}@unknown")
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """INSERT INTO accounts (firebase_uid, email, type)
+               VALUES (%s, %s, 'homeowner')
+               ON CONFLICT (firebase_uid) DO UPDATE SET email = EXCLUDED.email
+               RETURNING id""",
+            (uid, email),
+        )
+        account_id = str(cursor.fetchone()[0])
+        conn.commit()
+
+        cursor.execute(
+            """SELECT o.id FROM org_members om
+               JOIN organizations o ON o.id = om.org_id
+               WHERE om.account_id = %s AND om.invite_status = 'accepted' AND o.deleted_at IS NULL
+               LIMIT 1""",
+            (account_id,),
+        )
+        org_row = cursor.fetchone()
+        org_id = str(org_row[0]) if org_row else None
+
+        effective = role if role in ("homeowner", "org") else ("org" if org_id else "homeowner")
+        if effective == "org" and not org_id:
+            raise HTTPException(403, "Not a member of any organization")
+
+        if effective == "homeowner":
+            where_clause = "c.homeowner_account_id = %s"
+            where_param = account_id
+        else:
+            where_clause = "c.org_id = %s"
+            where_param = org_id
+
+        cursor.execute(
+            f"""SELECT c.id, c.rfq_id, c.last_message_at, c.last_message_preview,
+                       c.last_message_side, c.homeowner_unread_count, c.org_unread_count,
+                       c.created_at,
+                       r.title, r.address, r.hired_bid_id,
+                       a.id, a.name, a.email, a.icon_url,
+                       o.id, o.name, o.icon_url,
+                       (SELECT b.price_cents FROM bids b
+                          WHERE b.rfq_id = c.rfq_id AND b.org_id = c.org_id
+                          ORDER BY b.received_at DESC LIMIT 1) AS latest_price,
+                       (SELECT b.status FROM bids b
+                          WHERE b.rfq_id = c.rfq_id AND b.org_id = c.org_id
+                          ORDER BY b.received_at DESC LIMIT 1) AS latest_bid_status,
+                       (SELECT b.id FROM bids b
+                          WHERE b.rfq_id = c.rfq_id AND b.org_id = c.org_id
+                          ORDER BY b.received_at DESC LIMIT 1) AS latest_bid_id
+                FROM conversations c
+                JOIN rfqs r ON r.id = c.rfq_id
+                JOIN accounts a ON a.id = c.homeowner_account_id
+                JOIN organizations o ON o.id = c.org_id
+                WHERE {where_clause}
+                ORDER BY c.last_message_at DESC NULLS LAST, c.created_at DESC
+                LIMIT 100""",
+            (where_param,),
+        )
+        rows = cursor.fetchall()
+    finally:
+        conn.close()
+
+    threads = []
+    for r in rows:
+        (conv_id, rfq_id, last_at, preview, last_side, ho_unread, org_unread, created_at,
+         rfq_title, rfq_addr, hired_bid_id,
+         ho_id, ho_name, ho_email, ho_icon,
+         o_id, o_name, o_icon,
+         latest_price, latest_bid_status, latest_bid_id) = r
+
+        is_hired = hired_bid_id is not None and latest_bid_id is not None and str(hired_bid_id) == str(latest_bid_id)
+        kind, kind_label = _derive_thread_kind(latest_bid_status, is_hired)
+        if kind == "bid" and latest_price:
+            kind_label = f"Active bid · ${latest_price / 100:,.0f}"
+        if kind == "won" and latest_price:
+            kind_label = f"Hired · ${latest_price / 100:,.0f}"
+
+        unread = ho_unread if effective == "homeowner" else org_unread
+        counterpart = {
+            "type": "org", "id": str(o_id), "name": o_name, "icon_url": _sign_icon_url(o_icon),
+        } if effective == "homeowner" else {
+            "type": "homeowner", "id": str(ho_id), "name": ho_name,
+            "email": ho_email, "icon_url": _sign_icon_url(ho_icon),
+        }
+        threads.append({
+            "id": conv_id if isinstance(conv_id, str) else str(conv_id),
+            "rfq_id": str(rfq_id),
+            "rfq_title": rfq_title or "Untitled Project",
+            "rfq_address": rfq_addr,
+            "counterpart": counterpart,
+            "last_message_at": last_at.isoformat() if last_at else None,
+            "last_message_preview": preview,
+            "last_message_side": last_side,
+            "unread_count": int(unread or 0),
+            "kind": kind,
+            "kind_label": kind_label,
+            "latest_bid": {
+                "id": str(latest_bid_id), "price_cents": latest_price, "status": latest_bid_status,
+            } if latest_bid_id else None,
+            "created_at": created_at.isoformat() if created_at else None,
+        })
+
+    return {"conversations": threads, "role": effective, "org_id": org_id}
+
+
+@app.post("/api/conversations")
+async def create_conversation(request: Request, authorization: str = Header(None)) -> dict:
+    """Homeowner starts a new thread with a contractor org about one of their RFQs.
+
+    Body: { rfq_id, org_id }. Requires an authenticated account and that the caller
+    owns the RFQ. Idempotent — returns the existing conversation if one already exists.
+    """
+    decoded = verify_firebase_token(authorization)
+    uid = decoded["uid"]
+    body = await request.json()
+    rfq_id = body.get("rfq_id")
+    org_id = body.get("org_id")
+    if not rfq_id or not org_id:
+        raise HTTPException(400, "rfq_id and org_id are required")
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT id FROM accounts WHERE firebase_uid = %s", (uid,))
+        acct = cursor.fetchone()
+        if not acct:
+            raise HTTPException(403, "Account not found — sign in required")
+        caller_account_id = str(acct[0])
+
+        # Verify caller owns the RFQ (resolves legacy user_id → account_id)
+        homeowner_account_id = _resolve_rfq_homeowner(cursor, rfq_id)
+        if not homeowner_account_id:
+            raise HTTPException(404, "RFQ not found")
+        if homeowner_account_id != caller_account_id:
+            raise HTTPException(403, "Only the RFQ owner can start a conversation")
+
+        cursor.execute("SELECT 1 FROM organizations WHERE id = %s AND deleted_at IS NULL", (org_id,))
+        if not cursor.fetchone():
+            raise HTTPException(404, "Organization not found")
+
+        conv_id = _ensure_conversation(cursor, rfq_id, homeowner_account_id, org_id)
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"id": conv_id, "rfq_id": rfq_id, "org_id": org_id}
+
+
+@app.get("/api/conversations/{conversation_id}")
+def get_conversation(conversation_id: str, authorization: str = Header(None)) -> dict:
+    """Fetch full conversation with ordered messages. Marks the caller's side as read."""
+    decoded = verify_firebase_token(authorization)
+    uid = decoded["uid"]
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        side, _account_id, conv = _check_conversation_access(cursor, conversation_id, uid)
+
+        cursor.execute(
+            """SELECT c.rfq_id, r.title, r.address,
+                      a.id, a.name, a.email, a.icon_url,
+                      o.id, o.name, o.icon_url
+               FROM conversations c
+               JOIN rfqs r ON r.id = c.rfq_id
+               JOIN accounts a ON a.id = c.homeowner_account_id
+               JOIN organizations o ON o.id = c.org_id
+               WHERE c.id = %s""",
+            (conversation_id,),
+        )
+        meta = cursor.fetchone()
+
+        cursor.execute(
+            """SELECT m.id, m.side, m.kind, m.body, m.event_type, m.bid_id,
+                      m.bid_snapshot, m.attachments, m.created_at,
+                      s.id, s.name, s.email, s.icon_url
+               FROM messages m
+               LEFT JOIN accounts s ON s.id = m.sender_account_id
+               WHERE m.conversation_id = %s
+               ORDER BY m.created_at ASC""",
+            (conversation_id,),
+        )
+        msg_rows = cursor.fetchall()
+
+        # Participants (homeowner + accepted org members)
+        cursor.execute(
+            """SELECT a.id, a.name, a.email, a.icon_url, 'homeowner'
+               FROM accounts a WHERE a.id = %s
+               UNION ALL
+               SELECT a.id, a.name, a.email, a.icon_url, om.role
+               FROM org_members om JOIN accounts a ON a.id = om.account_id
+               WHERE om.org_id = %s AND om.invite_status = 'accepted'""",
+            (conv["homeowner_account_id"], conv["org_id"]),
+        )
+        participant_rows = cursor.fetchall()
+
+        # Mark caller's side read
+        if side == "homeowner":
+            cursor.execute(
+                """UPDATE conversations
+                   SET homeowner_unread_count = 0, homeowner_last_read_at = NOW()
+                   WHERE id = %s""",
+                (conversation_id,),
+            )
+        else:
+            cursor.execute(
+                """UPDATE conversations
+                   SET org_unread_count = 0, org_last_read_at = NOW()
+                   WHERE id = %s""",
+                (conversation_id,),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    rfq_id, rfq_title, rfq_addr, ho_id, ho_name, ho_email, ho_icon, o_id, o_name, o_icon = meta
+
+    messages = []
+    for (mid, m_side, m_kind, m_body, ev, b_id, snap, atts, created,
+         s_id, s_name, s_email, s_icon) in msg_rows:
+        messages.append({
+            "id": str(mid),
+            "side": m_side,
+            "kind": m_kind,
+            "body": m_body,
+            "event_type": ev,
+            "bid_id": str(b_id) if b_id else None,
+            "bid_snapshot": snap,
+            "attachments": _resolve_attachments(atts),
+            "created_at": created.isoformat() if created else None,
+            "sender": {
+                "id": str(s_id), "name": s_name, "email": s_email,
+                "icon_url": _sign_icon_url(s_icon),
+            } if s_id else None,
+        })
+
+    participants = []
+    for p_id, p_name, p_email, p_icon, p_role in participant_rows:
+        participants.append({
+            "id": str(p_id), "name": p_name, "email": p_email,
+            "icon_url": _sign_icon_url(p_icon), "role": p_role,
+        })
+
+    return {
+        "id": conversation_id,
+        "rfq": {"id": str(rfq_id), "title": rfq_title or "Untitled Project", "address": rfq_addr},
+        "homeowner": {"id": str(ho_id), "name": ho_name, "email": ho_email, "icon_url": _sign_icon_url(ho_icon)},
+        "org": {"id": str(o_id), "name": o_name, "icon_url": _sign_icon_url(o_icon)},
+        "participants": participants,
+        "messages": messages,
+        "caller_side": side,
+    }
+
+
+@app.post("/api/conversations/{conversation_id}/messages")
+async def post_message(conversation_id: str, request: Request, authorization: str = Header(None)) -> dict:
+    """Send a text message (optionally with attachments) to a conversation."""
+    decoded = verify_firebase_token(authorization)
+    uid = decoded["uid"]
+    body_json = await request.json()
+    text = (body_json.get("body") or "").strip()
+    attachments = body_json.get("attachments") or []
+
+    if not text and not attachments:
+        raise HTTPException(400, "Message must have body or attachments")
+
+    # Validate attachments — only keep sanctioned blob_path shape to prevent caller
+    # from referencing arbitrary buckets/paths.
+    clean_attachments = []
+    for a in attachments:
+        if not isinstance(a, dict):
+            continue
+        bp = a.get("blob_path", "")
+        if not bp.startswith(f"conversations/{conversation_id}/"):
+            raise HTTPException(400, f"Invalid attachment blob_path: {bp}")
+        clean_attachments.append({
+            "blob_path": bp,
+            "content_type": a.get("content_type"),
+            "name": a.get("name"),
+            "size_bytes": a.get("size_bytes"),
+        })
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        side, account_id, conv = _check_conversation_access(cursor, conversation_id, uid)
+
+        mid, created_at = _insert_message(
+            cursor, conversation_id=conversation_id, side=side, kind="text",
+            sender_account_id=account_id, body=text or None,
+            attachments=clean_attachments or None,
+        )
+
+        # Gather notification recipients + metadata for email
+        cursor.execute(
+            """SELECT r.title, a.email, a.name
+               FROM conversations c
+               JOIN rfqs r ON r.id = c.rfq_id
+               JOIN accounts a ON a.id = %s
+               WHERE c.id = %s""",
+            (account_id, conversation_id),
+        )
+        meta = cursor.fetchone()
+        rfq_title = (meta[0] if meta else None) or "your project"
+        sender_name = (meta[2] if meta else None) or (meta[1].split("@")[0] if meta and meta[1] else "Someone")
+
+        if side == "homeowner":
+            cursor.execute(
+                """SELECT a.email FROM org_members om
+                   JOIN accounts a ON a.id = om.account_id
+                   WHERE om.org_id = %s AND om.invite_status = 'accepted'""",
+                (conv["org_id"],),
+            )
+            recipients = [r[0] for r in cursor.fetchall() if r[0]]
+            is_for_homeowner = False
+        else:
+            cursor.execute("SELECT email FROM accounts WHERE id = %s", (conv["homeowner_account_id"],))
+            row = cursor.fetchone()
+            recipients = [row[0]] if row and row[0] else []
+            is_for_homeowner = True
+
+        conn.commit()
+    finally:
+        conn.close()
+
+    _send_new_message_email(
+        recipients=recipients,
+        sender_name=sender_name,
+        rfq_title=rfq_title,
+        preview=text,
+        counterpart_label="",
+        is_for_homeowner=is_for_homeowner,
+    )
+
+    return {
+        "id": mid,
+        "conversation_id": conversation_id,
+        "side": side,
+        "kind": "text",
+        "body": text or None,
+        "attachments": _resolve_attachments(clean_attachments),
+        "created_at": created_at.isoformat() if created_at else None,
+    }
+
+
+@app.post("/api/conversations/{conversation_id}/read")
+def mark_conversation_read(conversation_id: str, authorization: str = Header(None)) -> dict:
+    """Zero the caller's unread count on this thread."""
+    decoded = verify_firebase_token(authorization)
+    uid = decoded["uid"]
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        side, _account_id, _conv = _check_conversation_access(cursor, conversation_id, uid)
+        if side == "homeowner":
+            cursor.execute(
+                """UPDATE conversations
+                   SET homeowner_unread_count = 0, homeowner_last_read_at = NOW()
+                   WHERE id = %s""",
+                (conversation_id,),
+            )
+        else:
+            cursor.execute(
+                """UPDATE conversations
+                   SET org_unread_count = 0, org_last_read_at = NOW()
+                   WHERE id = %s""",
+                (conversation_id,),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"status": "read"}
+
+
+@app.get("/api/conversations/{conversation_id}/attachment-upload-url")
+def conversation_attachment_upload_url(
+    conversation_id: str,
+    content_type: str = "image/jpeg",
+    filename: Optional[str] = None,
+    authorization: str = Header(None),
+) -> dict:
+    """Get a signed PUT URL for uploading a chat attachment to GCS.
+
+    Enforces:
+      - caller is a participant in the conversation
+      - content_type is in the allowlist (images + PDF)
+    Returned blob_path is `conversations/{conversation_id}/{uuid}{ext}` — the client
+    includes this in the subsequent POST /messages call.
+    """
+    decoded = verify_firebase_token(authorization)
+    uid = decoded["uid"]
+
+    if content_type not in ATTACHMENT_TYPES:
+        raise HTTPException(400, f"Unsupported content type. Allowed: {', '.join(ATTACHMENT_TYPES)}")
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        _check_conversation_access(cursor, conversation_id, uid)
+    finally:
+        conn.close()
+
+    ext = ATTACHMENT_TYPES[content_type]
+    attachment_id = str(uuid.uuid4())
+    blob_path = f"conversations/{conversation_id}/{attachment_id}{ext}"
+
+    _credentials.refresh(_auth_request)
+    bucket = storage_client.bucket(BUCKET_NAME)
+    upload_url = bucket.blob(blob_path).generate_signed_url(
+        version="v4",
+        expiration=datetime.timedelta(minutes=SIGNED_URL_EXPIRY_MINUTES),
+        method="PUT",
+        content_type=content_type,
+        service_account_email=SIGNING_SA_EMAIL,
+        access_token=_credentials.token,
+    )
+
+    return {
+        "upload_url": upload_url,
+        "blob_path": blob_path,
+        "content_type": content_type,
+        "filename": filename,
+    }
 
 
 @app.get("/health")
