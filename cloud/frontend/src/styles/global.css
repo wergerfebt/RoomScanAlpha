@@ -35,7 +35,7 @@ a:hover { text-decoration: underline; }
   background: var(--color-surface); color: var(--color-text);
   cursor: pointer; transition: all 0.15s;
 }
-.btn:hover { background: #f7f8fa; }
+.btn:hover { background: var(--q-surface-muted); }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .btn-primary {
@@ -182,7 +182,7 @@ a:hover { text-decoration: underline; }
   text-decoration: none; border-radius: var(--radius-md); margin-bottom: 2px;
   transition: all 0.12s;
 }
-.org-sidebar-item:hover { background: #f7f8fa; color: var(--color-text); text-decoration: none; }
+.org-sidebar-item:hover { background: var(--q-surface-muted); color: var(--color-text); text-decoration: none; }
 .org-sidebar-item.active {
   background: var(--color-info-bg); color: var(--color-primary); font-weight: 600;
 }
@@ -230,19 +230,19 @@ a:hover { text-decoration: underline; }
 /* Histogram */
 .filter-histogram { display: flex; align-items: flex-end; gap: 1px; height: 50px; margin-bottom: 8px; }
 .filter-hist-bar {
-  flex: 1; background: #c0c8d4; min-width: 3px; border-radius: 1px 1px 0 0; transition: background 0.15s;
+  flex: 1; background: var(--q-ink-dim); min-width: 3px; border-radius: 1px 1px 0 0; transition: background 0.15s;
 }
-.filter-hist-bar.active { background: #333; }
+.filter-hist-bar.active { background: var(--q-ink); }
 
 /* Range slider */
 .filter-range-track {
   position: relative; height: 4px; background: var(--color-border);
   border-radius: 2px; margin: 10px 0 14px;
 }
-.filter-range-fill { position: absolute; height: 100%; background: #333; border-radius: 2px; }
+.filter-range-fill { position: absolute; height: 100%; background: var(--q-ink); border-radius: 2px; }
 .filter-range-thumb {
   position: absolute; top: 50%; width: 20px; height: 20px;
-  background: var(--color-surface); border: 2px solid #333; border-radius: 50%;
+  background: var(--color-surface); border: 2px solid var(--q-ink); border-radius: 50%;
   transform: translate(-50%, -50%); cursor: grab; z-index: 2;
 }
 .filter-range-thumb:active { cursor: grabbing; box-shadow: 0 0 0 4px rgba(0,0,0,0.08); }
@@ -287,7 +287,7 @@ a:hover { text-decoration: underline; }
 .contractor-card-header {
   display: flex; align-items: center; padding: 14px 16px; cursor: pointer; gap: 10px;
 }
-.contractor-card-header:active { background: #f8f9fb; }
+.contractor-card-header:active { background: var(--q-surface-muted); }
 
 .contractor-card-icon {
   width: 34px; height: 34px; border-radius: var(--radius-md);
@@ -308,7 +308,7 @@ a:hover { text-decoration: underline; }
 .contractor-card-stars { color: #f5a623; font-weight: 700; }
 .contractor-card-badge-low {
   display: inline-block; font-size: 10px; font-weight: 700; padding: 2px 7px;
-  border-radius: 4px; text-transform: uppercase; background: #e8f5e9; color: #2e7d32;
+  border-radius: 4px; text-transform: uppercase; background: var(--q-primary-soft); color: var(--q-primary);
 }
 
 .contractor-card-price { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
@@ -317,7 +317,7 @@ a:hover { text-decoration: underline; }
   color: var(--color-primary); background: var(--color-info-bg);
   border: none; border-radius: var(--radius-sm); cursor: pointer; font-family: inherit;
 }
-.contractor-card-details-btn:hover { background: #d0e2fc; }
+.contractor-card-details-btn:hover { filter: brightness(0.96); }
 
 .contractor-card-detail {
   padding: 0 16px 16px; border-top: 1px solid var(--color-border-light);
@@ -332,29 +332,30 @@ a:hover { text-decoration: underline; }
 }
 .contractor-card-review-link:hover { text-decoration: underline; }
 .contractor-card-description {
-  font-size: 14px; line-height: 1.6; color: #3a3a3c; margin-bottom: 14px;
+  font-size: 14px; line-height: 1.6; color: var(--q-ink-soft); margin-bottom: 14px;
   white-space: pre-wrap; overflow-wrap: break-word; word-break: break-word;
 }
 .contractor-card-pdf {
   display: inline-flex; align-items: center; gap: 8px; padding: 10px 16px;
-  background: #f7f8fa; border: 1px solid var(--color-border); border-radius: var(--radius-md);
+  background: var(--q-surface-muted); border: 1px solid var(--color-border); border-radius: var(--radius-md);
   color: var(--color-primary); font-size: 14px; font-weight: 600; text-decoration: none;
 }
 .contractor-card-pdf:hover { background: var(--color-info-bg); text-decoration: none; }
 .contractor-card-date { font-size: 12px; color: var(--color-text-muted); margin-top: 10px; }
 .contractor-card-hire-btn {
   display: block; width: 100%; padding: 14px; margin-top: 14px;
-  background: #34c759; color: #fff; font-size: 16px; font-weight: 700;
-  border: none; border-radius: 10px; cursor: pointer; font-family: inherit;
+  background: var(--q-primary); color: var(--q-primary-ink); font-size: 16px; font-weight: 700;
+  border: none; border-radius: var(--q-radius-md); cursor: pointer; font-family: inherit;
+  transition: filter 0.15s;
 }
-.contractor-card-hire-btn:hover { background: #2db84d; }
+.contractor-card-hire-btn:hover { filter: brightness(0.92); }
 .contractor-card-collapse-btn {
   display: block; width: 100%; padding: 10px; margin-top: 8px;
   background: none; color: var(--color-text-muted); font-size: 13px; font-weight: 600;
   border: 1px solid var(--color-border); border-radius: var(--radius-md);
   cursor: pointer; font-family: inherit;
 }
-.contractor-card-collapse-btn:hover { background: #f7f8fa; }
+.contractor-card-collapse-btn:hover { background: var(--q-surface-muted); }
 
 /* Sidebar + main layout */
 .list-page-layout {

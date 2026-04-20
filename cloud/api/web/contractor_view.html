@@ -16,6 +16,20 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f2f4f8; color: #1d1d1f; overflow: hidden; height: 100vh; }
 
+  /* Embed mode — hide all chrome, show only the 3D canvas (+ measurement overlays).
+     Activated by body.embed via ?embed=1. */
+  body.embed .sidebar,
+  body.embed .sidebar-tab,
+  body.embed .top-bar,
+  body.embed .corner-thumb,
+  body.embed .joystick-zone,
+  body.embed .wasd-keys,
+  body.embed .fp-fullscreen,
+  body.embed .iso-fullscreen,
+  body.embed .modal,
+  body.embed .toast { display: none !important; }
+  body.embed .viewer-container { background: transparent; }
+
   /* Layout — sidebar overlays viewer as a slide-out drawer */
   .app { position: relative; height: 100vh; }
   .main-panel { width: 100%; height: 100%; display: flex; flex-direction: column; }
@@ -342,6 +356,12 @@ function getRfqId() {
 async function init() {
   const rfqId = getRfqId();
   if (!rfqId) { showError('Invalid link', 'No project ID found.'); return; }
+
+  // Minimal embed mode (?embed=1): hide chrome, leave only the 3D canvas.
+  // Pairs with ?bev=1 to auto-enable Bird's Eye on load.
+  if (new URLSearchParams(window.location.search).get('embed') === '1') {
+    document.body.classList.add('embed');
+  }
 
   try {
     const resp = await fetch(`${API_BASE}/api/rfqs/${rfqId}/contractor-view`);
@@ -1248,6 +1268,13 @@ async function loadRoom(index) {
     controls.enableZoom = false;
     controls.enablePan = false;
     controls.rotateSpeed = -0.3;
+  }
+
+  // Auto-enable Bird's Eye View when embedded with ?bev=1 (first load only).
+  if (!window.__bevAutoApplied
+      && new URLSearchParams(window.location.search).get('bev') === '1') {
+    window.__bevAutoApplied = true;
+    setTimeout(() => { if (!isBirdsEye) window.toggleViewMode(); }, 0);
   }
 
   // Store room polygon for wall collision

@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import Layout from "../components/Layout";
 import FloorPlan from "../components/FloorPlan";
 import { apiFetch } from "../api/client";
@@ -15,26 +16,11 @@ interface RFQ {
   bid_view_token?: string | null;
 }
 
-interface Room {
+interface RoomMini {
   scan_id: string;
   room_label: string;
   floor_area_sqft: number | null;
-  wall_area_sqft: number | null;
-  ceiling_height_ft: number | null;
-  perimeter_linear_ft: number | null;
   room_polygon_ft: number[][] | null;
-  detected_components: { detected?: string[]; details?: Record<string, { qty?: number; unit?: string }> } | null;
-  scope: { items?: string[]; notes?: string } | null;
-  scan_status: string;
-}
-
-interface ProjectDetail {
-  rfq_id: string;
-  title: string;
-  address: string | null;
-  job_description: string | null;
-  project_scope: string | null;
-  rooms: Room[];
 }
 
 function fmtDate(iso: string | null): string {
@@ -42,23 +28,13 @@ function fmtDate(iso: string | null): string {
   return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
-function fmtNum(n: number | null): string {
-  if (n == null) return "—";
-  return n.toLocaleString("en-US", { maximumFractionDigits: 1 });
-}
-
-function statusLabel(s: string): string {
-  return s.replace(/_/g, " ");
-}
-
-function formatLabel(key: string): string {
-  return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-}
+type FilterKey = "all" | "awaiting" | "active" | "hired";
 
 export default function Projects() {
   const [rfqs, setRfqs] = useState<RFQ[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [filter, setFilter] = useState<FilterKey>("all");
 
   useEffect(() => {
     apiFetch<{ rfqs: RFQ[] }>("/api/rfqs")
@@ -67,273 +43,252 @@ export default function Projects() {
       .finally(() => setLoading(false));
   }, []);
 
+  const counts = useMemo(() => ({
+    all: rfqs.length,
+    awaiting: rfqs.filter((r) => (r.bid_count ?? 0) === 0 && r.status !== "completed").length,
+    active: rfqs.filter((r) => (r.bid_count ?? 0) > 0 && r.status !== "completed").length,
+    hired: rfqs.filter((r) => r.status === "completed").length,
+  }), [rfqs]);
+
+  const filtered = useMemo(() => rfqs.filter((r) => {
+    switch (filter) {
+      case "awaiting": return (r.bid_count ?? 0) === 0 && r.status !== "completed";
+      case "active":   return (r.bid_count ?? 0) > 0 && r.status !== "completed";
+      case "hired":    return r.status === "completed";
+      default:         return true;
+    }
+  }), [rfqs, filter]);
+
   return (
     <Layout>
-      <div style={{ maxWidth: "var(--max-width)", margin: "0 auto", padding: "24px 24px 60px" }}>
-        <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 24 }}>My Projects</h1>
+      <div className="pl-wrap">
+        <header className="pl-header">
+          <div>
+            <div className="pl-eyebrow">Your projects</div>
+            <h1 className="pl-title">Projects</h1>
+          </div>
+        </header>
 
         {loading && <div className="page-loading"><div className="spinner" /></div>}
-
         {!loading && error && (
           <div className="empty-state"><h3>Something went wrong</h3><p>{error}</p></div>
         )}
-
         {!loading && !error && rfqs.length === 0 && (
           <div className="empty-state">
             <h3>No projects yet</h3>
-            <p>Projects are created when you scan a room with the RoomScanAlpha iOS app. Download the app to get started.</p>
+            <p>Projects are created when you scan a room with the Quoterra iOS app.</p>
           </div>
         )}
 
-        <div style={{ display: "grid", gap: 16 }}>
-          {rfqs.map((rfq) => (
-            <ProjectCard key={rfq.id} rfq={rfq} onDelete={(id) => setRfqs(rfqs.filter((r) => r.id !== id))} />
-          ))}
-        </div>
+        {!loading && !error && rfqs.length > 0 && (
+          <>
+            <div className="pl-filter-row">
+              <FilterChip active={filter === "all"}      onClick={() => setFilter("all")}      label="All"            count={counts.all} />
+              <FilterChip active={filter === "awaiting"} onClick={() => setFilter("awaiting")} label="Awaiting bids"  count={counts.awaiting} />
+              <FilterChip active={filter === "active"}   onClick={() => setFilter("active")}   label="Bids in"        count={counts.active} />
+              <FilterChip active={filter === "hired"}    onClick={() => setFilter("hired")}    label="Hired"          count={counts.hired} />
+            </div>
+
+            {filtered.length === 0 ? (
+              <div className="empty-state" style={{ padding: "40px 20px" }}>
+                <h3>No projects in this view</h3>
+                <p>Try another filter.</p>
+              </div>
+            ) : (
+              <div className="pl-list">
+                {filtered.map((rfq) => <ProjectCard key={rfq.id} rfq={rfq} />)}
+              </div>
+            )}
+          </>
+        )}
       </div>
+
+      <style>{PL_CSS}</style>
     </Layout>
   );
 }
 
-
-function ProjectCard({ rfq: initialRfq, onDelete }: { rfq: RFQ; onDelete: (id: string) => void }) {
-  const [rfq, setRfq] = useState(initialRfq);
-  const [expanded, setExpanded] = useState(false);
-  const [detail, setDetail] = useState<ProjectDetail | null>(null);
-  const [loadingDetail, setLoadingDetail] = useState(false);
-  const [expandedRooms, setExpandedRooms] = useState<Set<string>>(new Set());
-  const [editing, setEditing] = useState(false);
-  const [editTitle, setEditTitle] = useState(rfq.title || "");
-  const [editAddress, setEditAddress] = useState(rfq.address || "");
-  const [editDesc, setEditDesc] = useState(rfq.description || "");
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    if (!expanded || detail || loadingDetail) return;
-    setLoadingDetail(true);
-    fetch(`/api/rfqs/${rfq.id}/contractor-view`)
-      .then((r) => r.ok ? r.json() : null)
-      .then(setDetail)
-      .catch(() => {})
-      .finally(() => setLoadingDetail(false));
-  }, [expanded, detail, loadingDetail, rfq.id]);
-
-  function toggleRoom(scanId: string) {
-    const next = new Set(expandedRooms);
-    if (next.has(scanId)) next.delete(scanId); else next.add(scanId);
-    setExpandedRooms(next);
-  }
-
+function FilterChip({ active, onClick, label, count }: { active: boolean; onClick: () => void; label: string; count: number }) {
   return (
-    <div className="card" style={{ overflow: "hidden" }}>
-      {/* Header (always visible, clickable) */}
-      <div
-        onClick={() => setExpanded(!expanded)}
-        style={{ padding: 20, cursor: "pointer", display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}
-      >
-        <div style={{ flex: 1, minWidth: 200 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
-            <h3 style={{ fontSize: 16, fontWeight: 700 }}>{rfq.title || "Untitled Project"}</h3>
-            <span className={`badge badge-${rfq.status}`}>{statusLabel(rfq.status)}</span>
-          </div>
-          {rfq.address && <p style={{ fontSize: 14, color: "var(--color-text-secondary)", marginBottom: 4 }}>{rfq.address}</p>}
-          {rfq.description && !expanded && (
-            <p style={{ fontSize: 13, color: "var(--color-text-muted)", marginBottom: 8, maxWidth: 500 }}>{rfq.description}</p>
-          )}
-          <div style={{ display: "flex", gap: 16, fontSize: 13, color: "var(--color-text-muted)" }}>
-            {rfq.created_at && <span>{fmtDate(rfq.created_at)}</span>}
-            {rfq.scan_count != null && <span>{rfq.scan_count} room{rfq.scan_count !== 1 ? "s" : ""}</span>}
-            {rfq.bid_count != null && rfq.bid_count > 0 && <span>{rfq.bid_count} bid{rfq.bid_count !== 1 ? "s" : ""}</span>}
-          </div>
-        </div>
-
-        <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
-          <span style={{ fontSize: 13, fontWeight: 600, color: "var(--color-primary)" }}>
-            {expanded ? "Close ▲" : "Details ▼"}
-          </span>
-        </div>
-      </div>
-
-      {/* Expanded detail */}
-      {expanded && (
-        <div style={{ padding: "0 20px 20px", borderTop: "1px solid var(--color-border-light)" }}>
-
-          {/* Edit mode */}
-          {editing ? (
-            <div style={{ marginTop: 16, marginBottom: 16 }}>
-              <div style={{ marginBottom: 10 }}>
-                <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "var(--color-text-secondary)", marginBottom: 4 }}>Title</label>
-                <input className="form-input" value={editTitle} onChange={(e) => setEditTitle(e.target.value)} />
-              </div>
-              <div style={{ marginBottom: 10 }}>
-                <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "var(--color-text-secondary)", marginBottom: 4 }}>Address</label>
-                <input className="form-input" value={editAddress} onChange={(e) => setEditAddress(e.target.value)} />
-              </div>
-              <div style={{ marginBottom: 10 }}>
-                <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "var(--color-text-secondary)", marginBottom: 4 }}>Description</label>
-                <textarea className="form-input" value={editDesc} onChange={(e) => setEditDesc(e.target.value)} rows={3} style={{ resize: "vertical" }} />
-              </div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <button className="btn btn-primary" disabled={saving} onClick={async () => {
-                  setSaving(true);
-                  try {
-                    await apiFetch(`/api/rfqs/${rfq.id}`, {
-                      method: "PUT",
-                      body: JSON.stringify({ title: editTitle, address: editAddress, description: editDesc }),
-                    });
-                    setRfq({ ...rfq, title: editTitle, address: editAddress, description: editDesc });
-                    setEditing(false);
-                  } catch (err: unknown) { alert((err as Error).message || "Failed to save"); }
-                  setSaving(false);
-                }}>{saving ? "Saving..." : "Save"}</button>
-                <button className="btn" onClick={() => setEditing(false)}>Cancel</button>
-              </div>
-            </div>
-          ) : (
-            <>
-              {/* Description */}
-              {(rfq.description || detail?.job_description) && (
-                <div style={{ marginTop: 16, marginBottom: 16 }}>
-                  <h4 style={{ fontSize: 13, fontWeight: 700, color: "var(--color-text-secondary)", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.5px" }}>Description</h4>
-                  <p style={{ fontSize: 14, lineHeight: 1.6, color: "#3a3a3c", whiteSpace: "pre-wrap" }}>{detail?.job_description || rfq.description}</p>
-                </div>
-              )}
-
-              {/* Scope of work */}
-              {detail?.project_scope && (
-                <div style={{ marginBottom: 16 }}>
-                  <h4 style={{ fontSize: 13, fontWeight: 700, color: "var(--color-text-secondary)", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.5px" }}>Scope of Work</h4>
-                  <p style={{ fontSize: 14, lineHeight: 1.6, color: "#3a3a3c", whiteSpace: "pre-wrap" }}>{detail.project_scope}</p>
-                </div>
-              )}
-            </>
-          )}
-
-          {/* Loading */}
-          {loadingDetail && (
-            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 0", color: "var(--color-text-muted)", fontSize: 13 }}>
-              <div className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} /> Loading details...
-            </div>
-          )}
-
-          {/* Floor Plan */}
-          {detail && detail.rooms.some((r) => r.room_polygon_ft && r.room_polygon_ft.length >= 3) && (
-            <div style={{ marginBottom: 16 }}>
-              <h4 style={{ fontSize: 13, fontWeight: 700, color: "var(--color-text-secondary)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.5px" }}>Floor Plan</h4>
-              <FloorPlan rooms={detail.rooms} height={220} />
-            </div>
-          )}
-
-          {/* Rooms */}
-          {detail && detail.rooms.length > 0 && (
-            <div style={{ marginBottom: 16 }}>
-              <h4 style={{ fontSize: 13, fontWeight: 700, color: "var(--color-text-secondary)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.5px" }}>
-                Rooms ({detail.rooms.length})
-              </h4>
-              <div style={{ display: "grid", gap: 8 }}>
-                {detail.rooms.map((room) => {
-                  const isOpen = expandedRooms.has(room.scan_id);
-                  return (
-                    <div key={room.scan_id} style={{
-                      border: "1px solid var(--color-border-light)", borderRadius: "var(--radius-md)",
-                      background: "#fafbfc", overflow: "hidden",
-                    }}>
-                      <div onClick={() => toggleRoom(room.scan_id)}
-                        style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px", cursor: "pointer" }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                          <span style={{ fontSize: 14, fontWeight: 700 }}>{room.room_label || "Room"}</span>
-                          {room.floor_area_sqft != null && (
-                            <span style={{ fontSize: 12, color: "var(--color-text-muted)" }}>{fmtNum(room.floor_area_sqft)} sqft</span>
-                          )}
-                        </div>
-                        <span style={{ fontSize: 12, color: "var(--color-text-muted)" }}>{isOpen ? "▲" : "▼"}</span>
-                      </div>
-
-                      {isOpen && (
-                        <div style={{ padding: "0 14px 14px" }}>
-                          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))", gap: 6, fontSize: 13, marginBottom: 8 }}>
-                            {room.floor_area_sqft != null && <div><span style={{ color: "var(--color-text-muted)" }}>Floor: </span><strong>{fmtNum(room.floor_area_sqft)} sqft</strong></div>}
-                            {room.wall_area_sqft != null && <div><span style={{ color: "var(--color-text-muted)" }}>Walls: </span><strong>{fmtNum(room.wall_area_sqft)} sqft</strong></div>}
-                            {room.ceiling_height_ft != null && <div><span style={{ color: "var(--color-text-muted)" }}>Height: </span><strong>{fmtNum(room.ceiling_height_ft)} ft</strong></div>}
-                            {room.perimeter_linear_ft != null && <div><span style={{ color: "var(--color-text-muted)" }}>Perimeter: </span><strong>{fmtNum(room.perimeter_linear_ft)} ft</strong></div>}
-                          </div>
-
-                          {room.detected_components?.detected && room.detected_components.detected.length > 0 && (
-                            <div style={{ marginBottom: 8 }}>
-                              <span style={{ fontSize: 12, fontWeight: 600, color: "var(--color-text-muted)" }}>Materials: </span>
-                              <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>
-                                {room.detected_components.detected.map((mat) => (
-                                  <span key={mat} style={{ fontSize: 11, padding: "2px 8px", borderRadius: 4, background: "var(--color-info-bg)", color: "var(--color-primary)", fontWeight: 500 }}>
-                                    {formatLabel(mat)}
-                                  </span>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-
-                          {room.scope?.items && room.scope.items.length > 0 && (
-                            <div style={{ marginBottom: 8 }}>
-                              <span style={{ fontSize: 12, fontWeight: 600, color: "var(--color-text-muted)" }}>Scope: </span>
-                              <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>
-                                {room.scope.items.map((item) => (
-                                  <span key={item} style={{ fontSize: 11, padding: "2px 8px", borderRadius: 4, background: "#e8f5e9", color: "#2e7d32", fontWeight: 500 }}>
-                                    {formatLabel(item)}
-                                  </span>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-
-                          {room.scope?.notes && (
-                            <div style={{ fontSize: 13, color: "#3a3a3c", fontStyle: "italic", marginTop: 4 }}>
-                              Note: {room.scope.notes}
-                            </div>
-                          )}
-
-                          <button
-                            onClick={async () => {
-                              if (!confirm(`Delete room "${room.room_label}"?`)) return;
-                              try {
-                                await apiFetch(`/api/rfqs/${rfq.id}/scans/${room.scan_id}`, { method: "DELETE" });
-                                setDetail({ ...detail!, rooms: detail!.rooms.filter((r) => r.scan_id !== room.scan_id) });
-                              } catch (err: unknown) { alert((err as Error).message || "Failed to delete"); }
-                            }}
-                            style={{ fontSize: 12, fontWeight: 600, color: "var(--color-danger)", background: "none", border: "none", cursor: "pointer", fontFamily: "inherit", marginTop: 10 }}
-                          >Delete Room</button>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* Actions */}
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <a href={`/quote/${rfq.id}`} className="btn" style={{ fontSize: 13, padding: "8px 16px" }}>View 3D Scan</a>
-            <a href={`/projects/${rfq.id}/quotes`} className="btn btn-primary" style={{ fontSize: 13, padding: "8px 16px" }}>View Quotes</a>
-            {!editing && (
-              <button className="btn" style={{ fontSize: 13, padding: "8px 16px" }} onClick={() => {
-                setEditTitle(rfq.title || "");
-                setEditAddress(rfq.address || "");
-                setEditDesc(rfq.description || "");
-                setEditing(true);
-              }}>Edit Project</button>
-            )}
-            <button className="btn" style={{ fontSize: 13, padding: "8px 16px", color: "var(--color-danger)", borderColor: "var(--color-danger)" }}
-              onClick={async () => {
-                if (!confirm(`Delete "${rfq.title || "this project"}"? This cannot be undone.`)) return;
-                try {
-                  await apiFetch(`/api/rfqs/${rfq.id}`, { method: "DELETE" });
-                  onDelete(rfq.id);
-                } catch (err: unknown) { alert((err as Error).message || "Failed to delete"); }
-              }}>Delete Project</button>
-          </div>
-
-          <div style={{ fontSize: 11, color: "var(--color-text-placeholder)", marginTop: 12, fontFamily: "monospace" }}>{rfq.id}</div>
-        </div>
-      )}
-    </div>
+    <button type="button" onClick={onClick} className={`pl-chip ${active ? "is-active" : ""}`}>
+      {label} <span className="pl-chip-count">{count}</span>
+    </button>
   );
 }
+
+function ProjectCard({ rfq }: { rfq: RFQ }) {
+  const [rooms, setRooms] = useState<RoomMini[] | null>(null);
+  const [totalSqft, setTotalSqft] = useState<number>(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/rfqs/${rfq.id}/contractor-view`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => {
+        if (cancelled || !data) return;
+        setRooms(data.rooms);
+        setTotalSqft(data.rooms.reduce((s: number, r: RoomMini) => s + (r.floor_area_sqft ?? 0), 0));
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [rfq.id]);
+
+  const hasBids = (rfq.bid_count ?? 0) > 0;
+  const hired = rfq.status === "completed";
+  const statusLabel = hired ? "Hired" : hasBids ? "Bids in" : "Awaiting";
+  const statusTone  = hired ? "pl-status-hired" : hasBids ? "pl-status-active" : "pl-status-wait";
+
+  const hasFloorplan = rooms && rooms.some((r) => r.room_polygon_ft && r.room_polygon_ft.length >= 3);
+
+  return (
+    <Link to={`/projects/${rfq.id}`} className="pl-card">
+      <div className="pl-thumb" aria-hidden="true">
+        {hasFloorplan ? (
+          <FloorPlan rooms={rooms!} height={64} />
+        ) : (
+          <div className="pl-thumb-empty">▦</div>
+        )}
+      </div>
+
+      <div className="pl-body">
+        <div className="pl-card-head">
+          <div className="pl-card-title-wrap">
+            <div className="pl-card-title-row">
+              <h3 className="pl-card-title">{rfq.title || "Untitled project"}</h3>
+              <span className={`pl-status ${statusTone}`}>{statusLabel}</span>
+            </div>
+            {rfq.address && <div className="pl-card-address">{rfq.address}</div>}
+          </div>
+        </div>
+
+        <div className="pl-card-meta">
+          {rfq.created_at && <span>Submitted {fmtDate(rfq.created_at)}</span>}
+          {rooms != null && (
+            <>
+              <span className="pl-dot" />
+              <span>{rooms.length} {rooms.length === 1 ? "room" : "rooms"}</span>
+            </>
+          )}
+          {totalSqft > 0 && (
+            <>
+              <span className="pl-dot" />
+              <span>{totalSqft.toLocaleString()} sqft</span>
+            </>
+          )}
+          {hasBids && (
+            <>
+              <span className="pl-dot" />
+              <span><strong>{rfq.bid_count}</strong> bid{rfq.bid_count !== 1 ? "s" : ""}</span>
+            </>
+          )}
+        </div>
+
+        {rfq.description && (
+          <p className="pl-card-description">{rfq.description}</p>
+        )}
+      </div>
+
+      <div className="pl-card-chev" aria-hidden="true">›</div>
+    </Link>
+  );
+}
+
+const PL_CSS = `
+.pl-wrap { max-width: 860px; margin: 0 auto; padding: var(--q-space-5) var(--q-space-5) var(--q-space-8); }
+
+.pl-header {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  gap: 16px; margin-bottom: 22px; flex-wrap: wrap;
+}
+.pl-eyebrow {
+  font-size: 13px; font-weight: 600; color: var(--q-ink-muted); margin-bottom: 4px;
+}
+.pl-title {
+  font-size: 40px; line-height: 1; letter-spacing: -1.2px;
+  font-weight: 700; margin: 0;
+}
+
+.pl-filter-row { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
+.pl-chip {
+  padding: 6px 14px; border-radius: var(--q-radius-pill);
+  font-size: 14px; font-weight: 500; font-family: inherit; cursor: pointer;
+  background: transparent; color: var(--q-ink-muted);
+  box-shadow: inset 0 0 0 0.5px var(--q-hairline); border: none;
+  transition: background 0.15s, color 0.15s;
+}
+.pl-chip:hover { color: var(--q-ink); }
+.pl-chip.is-active { background: var(--q-ink); color: var(--q-surface); box-shadow: none; }
+.pl-chip-count { opacity: 0.7; margin-left: 4px; }
+
+.pl-list { display: flex; flex-direction: column; gap: 12px; }
+
+.pl-card {
+  background: var(--q-surface); border-radius: var(--q-radius-xl);
+  padding: 20px 22px; display: flex; gap: 18px; align-items: flex-start;
+  text-decoration: none; color: var(--q-ink);
+  box-shadow: inset 0 0 0 0.5px var(--q-hairline);
+  transition: box-shadow 0.15s, transform 0.15s;
+}
+.pl-card:hover {
+  box-shadow: inset 0 0 0 0.5px var(--q-hairline), 0 6px 18px rgba(17,18,22,0.06);
+  text-decoration: none;
+}
+.pl-card:active { transform: translateY(1px); }
+
+.pl-thumb {
+  width: 72px; height: 72px; border-radius: 12px; overflow: hidden;
+  background: var(--q-scan-accent-soft); flex-shrink: 0;
+}
+.pl-thumb > div { height: 100% !important; background: transparent !important; border: none !important; border-radius: 0 !important; }
+.pl-thumb canvas { display: block; width: 100% !important; height: 100% !important; }
+.pl-thumb-empty {
+  height: 100%; display: flex; align-items: center; justify-content: center;
+  color: var(--q-scan-accent); opacity: 0.4; font-size: 26px;
+}
+
+.pl-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+
+.pl-card-title-row {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+}
+.pl-card-title {
+  font-size: 19px; font-weight: 700; letter-spacing: -0.3px; line-height: 1.2;
+  margin: 0; overflow-wrap: break-word;
+}
+.pl-card-address { font-size: 13px; color: var(--q-ink-muted); margin-top: 4px; }
+
+.pl-status {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase;
+  padding: 3px 8px; border-radius: 6px; white-space: nowrap;
+}
+.pl-status-wait   { background: rgba(184,116,20,0.1); color: var(--q-warning); }
+.pl-status-active { background: var(--q-primary-soft); color: var(--q-primary); }
+.pl-status-hired  { background: rgba(47,106,75,0.12);  color: var(--q-success); }
+
+.pl-card-meta {
+  display: flex; gap: 10px; font-size: 13px; color: var(--q-ink-muted);
+  align-items: center; flex-wrap: wrap;
+}
+.pl-card-meta strong { color: var(--q-ink); font-weight: 700; }
+.pl-dot { width: 3px; height: 3px; background: var(--q-ink-dim); border-radius: 50%; }
+
+.pl-card-description {
+  font-size: 14px; line-height: 1.55; color: var(--q-ink-soft); margin: 0;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+  overflow: hidden; white-space: pre-wrap;
+}
+
+.pl-card-chev {
+  align-self: center; font-size: 28px; color: var(--q-ink-dim); font-weight: 300;
+  line-height: 1; flex-shrink: 0;
+}
+
+@media (max-width: 640px) {
+  .pl-wrap { padding: var(--q-space-4); }
+  .pl-title { font-size: 32px; letter-spacing: -0.8px; }
+  .pl-card { padding: 16px; gap: 12px; }
+  .pl-thumb { width: 56px; height: 56px; }
+  .pl-card-title { font-size: 17px; }
+  .pl-card-chev { display: none; }
+}
+`;

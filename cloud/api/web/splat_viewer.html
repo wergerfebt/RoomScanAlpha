@@ -1099,6 +1099,11 @@ async function loadRoom(index) {
     // Show buttons
     document.getElementById('btn-measures').style.display = '';
     document.getElementById('btn-view-mode').style.display = '';
+
+    // Auto-enable Bird's Eye View when embedded with ?bev=1
+    if (new URLSearchParams(window.location.search).get('bev') === '1' && !isBirdsEye) {
+      window.toggleViewMode();
+    }
   }
 
   // Build isometric overlay

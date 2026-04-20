@@ -2,6 +2,7 @@ import { Routes, Route } from "react-router-dom";
 import Landing from "./pages/Landing";
 import Login from "./pages/Login";
 import Projects from "./pages/Projects";
+import ProjectDetail from "./pages/ProjectDetail";
 import ProjectQuotes from "./pages/ProjectQuotes";
 import Search from "./pages/Search";
 import Account from "./pages/Account";
@@ -23,6 +24,14 @@ export default function App() {
         element={
           <ProtectedRoute>
             <Projects />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/projects/:rfqId"
+        element={
+          <ProtectedRoute>
+            <ProjectDetail />
           </ProtectedRoute>
         }
       />

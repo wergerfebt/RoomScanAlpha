@@ -75,14 +75,14 @@ export default function FloorPlan({ rooms, width = 400, height = 300 }: FloorPla
       ctx.moveTo(tx(poly[0][0]), ty(poly[0][1]));
       poly.slice(1).forEach(([x, y]) => ctx.lineTo(tx(x), ty(y)));
       ctx.closePath();
-      ctx.fillStyle = "rgba(0,85,204,0.08)";
+      ctx.fillStyle = "rgba(43,79,224,0.08)"; // --q-scan-accent @ 8%
       ctx.fill();
-      ctx.strokeStyle = "#0055cc";
+      ctx.strokeStyle = "#2B4FE0"; // --q-scan-accent
       ctx.lineWidth = 1.5;
       ctx.stroke();
 
       // Wall measurements
-      ctx.fillStyle = "#6e6e73";
+      ctx.fillStyle = "#66726B"; // --q-ink-muted
       ctx.font = `${Math.max(9, Math.min(11, scale * 0.8))}px -apple-system, sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
@@ -107,14 +107,14 @@ export default function FloorPlan({ rooms, width = 400, height = 300 }: FloorPla
       let labelX = 0, labelY = 0;
       poly.forEach(([x, y]) => { labelX += x; labelY += y; });
       labelX /= poly.length; labelY /= poly.length;
-      ctx.fillStyle = "#1d1d1f";
+      ctx.fillStyle = "#141A16"; // --q-ink
       ctx.font = `600 ${Math.max(10, Math.min(13, scale * 1.2))}px -apple-system, sans-serif`;
       ctx.fillText(label, tx(labelX), ty(labelY));
     });
   }, [rooms, width, height]);
 
   return (
-    <div style={{ background: "#f7f8fa", borderRadius: 8, border: "1px solid var(--color-border-light)", overflow: "hidden" }}>
+    <div style={{ background: "transparent", borderRadius: 8, overflow: "hidden" }}>
       <canvas ref={canvasRef} />
     </div>
   );

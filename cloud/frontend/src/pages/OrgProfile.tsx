@@ -99,7 +99,7 @@ export default function OrgProfilePage() {
       <div className="org-profile-banner" style={{
         background: org.banner_image_url
           ? `url(${org.banner_image_url}) center/cover no-repeat`
-          : "linear-gradient(135deg, #0055cc 0%, #0088ff 100%)",
+          : "var(--q-primary)",
       }} />
 
       {/* Header */}

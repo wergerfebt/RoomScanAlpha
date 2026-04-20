@@ -134,13 +134,23 @@ def list_rfqs(authorization: str = Header(None)) -> dict:
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
+        # Look up the user's account id (if any) so we can include RFQs that
+        # are owned via homeowner_account_id (not just the legacy user_id).
+        cursor.execute("SELECT id FROM accounts WHERE firebase_uid = %s", (uid,))
+        acct_row = cursor.fetchone()
+        account_id = acct_row[0] if acct_row else None
+
         cursor.execute(
             f"""SELECT r.id, r.title, r.description, r.status, r.created_at, r.address,
                        r.bid_view_token,
                        (SELECT count(*) FROM scanned_rooms sr WHERE sr.rfq_id = r.id) AS scan_count,
                        (SELECT count(*) FROM bids b WHERE b.rfq_id = r.id) AS bid_count
-                FROM rfqs r WHERE r.user_id = %s AND r.deleted_at IS NULL ORDER BY r.created_at DESC LIMIT {MAX_RFQS_PER_PAGE}""",
-            (uid,),
+                FROM rfqs r
+                WHERE r.deleted_at IS NULL
+                  AND (r.user_id = %s OR (%s::uuid IS NOT NULL AND r.homeowner_account_id = %s::uuid))
+                ORDER BY r.created_at DESC
+                LIMIT {MAX_RFQS_PER_PAGE}""",
+            (uid, account_id, account_id),
         )
         rows = cursor.fetchall()
     finally:
@@ -958,22 +968,29 @@ def list_bids(rfq_id: str, token: str = None, authorization: Optional[str] = Hea
         cursor = conn.cursor()
 
         cursor.execute(
-            "SELECT description, bid_view_token, user_id FROM rfqs WHERE id = %s",
+            "SELECT description, bid_view_token, user_id, homeowner_account_id FROM rfqs WHERE id = %s",
             (rfq_id,),
         )
         rfq_row = cursor.fetchone()
         if not rfq_row:
             raise HTTPException(status_code=404, detail="RFQ not found")
 
-        project_description, bid_view_token, rfq_owner_uid = rfq_row
+        project_description, bid_view_token, rfq_owner_uid, rfq_account_id = rfq_row
 
-        # Auth check: token-based OR JWT owner
+        # Auth check: token-based OR JWT owner (via user_id OR account linkage)
         token_ok = token and str(bid_view_token) == token
         jwt_ok = False
         if authorization and not token_ok:
             try:
                 decoded = verify_firebase_token(authorization)
-                jwt_ok = decoded["uid"] == rfq_owner_uid
+                jwt_uid = decoded["uid"]
+                if jwt_uid == rfq_owner_uid:
+                    jwt_ok = True
+                elif rfq_account_id:
+                    cursor.execute("SELECT id FROM accounts WHERE firebase_uid = %s", (jwt_uid,))
+                    acct = cursor.fetchone()
+                    if acct and acct[0] == rfq_account_id:
+                        jwt_ok = True
             except Exception:
                 pass
         if not token_ok and not jwt_ok:
@@ -1083,6 +1100,23 @@ def serve_contractor_page(rfq_id: str) -> str:
     html_path = Path(__file__).parent / "web" / "contractor_view.html"
     if not html_path.exists():
         raise HTTPException(status_code=500, detail="Contractor view page not found")
+    return html_path.read_text()
+
+
+@app.get("/embed/scan/{rfq_id}", response_class=HTMLResponse)
+def serve_embed_viewer(rfq_id: str) -> str:
+    """Serve the chrome-less 3D scan viewer for embedding via iframe.
+
+    URL params the page honors:
+      ?view=bev|tour           (default: tour)
+      ?measurements=on|off     (default: on)
+      ?room=<scan_id>          (default: first room)
+
+    Public like /quote/ — the URL itself is the access token.
+    """
+    html_path = Path(__file__).parent / "web" / "embed_viewer.html"
+    if not html_path.exists():
+        raise HTTPException(status_code=500, detail="Embed viewer page not found")
     return html_path.read_text()
 
 

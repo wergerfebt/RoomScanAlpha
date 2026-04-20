@@ -208,7 +208,7 @@ export default function SearchBar({ size = "compact" }: SearchBarProps) {
                   color: "var(--color-text)",
                 }}
                 onMouseEnter={(e) => {
-                  if (s !== service) e.currentTarget.style.background = "#f7f8fa";
+                  if (s !== service) e.currentTarget.style.background = "var(--q-surface-muted)";
                 }}
                 onMouseLeave={(e) => {
                   e.currentTarget.style.background =

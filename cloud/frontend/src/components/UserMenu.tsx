@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
+import { useAccount } from "../hooks/useAccount";
 
 function getInitials(name: string | null): string {
   if (!name) return "?";
@@ -14,6 +15,7 @@ function getInitials(name: string | null): string {
 
 export default function UserMenu() {
   const { user, logout } = useAuth();
+  const { account } = useAccount();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -29,7 +31,8 @@ export default function UserMenu() {
 
   if (!user) return null;
 
-  const displayName = user.displayName || user.email?.split("@")[0] || "User";
+  const displayName = account?.name || user.displayName || user.email?.split("@")[0] || "User";
+  const photoURL = account?.icon_url || user.photoURL;
 
   return (
     <div ref={ref} style={{ position: "relative" }}>
@@ -51,9 +54,9 @@ export default function UserMenu() {
           overflow: "hidden",
         }}
       >
-        {user.photoURL ? (
+        {photoURL ? (
           <img
-            src={user.photoURL}
+            src={photoURL}
             alt=""
             style={{ width: 36, height: 36, borderRadius: "50%", objectFit: "cover" }}
           />

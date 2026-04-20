@@ -1,10 +1,31 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useSearchParams } from "react-router-dom";
 import Layout from "../components/Layout";
-import JobCard, { type Job } from "../components/JobCard";
+import FloorPlan from "../components/FloorPlan";
+import ContractorBidForm, { parseBidDescription } from "../components/ContractorBidForm";
 import { apiFetch } from "../api/client";
 import AddressAutocomplete from "../components/AddressAutocomplete";
 import Lightbox, { type LightboxItem } from "../components/Lightbox";
+
+interface Job {
+  rfq_id: string;
+  title: string;
+  description: string | null;
+  address: string | null;
+  created_at: string | null;
+  homeowner: { name: string | null; icon_url: string | null; email?: string | null };
+  bid: {
+    id: string;
+    price_cents: number;
+    status: string;
+    received_at: string | null;
+    description?: string | null;
+    pdf_url?: string | null;
+    rfq_modified_after_bid?: boolean;
+  } | null;
+  job_status: "new" | "pending" | "won" | "lost";
+  rfq_deleted?: boolean;
+}
 
 interface OrgData {
   id: string;
@@ -100,85 +121,662 @@ export default function OrgDashboard() {
 
   return (
     <Layout>
-      <div style={{ maxWidth: 800, margin: "0 auto", padding: "32px 24px 60px" }}>
-        {tab === "jobs" && <OrgJobs />}
-        {tab === "settings" && <OrgSettings org={org} onUpdate={setOrg} />}
-        {tab === "gallery" && <OrgGallery />}
-        {tab === "members" && <OrgMembers />}
-        {tab === "services" && <OrgServices />}
-      </div>
+      {tab === "jobs" ? (
+        <OrgJobsWorkspace />
+      ) : (
+        <div style={{ maxWidth: 800, margin: "0 auto", padding: "32px 24px 60px" }}>
+          {tab === "settings" && <OrgSettings org={org} onUpdate={setOrg} />}
+          {tab === "gallery" && <OrgGallery />}
+          {tab === "members" && <OrgMembers />}
+          {tab === "services" && <OrgServices />}
+        </div>
+      )}
     </Layout>
   );
 }
 
 
 const JOB_STATUSES = ["all", "new", "pending", "won", "lost"] as const;
+type JobStatusFilter = typeof JOB_STATUSES[number];
 
-function OrgJobs() {
+interface ContractorView {
+  rfq_id: string;
+  title: string;
+  address: string | null;
+  job_description: string | null;
+  project_scope: string | null;
+  rooms: {
+    scan_id: string;
+    room_label: string;
+    floor_area_sqft: number | null;
+    wall_area_sqft: number | null;
+    ceiling_height_ft: number | null;
+    perimeter_linear_ft: number | null;
+    room_polygon_ft: number[][] | null;
+    scope: { items?: string[]; notes?: string } | null;
+  }[];
+}
+
+function fmtPriceCents(cents: number): string {
+  return "$" + (cents / 100).toLocaleString("en-US", { minimumFractionDigits: 0 });
+}
+
+function fmtJobDate(iso: string | null): string {
+  if (!iso) return "";
+  return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
+function formatJobLabel(key: string): string {
+  return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function OrgJobsWorkspace() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<string>("all");
+  const [filter, setFilter] = useState<JobStatusFilter>("all");
+  const [selectedRfqId, setSelectedRfqId] = useState<string | null>(null);
+  const [scanView, setScanView] = useState<"floorplan" | "bev">("floorplan");
 
   useEffect(() => {
     apiFetch<{ jobs: Job[] }>("/api/org/jobs")
-      .then((data) => setJobs(data.jobs))
+      .then((data) => {
+        setJobs(data.jobs);
+        if (data.jobs.length > 0) setSelectedRfqId(data.jobs[0].rfq_id);
+      })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
 
-  const filtered = filter === "all" ? jobs : jobs.filter((j) => j.job_status === filter);
-
-  const counts = {
+  const counts = useMemo(() => ({
     all: jobs.length,
     new: jobs.filter((j) => j.job_status === "new").length,
     pending: jobs.filter((j) => j.job_status === "pending").length,
     won: jobs.filter((j) => j.job_status === "won").length,
     lost: jobs.filter((j) => j.job_status === "lost").length,
-  };
+  }), [jobs]);
+
+  const filtered = useMemo(
+    () => filter === "all" ? jobs : jobs.filter((j) => j.job_status === filter),
+    [jobs, filter],
+  );
+
+  const selectedJob = jobs.find((j) => j.rfq_id === selectedRfqId) || filtered[0] || null;
 
   if (loading) return <div className="page-loading"><div className="spinner" /></div>;
 
+  function handleJobUpdated(rfqId: string, patch: Partial<Job>) {
+    setJobs((prev) => prev.map((j) => j.rfq_id === rfqId ? { ...j, ...patch } : j));
+  }
+
   return (
-    <div>
-      {/* Status filter chips */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 20, flexWrap: "wrap" }}>
-        {JOB_STATUSES.map((s) => (
-          <button
-            key={s}
-            onClick={() => setFilter(s)}
-            style={{
-              padding: "6px 16px",
-              fontSize: 13,
-              fontWeight: 600,
-              fontFamily: "inherit",
-              borderRadius: 20,
-              border: "1px solid",
-              borderColor: filter === s ? "var(--color-primary)" : "var(--color-border)",
-              background: filter === s ? "var(--color-primary)" : "var(--color-surface)",
-              color: filter === s ? "#fff" : "var(--color-text)",
-              cursor: "pointer",
-              textTransform: "capitalize",
-              transition: "all 0.15s",
-            }}
-          >
-            {s === "all" ? "All" : s.charAt(0).toUpperCase() + s.slice(1)} ({counts[s]})
+    <>
+      <div className="ojw">
+        <aside className="ojw-list">
+          <div className="ojw-list-head">
+            <h1 className="ojw-title">Jobs</h1>
+            <div className="ojw-chips">
+              {JOB_STATUSES.map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  className={`ojw-chip ${filter === s ? "is-active" : ""}`}
+                  onClick={() => setFilter(s)}
+                >
+                  {s === "all" ? "All" : s[0].toUpperCase() + s.slice(1)}
+                  <span className="ojw-chip-count">{counts[s]}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {filtered.length === 0 ? (
+            <div className="ojw-empty">
+              <strong>{filter === "all" ? "No jobs yet" : `No ${filter} jobs`}</strong>
+              <div>Jobs appear here as homeowners post projects matching your services.</div>
+            </div>
+          ) : (
+            <div className="ojw-rows">
+              {filtered.map((job) => (
+                <JobRow
+                  key={`${job.rfq_id}-${job.job_status}`}
+                  job={job}
+                  active={job.rfq_id === selectedJob?.rfq_id}
+                  onClick={() => setSelectedRfqId(job.rfq_id)}
+                />
+              ))}
+            </div>
+          )}
+        </aside>
+
+        {selectedJob ? (
+          <>
+            <JobReviewPane
+              key={`review-${selectedJob.rfq_id}`}
+              job={selectedJob}
+              scanView={scanView}
+              setScanView={setScanView}
+            />
+            <JobBidPane
+              key={`bid-${selectedJob.rfq_id}`}
+              job={selectedJob}
+              onUpdate={handleJobUpdated}
+            />
+          </>
+        ) : (
+          <div className="ojw-nosel">
+            <div>
+              <strong>Select a job to review</strong>
+              <div>Pick one from the list to view the 3D scan and submit a bid.</div>
+            </div>
+          </div>
+        )}
+      </div>
+      <style>{OJW_CSS}</style>
+    </>
+  );
+}
+
+function JobRow({ job, active, onClick }: { job: Job; active: boolean; onClick: () => void }) {
+  const tone =
+    job.job_status === "new"     ? "ojw-tint-new" :
+    job.job_status === "pending" ? "ojw-tint-pending" :
+    job.job_status === "won"     ? "ojw-tint-won" : "ojw-tint-lost";
+  const label = job.job_status[0].toUpperCase() + job.job_status.slice(1);
+  return (
+    <button type="button" className={`ojw-row ${active ? "is-active" : ""}`} onClick={onClick}>
+      <div className="ojw-row-main">
+        <div className="ojw-row-title">{job.title}</div>
+        {job.description && <div className="ojw-row-desc">{job.description}</div>}
+        {job.address && (
+          <div className="ojw-row-addr">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 22s7-7.5 7-13a7 7 0 00-14 0c0 5.5 7 13 7 13z" /><circle cx="12" cy="9" r="2.5" />
+            </svg>
+            {job.address}
+          </div>
+        )}
+        <span className={`ojw-row-tint ${tone}`}>{label}</span>
+      </div>
+      {job.bid ? (
+        <div className="ojw-row-price">{fmtPriceCents(job.bid.price_cents)}</div>
+      ) : (
+        <div className="ojw-row-view">View →</div>
+      )}
+    </button>
+  );
+}
+
+function JobReviewPane({ job, scanView, setScanView }: { job: Job; scanView: "floorplan" | "bev"; setScanView: (v: "floorplan" | "bev") => void }) {
+  const [view, setView] = useState<ContractorView | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    fetch(`/api/rfqs/${job.rfq_id}/contractor-view`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => { if (!cancelled && d) setView(d); })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [job.rfq_id]);
+
+  const totalFloor = view?.rooms.reduce((s, r) => s + (r.floor_area_sqft ?? 0), 0) ?? 0;
+  const totalWall  = view?.rooms.reduce((s, r) => s + (r.wall_area_sqft ?? 0), 0) ?? 0;
+  const heights    = (view?.rooms ?? []).map((r) => r.ceiling_height_ft).filter((v): v is number => v != null);
+  const avgCeiling = heights.length ? heights.reduce((s, v) => s + v, 0) / heights.length : null;
+  const perim      = view?.rooms.reduce((s, r) => s + (r.perimeter_linear_ft ?? 0), 0) ?? 0;
+  const hasFloorplan = view?.rooms.some((r) => r.room_polygon_ft && r.room_polygon_ft.length >= 3);
+
+  return (
+    <section className="ojw-review">
+      <div className="ojw-review-eyebrow">
+        {job.address || "Scope review"}
+      </div>
+      <h2 className="ojw-review-title">{job.title}</h2>
+
+      <div className="ojw-review-card">
+        <div className="ojw-review-tabs">
+          <button type="button" className={`ojw-tab ${scanView === "floorplan" ? "is-active" : ""}`} onClick={() => setScanView("floorplan")}>
+            Floor plan
           </button>
-        ))}
+          <button type="button" className={`ojw-tab ${scanView === "bev" ? "is-active" : ""}`} onClick={() => setScanView("bev")}>
+            Bird's eye
+          </button>
+        </div>
+        <div className="ojw-review-viewer">
+          {loading ? (
+            <div className="ojw-review-empty">Loading scan…</div>
+          ) : scanView === "floorplan" ? (
+            hasFloorplan && view ? (
+              <FloorPlan rooms={view.rooms} height={340} />
+            ) : (
+              <div className="ojw-review-empty">No floor plan available.</div>
+            )
+          ) : (
+            <iframe
+              title="Bird's eye"
+              src={`/embed/scan/${job.rfq_id}?view=bev&measurements=on`}
+              className="ojw-review-iframe"
+            />
+          )}
+        </div>
       </div>
 
-      {filtered.length === 0 && (
-        <div className="empty-state">
-          <h3>{filter === "all" ? "No jobs yet" : `No ${filter} jobs`}</h3>
-          <p>Jobs from homeowners will appear here as they post projects.</p>
-        </div>
+      {(view?.project_scope || view?.job_description || job.description) && (
+        <>
+          <div className="ojw-section-label">Scope from customer</div>
+          <div className="ojw-review-scope">
+            {view?.project_scope || view?.job_description || job.description}
+            {view && view.rooms.some((r) => r.scope?.items?.length) && (
+              <div className="ojw-scope-rooms">
+                {view.rooms.filter((r) => r.scope?.items?.length).map((r) => (
+                  <div key={r.scan_id} className="ojw-scope-room">
+                    <div className="ojw-scope-room-name">{r.room_label || "Room"}</div>
+                    <div className="ojw-scope-room-items">
+                      {r.scope!.items!.map((it) => (
+                        <span key={it} className="ojw-scope-chip">{formatJobLabel(it)}</span>
+                      ))}
+                    </div>
+                    {r.scope?.notes && <div className="ojw-scope-note">{r.scope.notes}</div>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
       )}
 
-      {filtered.map((job) => (
-        <JobCard key={`${job.rfq_id}-${job.job_status}`} job={job} />
-      ))}
+      {view && view.rooms.length > 0 && (
+        <div className="ojw-metrics">
+          <Metric label="Floor"     value={totalFloor ? totalFloor.toLocaleString() : "—"} unit="sqft" />
+          <Metric label="Wall"      value={totalWall ? totalWall.toLocaleString() : "—"}   unit="sqft" />
+          <Metric label="Ceiling"   value={avgCeiling ? avgCeiling.toFixed(1) : "—"}        unit="ft" />
+          <Metric label="Perimeter" value={perim ? perim.toFixed(1) : "—"}                 unit="ft" />
+        </div>
+      )}
+    </section>
+  );
+}
+
+function BidPdfCard({ url }: { url: string }) {
+  const [sizeLabel, setSizeLabel] = useState<string | null>(null);
+  const fileName = decodeURIComponent(url.split("?")[0].split("/").pop() || "Project breakdown.pdf");
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(url, { method: "HEAD" })
+      .then((r) => {
+        const bytes = parseInt(r.headers.get("content-length") || "0", 10);
+        if (cancelled || !bytes) return;
+        const kb = bytes / 1024;
+        setSizeLabel(kb >= 1024 ? `${(kb / 1024).toFixed(1)} MB` : `${Math.round(kb)} KB`);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [url]);
+
+  return (
+    <div className="cbf-file-card">
+      <div className="cbf-file-icon" aria-hidden="true">PDF</div>
+      <div className="cbf-file-body">
+        <div className="cbf-file-name">{fileName}</div>
+        <div className="cbf-file-meta">{sizeLabel ? `${sizeLabel} · ` : ""}Attached to your bid</div>
+      </div>
+      <a href={url} target="_blank" rel="noopener noreferrer" className="cbf-file-replace">
+        View
+      </a>
     </div>
   );
 }
+
+function Metric({ label, value, unit }: { label: string; value: string; unit: string }) {
+  return (
+    <div className="ojw-metric">
+      <div className="ojw-metric-label">{label}</div>
+      <div className="ojw-metric-value">{value} <span className="ojw-metric-unit">{unit}</span></div>
+    </div>
+  );
+}
+
+function JobBidPane({ job, onUpdate }: { job: Job; onUpdate: (rfqId: string, patch: Partial<Job>) => void }) {
+  const [editing, setEditing] = useState(false);
+  const hasBid = !!job.bid;
+  const canUpdate = hasBid && job.job_status === "pending" && !job.rfq_deleted;
+  const statusTone = job.job_status === "won"  ? "ojw-tint-won"
+                   : job.job_status === "lost" ? "ojw-tint-lost"
+                   : "ojw-tint-pending";
+  const parsed = parseBidDescription(job.bid?.description);
+
+  return (
+    <aside className="ojw-bid">
+      <div className="ojw-section-label">
+        {editing ? "Update bid" : hasBid ? "Your quote" : "Submit bid"}
+      </div>
+      <div className="ojw-bid-title">Your proposal</div>
+
+      {job.rfq_deleted && (
+        <div className="ojw-alert ojw-alert-danger">
+          <strong>Project cancelled</strong>
+          <div>The homeowner has removed this project from the platform.</div>
+        </div>
+      )}
+
+      {job.bid?.rfq_modified_after_bid && !job.rfq_deleted && (
+        <div className="ojw-alert ojw-alert-warn">
+          <strong>Project updated</strong>
+          <div>The homeowner modified this project after you submitted. Review the changes.</div>
+        </div>
+      )}
+
+      {editing && hasBid ? (
+        <ContractorBidForm
+          rfqId={job.rfq_id}
+          initial={{
+            price_cents: job.bid!.price_cents,
+            timeline: parsed.timeline,
+            start: parsed.start,
+            note: parsed.note,
+            pdf_url: job.bid!.pdf_url ?? null,
+          }}
+          submitLabel="Update bid"
+          onCancel={() => setEditing(false)}
+          onSubmitted={(bid) => {
+            setEditing(false);
+            onUpdate(job.rfq_id, {
+              job_status: "pending",
+              bid: {
+                ...job.bid!,
+                id: bid.id,
+                price_cents: bid.price_cents,
+                status: "pending",
+                received_at: new Date().toISOString(),
+                description: bid.description,
+                rfq_modified_after_bid: false,
+              },
+            });
+          }}
+        />
+      ) : hasBid ? (
+        <>
+          <div className="ojw-total">
+            <div className="ojw-total-label">Total</div>
+            <div className="ojw-total-value">{fmtPriceCents(job.bid!.price_cents)}</div>
+            <span className={`ojw-row-tint ${statusTone}`} style={{ alignSelf: "flex-start" }}>
+              {job.job_status[0].toUpperCase() + job.job_status.slice(1)}
+            </span>
+          </div>
+
+          {(parsed.timeline || parsed.start) && (
+            <div className="ojw-bid-timeline">
+              {parsed.timeline && <span><strong>Timeline:</strong> {parsed.timeline}</span>}
+              {parsed.timeline && parsed.start && <span className="ojw-bid-timeline-sep">·</span>}
+              {parsed.start && <span><strong>Start:</strong> {parsed.start}</span>}
+            </div>
+          )}
+
+          {job.bid!.received_at && (
+            <div className="ojw-bid-meta">Submitted {fmtJobDate(job.bid!.received_at)}</div>
+          )}
+
+          {parsed.note && (
+            <div className="ojw-bid-desc">{parsed.note}</div>
+          )}
+
+          {job.bid!.pdf_url && (
+            <>
+              <div className="ojw-section-label" style={{ marginTop: 18 }}>Project breakdown PDF</div>
+              <BidPdfCard url={job.bid!.pdf_url} />
+            </>
+          )}
+
+          {canUpdate && (
+            <button type="button" className="ojw-bid-btn" style={{ marginTop: 18 }} onClick={() => setEditing(true)}>
+              Update bid
+            </button>
+          )}
+        </>
+      ) : job.rfq_deleted ? (
+        <div className="ojw-bid-placeholder">Project cancelled. Bidding is disabled.</div>
+      ) : (
+        <ContractorBidForm
+          rfqId={job.rfq_id}
+          onSubmitted={(bid) => {
+            onUpdate(job.rfq_id, {
+              job_status: "pending",
+              bid: {
+                id: bid.id,
+                price_cents: bid.price_cents,
+                status: "pending",
+                received_at: new Date().toISOString(),
+                description: bid.description,
+              },
+            });
+          }}
+        />
+      )}
+    </aside>
+  );
+}
+
+const OJW_CSS = `
+.ojw {
+  display: grid; grid-template-columns: 340px 1fr 360px;
+  height: calc(100vh - 56px); background: var(--q-canvas); overflow: hidden;
+}
+@media (max-width: 1100px) { .ojw { grid-template-columns: 300px 1fr; } .ojw-bid { display: none; } }
+@media (max-width: 820px)  { .ojw { grid-template-columns: 1fr; } .ojw-review { display: none; } }
+
+.ojw-list {
+  border-right: 0.5px solid var(--q-hairline); background: var(--q-surface);
+  overflow-y: auto; display: flex; flex-direction: column;
+}
+.ojw-list-head { padding: 22px 22px 12px; border-bottom: 0.5px solid var(--q-divider); }
+.ojw-title { font-size: 26px; font-weight: 700; letter-spacing: -0.8px; margin: 0 0 14px; }
+.ojw-chips { display: flex; gap: 4px; flex-wrap: wrap; }
+.ojw-chip {
+  border: none; background: transparent; color: var(--q-ink-soft);
+  padding: 5px 11px; border-radius: var(--q-radius-pill); font-size: 12px; font-weight: 600;
+  font-family: inherit; cursor: pointer; box-shadow: inset 0 0 0 0.5px var(--q-hairline);
+  display: inline-flex; align-items: center; gap: 5px;
+}
+.ojw-chip.is-active { background: var(--q-primary); color: var(--q-primary-ink); box-shadow: none; }
+.ojw-chip-count { opacity: 0.7; font-weight: 500; }
+.ojw-chip.is-active .ojw-chip-count { opacity: 0.85; }
+
+.ojw-rows { display: flex; flex-direction: column; }
+.ojw-row {
+  display: flex; gap: 12px; padding: 14px 22px; border: none; background: transparent;
+  font-family: inherit; text-align: left; cursor: pointer; color: var(--q-ink);
+  border-top: 0.5px solid var(--q-divider); border-left: 3px solid transparent;
+  transition: background 0.12s;
+  align-items: flex-start; justify-content: space-between;
+}
+.ojw-row:hover { background: var(--q-surface-muted); }
+.ojw-row.is-active { background: var(--q-primary-soft); border-left-color: var(--q-primary); }
+.ojw-row-main { flex: 1; min-width: 0; }
+.ojw-row-title {
+  font-size: 14px; font-weight: 700; letter-spacing: -0.2px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ojw-row-desc {
+  font-size: 12px; color: var(--q-ink-soft); margin-top: 2px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ojw-row-addr {
+  font-size: 11px; color: var(--q-ink-muted); margin-top: 4px;
+  display: flex; align-items: center; gap: 4px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ojw-row-tint {
+  display: inline-block; padding: 2px 8px; border-radius: var(--q-radius-pill);
+  font-size: 10px; font-weight: 700; letter-spacing: 0.3px; text-transform: uppercase;
+  margin-top: 7px;
+}
+.ojw-tint-new     { background: #DCE8FF; color: #1E3FA5; }
+.ojw-tint-pending { background: #FFEAC2; color: #8A5A00; }
+.ojw-tint-won     { background: var(--q-primary-soft); color: var(--q-primary); }
+.ojw-tint-lost    { background: #F1D6D6; color: #8A2A2A; }
+
+.ojw-row-price {
+  font-size: 15px; font-weight: 700; letter-spacing: -0.3px; white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.ojw-row-view {
+  font-size: 12px; color: var(--q-primary); font-weight: 600; white-space: nowrap;
+}
+
+.ojw-empty, .ojw-nosel {
+  padding: 40px 24px; text-align: center; color: var(--q-ink-muted); font-size: 13px;
+}
+.ojw-empty strong, .ojw-nosel strong { display: block; color: var(--q-ink); font-size: 15px; margin-bottom: 6px; }
+.ojw-nosel { display: flex; align-items: center; justify-content: center; grid-column: 2 / -1; }
+
+/* Review pane (center) */
+.ojw-review { overflow-y: auto; padding: 24px 32px 48px; }
+.ojw-review-eyebrow {
+  font-size: 11px; font-weight: 700; color: var(--q-ink-muted);
+  letter-spacing: 0.5px; text-transform: uppercase;
+}
+.ojw-review-title {
+  font-size: 32px; font-weight: 700; letter-spacing: -0.8px;
+  margin: 4px 0 16px;
+}
+
+.ojw-review-card {
+  background: var(--q-surface); border-radius: 16px; padding: 18px;
+  box-shadow: inset 0 0 0 0.5px var(--q-hairline);
+}
+.ojw-review-tabs {
+  display: inline-flex; align-self: flex-start; gap: 2px; padding: 3px;
+  background: var(--q-surface-muted); border-radius: var(--q-radius-pill);
+  margin-bottom: 12px;
+}
+.ojw-tab {
+  border: none; background: transparent; padding: 5px 12px;
+  font-size: 13px; font-weight: 600; font-family: inherit; cursor: pointer;
+  color: var(--q-ink-muted); border-radius: var(--q-radius-pill);
+}
+.ojw-tab:hover { color: var(--q-ink); }
+.ojw-tab.is-active { background: var(--q-surface); color: var(--q-ink); box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+
+.ojw-review-viewer {
+  aspect-ratio: 16 / 9; border-radius: 12px; overflow: hidden;
+  background: var(--q-scan-accent-soft); position: relative;
+}
+.ojw-review-viewer > div { height: 100% !important; background: transparent !important; border: none !important; border-radius: 0 !important; }
+.ojw-review-viewer canvas { display: block; width: 100% !important; height: 100% !important; }
+.ojw-review-iframe { width: 100%; height: 100%; border: 0; background: #000; }
+.ojw-review-empty {
+  height: 100%; display: flex; align-items: center; justify-content: center;
+  color: var(--q-ink-muted); font-size: 13px;
+}
+
+.ojw-section-label {
+  font-size: 12px; font-weight: 700; color: var(--q-ink-muted);
+  letter-spacing: 0.5px; text-transform: uppercase; margin: 20px 0 8px;
+}
+.ojw-review-scope {
+  background: var(--q-surface); border-radius: 14px; padding: 18px;
+  font-size: 15px; color: var(--q-ink-soft); line-height: 1.5;
+  box-shadow: inset 0 0 0 0.5px var(--q-hairline); white-space: pre-wrap;
+}
+.ojw-scope-rooms { display: flex; flex-direction: column; gap: 14px; margin-top: 14px; padding-top: 14px; border-top: 0.5px solid var(--q-divider); }
+.ojw-scope-room-name { font-size: 13px; font-weight: 700; color: var(--q-ink); margin-bottom: 6px; }
+.ojw-scope-room-items { display: flex; flex-wrap: wrap; gap: 6px; }
+.ojw-scope-chip {
+  display: inline-block; font-size: 12px; font-weight: 600; padding: 3px 10px;
+  border-radius: var(--q-radius-sm); background: var(--q-primary-soft); color: var(--q-primary);
+}
+.ojw-scope-note { font-size: 13px; color: var(--q-ink-muted); font-style: italic; margin-top: 8px; }
+
+.ojw-metrics {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 16px;
+}
+.ojw-metric {
+  background: var(--q-surface); border-radius: 12px; padding: 14px;
+  box-shadow: inset 0 0 0 0.5px var(--q-hairline);
+}
+.ojw-metric-label {
+  font-size: 11px; font-weight: 700; color: var(--q-ink-muted);
+  letter-spacing: 0.3px; text-transform: uppercase;
+}
+.ojw-metric-value { font-size: 22px; font-weight: 700; letter-spacing: -0.5px; margin-top: 2px; }
+.ojw-metric-unit  { font-size: 12px; color: var(--q-ink-muted); font-weight: 500; }
+
+/* Bid pane (right) */
+.ojw-bid {
+  border-left: 0.5px solid var(--q-hairline); background: var(--q-surface);
+  overflow-y: auto; padding: 24px;
+}
+.ojw-bid-title { font-size: 22px; font-weight: 700; letter-spacing: -0.5px; margin: 2px 0 18px; }
+.ojw-bid-placeholder {
+  font-size: 13px; color: var(--q-ink-muted); margin-bottom: 16px; line-height: 1.5;
+}
+.ojw-bid-btn {
+  display: block; width: 100%; padding: 12px 16px; border: none;
+  background: var(--q-primary); color: var(--q-primary-ink);
+  font-size: 15px; font-weight: 600; font-family: inherit;
+  border-radius: var(--q-radius-md); cursor: pointer;
+  transition: filter 0.15s;
+}
+.ojw-bid-btn:hover { filter: brightness(0.92); }
+.ojw-bid-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.ojw-bid-timeline {
+  display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+  font-size: 13px; color: var(--q-ink-soft); margin-bottom: 10px;
+}
+.ojw-bid-timeline strong { color: var(--q-ink-muted); font-weight: 600; letter-spacing: 0.3px; text-transform: uppercase; font-size: 11px; margin-right: 4px; }
+.ojw-bid-timeline-sep { color: var(--q-ink-dim); }
+
+.ojw-total {
+  background: var(--q-surface-muted); border-radius: 12px; padding: 14px;
+  display: flex; flex-direction: column; gap: 4px; margin-bottom: 14px;
+}
+.ojw-total-label { font-size: 12px; font-weight: 600; color: var(--q-ink-muted); }
+.ojw-total-value { font-size: 28px; font-weight: 700; letter-spacing: -0.8px; font-variant-numeric: tabular-nums; }
+.ojw-bid-meta { font-size: 12px; color: var(--q-ink-muted); margin-bottom: 10px; }
+.ojw-bid-desc {
+  font-size: 13px; color: var(--q-ink-soft); line-height: 1.5; white-space: pre-wrap;
+  padding-top: 12px; border-top: 0.5px solid var(--q-divider); margin-top: 4px;
+}
+/* PDF file card — mirrors the upload card in ContractorBidForm so the
+   submitted-bid state shows the same visual treatment with a View action. */
+.cbf-file-card {
+  display: flex; align-items: center; gap: 12px;
+  background: var(--q-surface-muted); border-radius: 12px; padding: 12px 14px;
+  box-shadow: inset 0 0 0 0.5px var(--q-hairline);
+}
+.cbf-file-icon {
+  width: 40px; height: 48px; border-radius: 6px;
+  background: #C8342C; color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 800; letter-spacing: 0.5px; flex-shrink: 0;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.15);
+}
+.cbf-file-body { flex: 1; min-width: 0; }
+.cbf-file-name {
+  font-size: 13px; font-weight: 600; color: var(--q-ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cbf-file-meta { font-size: 11px; color: var(--q-ink-muted); margin-top: 2px; }
+.cbf-file-replace {
+  padding: 6px 12px; font-size: 12px; font-weight: 600; font-family: inherit;
+  color: var(--q-ink); background: var(--q-surface); border-radius: 8px;
+  box-shadow: inset 0 0 0 0.5px var(--q-hairline);
+  cursor: pointer; white-space: nowrap; text-decoration: none;
+}
+.cbf-file-replace:hover { background: var(--q-canvas); text-decoration: none; }
+
+.ojw-alert {
+  padding: 12px; border-radius: var(--q-radius-md); margin-bottom: 14px;
+  font-size: 13px; line-height: 1.4;
+}
+.ojw-alert strong { display: block; font-weight: 700; margin-bottom: 2px; }
+.ojw-alert-danger { background: #FEEFEF; color: #8A2A2A; border: 1px solid #F1D6D6; }
+.ojw-alert-warn   { background: #FFF8E8; color: #7A5500; border: 1px solid #FFE3A1; }
+`;
 
 
 const DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
@@ -244,7 +842,7 @@ function OrgSettings({ org, onUpdate }: { org: OrgData; onUpdate: (o: OrgData) =
         <div style={{
           height: 140, background: bannerUrl
             ? `url(${bannerUrl}) center/cover no-repeat`
-            : "linear-gradient(135deg, #0055cc 0%, #0088ff 100%)",
+            : "var(--q-primary)",
           display: "flex", alignItems: "flex-end", justifyContent: "flex-end", padding: 12,
         }}>
           <label className="btn" style={{ fontSize: 12, padding: "4px 12px", cursor: "pointer", background: "rgba(255,255,255,0.9)" }}>

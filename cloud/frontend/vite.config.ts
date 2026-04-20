@@ -16,6 +16,16 @@ export default defineConfig({
         changeOrigin: true,
         secure: true,
       },
+      "/embed": {
+        target: "https://scan-api-839349778883.us-central1.run.app",
+        changeOrigin: true,
+        secure: true,
+      },
+      "/splat": {
+        target: "https://scan-api-839349778883.us-central1.run.app",
+        changeOrigin: true,
+        secure: true,
+      },
       "/bids": {
         target: "https://scan-api-839349778883.us-central1.run.app",
         changeOrigin: true,
