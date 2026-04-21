@@ -15,10 +15,15 @@ struct ProjectDetailView: View {
     @State private var hiredError: String?
     @State private var scanView: ScanView = .floorplan
     @State private var interactingWithBEV = false
+    @State private var bevFullscreen = false
 
     private enum ScanView: String { case floorplan, birdseye }
 
     private let embedBase = "https://scan-api-839349778883.us-central1.run.app"
+
+    private var bevURL: URL? {
+        URL(string: "\(embedBase)/embed/scan/\(rfq.id)?view=bev&measurements=on")
+    }
 
     var body: some View {
         ScrollView {
@@ -61,6 +66,11 @@ struct ProjectDetailView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(hiredError ?? "")
+        }
+        .fullScreenCover(isPresented: $bevFullscreen) {
+            if let url = bevURL {
+                BEVFullscreenView(url: url) { bevFullscreen = false }
+            }
         }
     }
 
@@ -146,22 +156,40 @@ struct ProjectDetailView: View {
                             .frame(height: 220)
                             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     case .birdseye:
-                        if let url = URL(string: "\(embedBase)/embed/scan/\(rfq.id)?view=bev&measurements=on") {
-                            EmbedWebView(url: url)
-                                .frame(height: 260)
-                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                                .background(Color.black)
-                                // Claim touches inside the BEV region so the outer
-                                // ScrollView doesn't scroll while the user is
-                                // panning/rotating the 3D scene. The minimum
-                                // distance of 0 makes the state flip on touch-down.
-                                .simultaneousGesture(
-                                    DragGesture(minimumDistance: 0)
-                                        .onChanged { _ in
-                                            if !interactingWithBEV { interactingWithBEV = true }
-                                        }
-                                        .onEnded { _ in interactingWithBEV = false }
-                                )
+                        if let url = bevURL {
+                            ZStack(alignment: .topTrailing) {
+                                EmbedWebView(url: url)
+                                    .background(Color.black)
+                                    // Claim touches inside the BEV region so the outer
+                                    // ScrollView doesn't scroll while the user is
+                                    // panning/rotating the 3D scene. Minimum distance 0
+                                    // flips the state on touch-down.
+                                    .simultaneousGesture(
+                                        DragGesture(minimumDistance: 0)
+                                            .onChanged { _ in
+                                                if !interactingWithBEV { interactingWithBEV = true }
+                                            }
+                                            .onEnded { _ in interactingWithBEV = false }
+                                    )
+
+                                // Fullscreen toggle
+                                Button {
+                                    bevFullscreen = true
+                                } label: {
+                                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                                        .font(.system(size: 14, weight: .semibold))
+                                        .foregroundStyle(.white)
+                                        .padding(10)
+                                        .background(.ultraThinMaterial)
+                                        .background(Color.black.opacity(0.35))
+                                        .clipShape(Circle())
+                                }
+                                .buttonStyle(.plain)
+                                .padding(10)
+                                .accessibilityLabel("Enter full screen")
+                            }
+                            .frame(height: 260)
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                         }
                     }
                 }
@@ -610,6 +638,44 @@ struct ProjectDetailView: View {
             hiredError = (error as NSError).localizedDescription
         }
         hiring = false
+    }
+}
+
+// MARK: – Fullscreen BEV cover
+
+/// Fullscreen presentation of the embed viewer. Pure black background so the
+/// 3D scene is the whole stage. A dismiss chip sits above the safe area.
+private struct BEVFullscreenView: View {
+    let url: URL
+    let onDismiss: () -> Void
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            Color.black.ignoresSafeArea()
+            EmbedWebView(url: url).ignoresSafeArea()
+
+            Button {
+                onDismiss()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text("Close")
+                        .font(.system(size: 14, weight: .semibold))
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(.ultraThinMaterial)
+                .background(Color.black.opacity(0.35))
+                .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 8)
+            .padding(.leading, 16)
+            .accessibilityLabel("Exit full screen")
+        }
+        .statusBarHidden(true)
     }
 }
 
