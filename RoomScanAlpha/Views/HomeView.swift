@@ -159,74 +159,73 @@ struct HomeView: View {
     // MARK: – Scan CTA
 
     private var captureCard: some View {
-        ZStack(alignment: .topLeading) {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(QTheme.ink)
+        VStack(alignment: .leading, spacing: 0) {
+            Text("CAPTURE")
+                .font(.system(size: 12, weight: .semibold))
+                .tracking(0.5)
+                .foregroundStyle(.white.opacity(0.7))
+            (
+                Text("Scan a new room").foregroundStyle(.white) +
+                Text("\nto a project.").foregroundStyle(.white.opacity(0.65)).fontWeight(.medium)
+            )
+            .font(.system(size: 24, weight: .bold))
+            .tracking(-0.4)
+            .lineSpacing(2)
+            .padding(.top, 10)
 
-            // Decorative radial glow
-            Circle()
-                .fill(
-                    RadialGradient(
-                        colors: [QTheme.primary.opacity(0.55), .clear],
-                        center: .center, startRadius: 0, endRadius: 120
-                    )
-                )
-                .frame(width: 220, height: 220)
-                .offset(x: 180, y: -80)
-                .clipped()
-
-            VStack(alignment: .leading, spacing: 0) {
-                Text("CAPTURE")
-                    .font(.system(size: 12, weight: .semibold))
-                    .tracking(0.5)
-                    .foregroundStyle(.white.opacity(0.7))
-                (
-                    Text("Scan a new room").foregroundStyle(.white) +
-                    Text("\nto a project.").foregroundStyle(.white.opacity(0.65)).fontWeight(.medium)
-                )
-                .font(.system(size: 22, weight: .bold))
-                .tracking(-0.4)
-                .lineSpacing(2)
-                .padding(.top, 8)
-
-                HStack(spacing: 8) {
-                    Button(action: onStartScan) {
-                        HStack(spacing: 6) {
-                            Image(systemName: "camera.viewfinder")
-                                .font(.system(size: 13, weight: .semibold))
-                            Text("Start scan").font(.system(size: 14, weight: .semibold))
-                        }
-                        .padding(.horizontal, 14).padding(.vertical, 8)
-                        .background(.white)
-                        .foregroundStyle(QTheme.ink)
-                        .clipShape(Capsule())
+            HStack(spacing: 10) {
+                Button(action: onStartScan) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "camera.viewfinder")
+                            .font(.system(size: 15, weight: .semibold))
+                        Text("Start scan").font(.system(size: 15, weight: .semibold))
                     }
-                    .buttonStyle(.plain)
-                    .disabled(!hasLiDAR)
-                    .opacity(hasLiDAR ? 1 : 0.5)
-
-                    Button(action: onPickProject) {
-                        Text("Pick project")
-                            .font(.system(size: 14, weight: .semibold))
-                            .padding(.horizontal, 14).padding(.vertical, 8)
-                            .foregroundStyle(.white)
-                            .overlay(
-                                Capsule().strokeBorder(.white.opacity(0.25), lineWidth: 1)
-                            )
-                    }
-                    .buttonStyle(.plain)
+                    .padding(.horizontal, 20).padding(.vertical, 12)
+                    .background(.white)
+                    .foregroundStyle(QTheme.ink)
+                    .clipShape(Capsule())
                 }
-                .padding(.top, 16)
+                .buttonStyle(.plain)
+                .disabled(!hasLiDAR)
+                .opacity(hasLiDAR ? 1 : 0.5)
 
-                if !hasLiDAR {
-                    Text("LiDAR scanner required")
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.7))
-                        .padding(.top, 10)
+                Button(action: onPickProject) {
+                    Text("Pick project")
+                        .font(.system(size: 15, weight: .semibold))
+                        .padding(.horizontal, 20).padding(.vertical, 12)
+                        .foregroundStyle(.white)
+                        .overlay(
+                            Capsule().strokeBorder(.white.opacity(0.3), lineWidth: 1)
+                        )
                 }
+                .buttonStyle(.plain)
             }
-            .padding(20)
+            .padding(.top, 20)
+
+            if !hasLiDAR {
+                Text("LiDAR scanner required")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.7))
+                    .padding(.top, 12)
+            }
         }
+        .padding(24)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // Single background containing both the ink fill and a top-right
+        // forest glow. Using a layered gradient instead of an offset circle
+        // avoids the clipped-box artifact at the card edge.
+        .background(
+            ZStack {
+                QTheme.ink
+                RadialGradient(
+                    colors: [QTheme.primary.opacity(0.55), .clear],
+                    center: UnitPoint(x: 0.95, y: 0.0),
+                    startRadius: 0,
+                    endRadius: 260
+                )
+            }
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .padding(.horizontal, 20)
     }
 

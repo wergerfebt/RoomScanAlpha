@@ -5,6 +5,14 @@ import SwiftUI
 /// full Project Detail with bids.
 struct RFQSelectionView: View {
     @Binding var selectedRFQ: RFQ?
+    /// When set, tapping a Scan-room action inside ProjectDetailView bubbles up
+    /// through this callback. Home calls this to return to idle, and the
+    /// ContentView state machine advances to projectOverview.
+    var onScanRoom: ((RFQ) -> Void)? = nil
+    /// Invoked when the user taps the top-left Home chevron — lets the parent
+    /// state machine pop out of `.selectingRFQ` back to Home.
+    var onClose: (() -> Void)? = nil
+
     @State private var rfqs: [RFQ] = []
     @State private var isLoading = true
     @State private var showNewProject = false
@@ -48,6 +56,21 @@ struct RFQSelectionView: View {
             .navigationTitle("Projects")
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
+                if onClose != nil {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button {
+                            onClose?()
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "chevron.left")
+                                    .font(.system(size: 15, weight: .semibold))
+                                Text("Home")
+                                    .font(.system(size: 15, weight: .medium))
+                            }
+                            .foregroundStyle(QTheme.ink)
+                        }
+                    }
+                }
                 ToolbarItem(placement: .primaryAction) {
                     Button {
                         showNewProject = true
@@ -156,100 +179,85 @@ struct RFQSelectionView: View {
         let bidBg: Color = hired ? QTheme.primarySoft : (nBids == 0 ? QTheme.warning.opacity(0.12) : QTheme.success.opacity(0.12))
         let selected = selectedRFQ?.id == rfq.id
 
-        return HStack(alignment: .top, spacing: 10) {
-            Button {
+        return NavigationLink {
+            ProjectDetailView(rfq: rfq) {
+                // Scan-room callback from detail — bubble up so ContentView
+                // can enter the scan flow for this project.
                 selectedRFQ = rfq
-            } label: {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(alignment: .top, spacing: 12) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            HStack(spacing: 6) {
-                                Text(rfq.displayTitle)
-                                    .font(.system(size: 17, weight: .bold))
-                                    .tracking(-0.3)
-                                    .foregroundStyle(QTheme.ink)
-                                    .lineLimit(1)
-                                if selected {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundStyle(QTheme.primary)
-                                        .font(.system(size: 14))
-                                }
-                            }
-                            if let address = rfq.address, !address.isEmpty {
-                                Text(address)
-                                    .font(.system(size: 13))
-                                    .foregroundStyle(QTheme.inkMuted)
-                                    .lineLimit(1)
+                onScanRoom?(rfq)
+            }
+        } label: {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 6) {
+                            Text(rfq.displayTitle)
+                                .font(.system(size: 17, weight: .bold))
+                                .tracking(-0.3)
+                                .foregroundStyle(QTheme.ink)
+                                .lineLimit(1)
+                            if selected {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(QTheme.primary)
+                                    .font(.system(size: 14))
                             }
                         }
-                        Spacer(minLength: 8)
-                        Text(bidLabel)
-                            .font(.system(size: 12, weight: .bold))
-                            .tracking(0.1)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .foregroundStyle(bidColor)
-                            .background(bidBg)
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
-                    }
-
-                    Rectangle()
-                        .fill(QTheme.divider)
-                        .frame(height: 0.5)
-
-                    HStack(spacing: 10) {
-                        Label {
-                            Text(roomsLabel(rfq))
+                        if let address = rfq.address, !address.isEmpty {
+                            Text(address)
                                 .font(.system(size: 13))
                                 .foregroundStyle(QTheme.inkMuted)
-                        } icon: {
-                            Image(systemName: "house")
-                                .font(.system(size: 12))
-                                .foregroundStyle(QTheme.inkMuted)
+                                .lineLimit(1)
                         }
-                        .labelStyle(.titleAndIcon)
-
-                        if let created = shortDate(rfq.createdAt) {
-                            dot
-                            Text("Created \(created)")
-                                .font(.system(size: 13))
-                                .foregroundStyle(QTheme.inkMuted)
-                        }
-
-                        Spacer(minLength: 0)
                     }
+                    Spacer(minLength: 8)
+                    Text(bidLabel)
+                        .font(.system(size: 12, weight: .bold))
+                        .tracking(0.1)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .foregroundStyle(bidColor)
+                        .background(bidBg)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
                 }
-                .padding(.horizontal, 18)
-                .padding(.vertical, 16)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(QTheme.surface)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .strokeBorder(selected ? QTheme.primary.opacity(0.5) : QTheme.hairline, lineWidth: selected ? 1.5 : 0.5)
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
 
-            NavigationLink {
-                ProjectDetailView(rfq: rfq)
-            } label: {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(QTheme.inkMuted)
-                    .padding(.vertical, 24)
-                    .padding(.horizontal, 8)
-                    .background(QTheme.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 20, style: .continuous)
-                            .strokeBorder(QTheme.hairline, lineWidth: 0.5)
-                    )
-                    .accessibilityLabel("Open \(rfq.displayTitle) details")
+                Rectangle()
+                    .fill(QTheme.divider)
+                    .frame(height: 0.5)
+
+                HStack(spacing: 10) {
+                    Label {
+                        Text(roomsLabel(rfq))
+                            .font(.system(size: 13))
+                            .foregroundStyle(QTheme.inkMuted)
+                    } icon: {
+                        Image(systemName: "house")
+                            .font(.system(size: 12))
+                            .foregroundStyle(QTheme.inkMuted)
+                    }
+                    .labelStyle(.titleAndIcon)
+
+                    if let created = shortDate(rfq.createdAt) {
+                        dot
+                        Text("Created \(created)")
+                            .font(.system(size: 13))
+                            .foregroundStyle(QTheme.inkMuted)
+                    }
+
+                    Spacer(minLength: 0)
+                }
             }
-            .buttonStyle(.plain)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(QTheme.surface)
+            .overlay(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .strokeBorder(selected ? QTheme.primary.opacity(0.5) : QTheme.hairline, lineWidth: selected ? 1.5 : 0.5)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
     }
 
     private var dot: some View {

@@ -23,12 +23,25 @@ struct ContentView: View {
             case .idle:
                 idleView
             case .selectingRFQ:
-                RFQSelectionView(selectedRFQ: $viewModel.selectedRFQ)
-                    .onChange(of: viewModel.selectedRFQ) { _, newValue in
-                        if newValue != nil {
-                            viewModel.state = .projectOverview
-                        }
+                RFQSelectionView(
+                    selectedRFQ: $viewModel.selectedRFQ,
+                    onScanRoom: { rfq in
+                        viewModel.selectedRFQ = rfq
+                        viewModel.state = .projectOverview
+                    },
+                    onClose: {
+                        viewModel.state = .idle
                     }
+                )
+                .onChange(of: viewModel.selectedRFQ) { _, newValue in
+                    // Selecting a project (e.g. just-created) should still
+                    // advance the state machine. Scan-room from detail has
+                    // already advanced, so this branch only fires for new
+                    // RFQ creation.
+                    if newValue != nil && viewModel.state == .selectingRFQ {
+                        viewModel.state = .projectOverview
+                    }
+                }
             case .projectOverview:
                 if let rfq = viewModel.selectedRFQ {
                     ProjectOverviewView(

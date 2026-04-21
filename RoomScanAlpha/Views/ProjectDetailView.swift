@@ -5,7 +5,12 @@ import SwiftUI
 /// The big product shift is that bids now live on-device (previously web-only).
 struct ProjectDetailView: View {
     let rfq: RFQ
+    /// When set, shows a "Scan a room" toolbar button. Tapping it pops this
+    /// view (via dismiss) and calls the closure so the parent can enter the
+    /// scan flow with this RFQ selected.
+    var onScanRoom: (() -> Void)? = nil
 
+    @Environment(\.dismiss) private var dismiss
     @State private var detail: ProjectDetail?
     @State private var bids: [Bid] = []
     @State private var loading = true
@@ -42,6 +47,24 @@ struct ProjectDetailView: View {
         .scrollDisabled(interactingWithBEV)
         .background(QTheme.canvas.ignoresSafeArea())
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if onScanRoom != nil {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        onScanRoom?()
+                        dismiss()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "camera.viewfinder")
+                                .font(.system(size: 14, weight: .semibold))
+                            Text("Scan a room")
+                                .font(.system(size: 14, weight: .semibold))
+                        }
+                        .foregroundStyle(QTheme.primary)
+                    }
+                }
+            }
+        }
         .task { await load() }
         .refreshable { await load() }
         .alert(
