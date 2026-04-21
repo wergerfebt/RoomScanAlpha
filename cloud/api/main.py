@@ -1146,6 +1146,21 @@ def list_bids(rfq_id: str, token: str = None, authorization: Optional[str] = Hea
                         "blob_path": bp, "content_type": ct, "name": nm, "size_bytes": sb,
                     })
 
+        # Fetch RFQ-level attachments so the homeowner can see media they've
+        # shared (directly or via chat) alongside the bids.
+        cursor.execute(
+            """SELECT a.blob_path, a.content_type, a.name, a.size_bytes
+               FROM rfq_attachments ra
+               JOIN attachments a ON a.id = ra.attachment_id
+               WHERE ra.rfq_id = %s
+               ORDER BY ra.created_at""",
+            (rfq_id,),
+        )
+        rfq_attachment_rows = [
+            {"blob_path": bp, "content_type": ct, "name": nm, "size_bytes": sb}
+            for bp, ct, nm, sb in cursor.fetchall()
+        ]
+
         # Collect org IDs to batch-fetch gallery images
         org_ids = [row[12] for row in rows if row[12]]
         gallery_by_org = {}
@@ -1229,6 +1244,7 @@ def list_bids(rfq_id: str, token: str = None, authorization: Optional[str] = Hea
     return {
         "rfq_id": rfq_id,
         "project_description": project_description,
+        "rfq_attachments": _resolve_attachments(rfq_attachment_rows),
         "bids": bids,
     }
 

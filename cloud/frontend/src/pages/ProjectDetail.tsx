@@ -4,6 +4,7 @@ import Layout from "../components/Layout";
 import FloorPlan from "../components/FloorPlan";
 import FilterSidebar, { type FilterValues } from "../components/FilterSidebar";
 import ContractorCard, { type Bid } from "../components/ContractorCard";
+import PhotosCarousel, { type CarouselAttachment } from "../components/PhotosCarousel";
 import { apiFetch } from "../api/client";
 
 interface Room {
@@ -31,6 +32,7 @@ interface ProjectView {
 interface BidsResponse {
   rfq_id: string;
   project_description: string | null;
+  rfq_attachments?: CarouselAttachment[];
   bids: Bid[];
 }
 
@@ -56,6 +58,7 @@ export default function ProjectDetail() {
   const navigate = useNavigate();
   const [project, setProject] = useState<ProjectView | null>(null);
   const [bids, setBids] = useState<Bid[]>([]);
+  const [rfqAttachments, setRfqAttachments] = useState<CarouselAttachment[]>([]);
   const [rfqMeta, setRfqMeta] = useState<{ title: string | null; description: string | null; address: string | null; created_at: string | null } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -94,7 +97,10 @@ export default function ProjectDetail() {
             setRfqMeta({ title: rfq.title, description: rfq.description, address: rfq.address, created_at: rfq.created_at });
             if (rfq.bid_view_token) {
               const b = await apiFetch<BidsResponse>(`/api/rfqs/${rfqId}/bids?token=${encodeURIComponent(rfq.bid_view_token)}`);
-              if (!cancelled) setBids(b.bids);
+              if (!cancelled) {
+                setBids(b.bids);
+                setRfqAttachments(b.rfq_attachments ?? []);
+              }
               return;
             }
           }
@@ -106,7 +112,10 @@ export default function ProjectDetail() {
         // RFQ via user_id match even if /api/rfqs list didn't surface it.
         try {
           const b = await apiFetch<BidsResponse>(`/api/rfqs/${rfqId}/bids`);
-          if (!cancelled) setBids(b.bids);
+          if (!cancelled) {
+            setBids(b.bids);
+            setRfqAttachments(b.rfq_attachments ?? []);
+          }
         } catch {
           // Not authorized — read-only view with no bids panel.
         }
@@ -138,6 +147,7 @@ export default function ProjectDetail() {
     if (!token) return;
     const b = await apiFetch<BidsResponse>(`/api/rfqs/${rfqId}/bids?token=${encodeURIComponent(token)}`);
     setBids(b.bids);
+    setRfqAttachments(b.rfq_attachments ?? []);
   }
 
   function openEdit() {
@@ -410,6 +420,14 @@ export default function ProjectDetail() {
                   </div>
                 )}
               </div>
+            </section>
+          )}
+
+          {/* Project photos — homeowner-shared media (direct upload + chat) */}
+          {rfqAttachments.some((a) => (a.content_type || "").startsWith("image/")) && (
+            <section style={{ marginTop: 32 }}>
+              <div className="pd-section-label">Project photos</div>
+              <PhotosCarousel attachments={rfqAttachments} />
             </section>
           )}
 

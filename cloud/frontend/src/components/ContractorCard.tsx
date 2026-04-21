@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import Lightbox, { type LightboxItem } from "./Lightbox";
+import PhotosCarousel, { type CarouselAttachment } from "./PhotosCarousel";
 
 export interface GalleryImage {
   id: string;
@@ -29,6 +30,7 @@ export interface Bid {
   price_cents: number;
   description: string | null;
   pdf_url: string | null;
+  attachments?: CarouselAttachment[];
   received_at: string | null;
   status?: string | null;
   contractor: Contractor;
@@ -263,6 +265,14 @@ export default function ContractorCard({
                 </svg>
                 View Quote (PDF)
               </a>
+            )}
+
+            {/* Bid images (contractor-attached, from direct upload or chat) */}
+            {bid?.attachments && bid.attachments.some((a) => (a.content_type || "").startsWith("image/")) && (
+              <div onClick={(e) => e.stopPropagation()} style={{ marginTop: 10 }}>
+                <div className="contractor-card-subsection-label">Bid images</div>
+                <PhotosCarousel attachments={bid.attachments} tileSize={96} />
+              </div>
             )}
 
             {/* Received date */}
