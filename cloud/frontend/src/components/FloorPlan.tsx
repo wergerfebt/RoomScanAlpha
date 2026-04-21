@@ -18,17 +18,35 @@ export default function FloorPlan({ rooms, width = 400, height = 300 }: FloorPla
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const dpr = window.devicePixelRatio || 1;
-    const rect = canvas.parentElement?.getBoundingClientRect();
-    const w = rect?.width || width;
-    const h = height;
-    canvas.width = w * dpr;
-    canvas.height = h * dpr;
-    canvas.style.width = `${w}px`;
-    canvas.style.height = `${h}px`;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    ctx.scale(dpr, dpr);
+    function draw() {
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      const dpr = window.devicePixelRatio || 1;
+      const rect = canvas.parentElement?.getBoundingClientRect();
+      // Honor the parent's actual rendered box so CSS overrides (aspect-ratio,
+      // 100%/100% sizing) can't warp the drawing. Fall back to props only when
+      // the parent has no measurable size yet.
+      const w = rect?.width || width;
+      const h = rect?.height || height;
+      canvas.width = Math.round(w * dpr);
+      canvas.height = Math.round(h * dpr);
+      canvas.style.width = `${w}px`;
+      canvas.style.height = `${h}px`;
+      ctx.scale(dpr, dpr);
+      render(ctx, w, h);
+    }
+
+    draw();
+    // Redraw on parent resize (mobile rotate, responsive layouts).
+    const parent = canvas.parentElement;
+    if (!parent || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => draw());
+    ro.observe(parent);
+    return () => ro.disconnect();
+
+    function render(ctx: CanvasRenderingContext2D, w: number, h: number) {
+      ctx.clearRect(0, 0, w, h);
 
     // Collect room polygons with horizontal layout
     const GAP_FT = 3;
@@ -111,10 +129,11 @@ export default function FloorPlan({ rooms, width = 400, height = 300 }: FloorPla
       ctx.font = `600 ${Math.max(10, Math.min(13, scale * 1.2))}px -apple-system, sans-serif`;
       ctx.fillText(label, tx(labelX), ty(labelY));
     });
+    }
   }, [rooms, width, height]);
 
   return (
-    <div style={{ background: "transparent", borderRadius: 8, overflow: "hidden" }}>
+    <div style={{ background: "transparent", borderRadius: 8, overflow: "hidden", width: "100%", height: "100%" }}>
       <canvas ref={canvasRef} />
     </div>
   );

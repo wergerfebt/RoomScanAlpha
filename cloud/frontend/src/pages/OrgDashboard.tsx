@@ -181,7 +181,11 @@ function OrgJobsWorkspace() {
     apiFetch<{ jobs: Job[] }>("/api/org/jobs")
       .then((data) => {
         setJobs(data.jobs);
-        if (data.jobs.length > 0) setSelectedRfqId(data.jobs[0].rfq_id);
+        // Auto-select the first job on desktop only; on mobile we want the
+        // user to land on the list and tap in.
+        if (data.jobs.length > 0 && typeof window !== "undefined" && window.innerWidth > 820) {
+          setSelectedRfqId(data.jobs[0].rfq_id);
+        }
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -200,7 +204,11 @@ function OrgJobsWorkspace() {
     [jobs, filter],
   );
 
-  const selectedJob = jobs.find((j) => j.rfq_id === selectedRfqId) || filtered[0] || null;
+  // Honor an explicit null selectedRfqId (mobile back, or no selection yet).
+  // On desktop we want a fallback so the right panes aren't empty.
+  const selectedJob = selectedRfqId === null
+    ? null
+    : jobs.find((j) => j.rfq_id === selectedRfqId) || filtered[0] || null;
 
   if (loading) return <div className="page-loading"><div className="spinner" /></div>;
 

@@ -114,8 +114,14 @@ export default function Inbox() {
         if (cancelled) return;
         setThreads(data.conversations);
         setEffectiveRole(data.role);
-        if (!selectedId && data.conversations.length > 0) {
-          // Preserve existing params (like ?tab=inbox) when auto-selecting.
+        // On desktop, auto-open the first thread so the conversation pane
+        // isn't empty. On mobile the user should see the list first.
+        if (
+          !selectedId &&
+          data.conversations.length > 0 &&
+          typeof window !== "undefined" &&
+          window.innerWidth > 760
+        ) {
           setParams((prev) => {
             prev.set("thread", data.conversations[0].id);
             return prev;

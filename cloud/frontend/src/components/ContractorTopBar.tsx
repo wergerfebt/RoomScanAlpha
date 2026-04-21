@@ -92,12 +92,13 @@ const CTB_CSS = `
     flex-wrap: wrap; height: auto; padding: 8px 12px;
     row-gap: 6px; column-gap: 10px;
   }
-  .ctb-brand { flex: 1 1 auto; min-width: 0; }
-  .ctb-right { flex: 0 0 auto; margin-left: auto; }
+  .ctb-brand { flex: 1 1 auto; min-width: 0; order: 1; }
+  .ctb-right { flex: 0 0 auto; margin-left: auto; order: 2; }
   .ctb-tabs {
-    order: 3; flex-basis: 100%;
+    flex: 0 0 100%; width: 100%; min-width: 0; order: 3;
     border-top: 0.5px solid rgba(255,255,255,0.08);
     padding-top: 6px; margin-top: 2px;
+    overflow-x: auto;
   }
 }
 
