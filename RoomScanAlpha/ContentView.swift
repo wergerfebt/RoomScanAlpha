@@ -6,8 +6,6 @@ struct ContentView: View {
     @State private var sessionManager = ARSessionManager()
     @State private var isAuthenticated = false
 
-    private let hasLiDAR = DeviceCapability.supportsLiDAR
-    private let hasARKit = DeviceCapability.supportsARKit
 
     var body: some View {
         if !isAuthenticated {
@@ -476,119 +474,30 @@ struct ContentView: View {
     // MARK: - Idle View
 
     private var idleView: some View {
-        VStack(spacing: 24) {
-            Spacer()
-
-            Image(systemName: hasLiDAR ? "camera.viewfinder" : "exclamationmark.triangle")
-                .font(.system(size: 64))
-                .foregroundStyle(hasLiDAR ? .blue : .orange)
-
-            Text("RoomScan Alpha")
-                .font(.largeTitle)
-                .fontWeight(.bold)
-                .padding(.horizontal, 24)
-
-            HStack(spacing: 12) {
-                Button {
-                    viewModel.showHistory = true
-                } label: {
-                    Label("Scan History", systemImage: "clock.arrow.circlepath")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                        .background(Color(uiColor: .systemGray6))
-                        .foregroundStyle(.primary)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
+        HomeView(
+            onStartScan: {
+                if viewModel.hasRFQSelected {
+                    viewModel.state = .projectOverview
+                } else {
+                    viewModel.state = .selectingRFQ
                 }
-                Button {
-                    try? AuthManager.shared.signOut()
-                    isAuthenticated = false
-                } label: {
-                    Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                        .background(Color(uiColor: .systemGray6))
-                        .foregroundStyle(.secondary)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                }
+            },
+            onPickProject: {
+                viewModel.state = .selectingRFQ
+            },
+            onOpenHistory: {
+                viewModel.showHistory = true
+            },
+            onSignOut: {
+                try? AuthManager.shared.signOut()
+                isAuthenticated = false
             }
-            .padding(.horizontal, 24)
-
-            if hasLiDAR {
-                if let rfq = viewModel.selectedRFQ {
-                    HStack {
-                        Image(systemName: "doc.text.fill")
-                            .foregroundStyle(.blue)
-                        Text(rfq.displayTitle)
-                            .font(.subheadline)
-                        Spacer()
-                        Button("Change") {
-                            viewModel.state = .selectingRFQ
-                        }
-                        .font(.caption)
-                    }
-                    .padding(.horizontal, 40)
-                }
-
-                Button {
-                    if viewModel.hasRFQSelected {
-                        viewModel.state = .projectOverview
-                    } else {
-                        viewModel.state = .selectingRFQ
-                    }
-                } label: {
-                    Label(
-                        viewModel.hasRFQSelected ? "View Project" : "Select Project to Scan",
-                        systemImage: viewModel.hasRFQSelected ? "doc.text.magnifyingglass" : "doc.text.magnifyingglass"
-                    )
-                    .primaryButtonStyle()
-                }
-                .padding(.horizontal, 40)
-                .padding(.top, 8)
-            } else {
-                VStack(spacing: 12) {
-                    Text("This app requires a LiDAR-equipped device")
-                        .font(.headline)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-
-                    capabilityRow(label: "ARKit", supported: hasARKit)
-                    capabilityRow(label: "LiDAR Scanner", supported: false)
-                }
-
-                Button {} label: {
-                    Label("Start Scan", systemImage: "viewfinder")
-                        .disabledButtonStyle()
-                }
-                .disabled(true)
-                .padding(.horizontal, 40)
-                .padding(.top, 8)
-            }
-
-            Spacer()
-        }
-        .padding()
+        )
         .sheet(isPresented: $viewModel.showHistory) {
             ScanHistoryView()
         }
     }
 
-    private func capabilityRow(label: String, supported: Bool) -> some View {
-        HStack {
-            Image(systemName: supported ? "checkmark.circle.fill" : "xmark.circle.fill")
-                .foregroundStyle(supported ? .green : .red)
-            Text(label)
-                .font(.subheadline)
-            Spacer()
-            Text(supported ? "Available" : "Not Available")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, 40)
-    }
 }
 
 #Preview {
