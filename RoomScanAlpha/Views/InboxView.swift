@@ -1,4 +1,5 @@
 import SwiftUI
+import PhotosUI
 
 /// Homeowner inbox — thread list + conversation view. Mirrors the mobile-web
 /// `/inbox` pattern (2-page on narrow screens).
@@ -195,7 +196,16 @@ struct ConversationView: View {
     @State private var input = ""
     @State private var sending = false
     @State private var error: String?
+    @State private var pickerItems: [PhotosPickerItem] = []
+    @State private var pending: [PendingAttachment] = []
+    @State private var uploading = false
     @FocusState private var composerFocused: Bool
+
+    private struct PendingAttachment: Identifiable {
+        let id = UUID()
+        let previewData: Data
+        let ref: InboxService.AttachmentRef
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -350,33 +360,85 @@ struct ConversationView: View {
     }
 
     private var composer: some View {
-        HStack(spacing: 10) {
-            TextField("Message…", text: $input, axis: .vertical)
-                .focused($composerFocused)
-                .lineLimit(1...4)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(QTheme.surface)
-                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(QTheme.hairline, lineWidth: 0.5))
-
-            Button {
-                Task { await send() }
-            } label: {
-                Image(systemName: "paperplane.fill")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(QTheme.primaryInk)
-                    .frame(width: 40, height: 40)
-                    .background(QTheme.primary)
-                    .clipShape(Circle())
-                    .opacity(input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || sending ? 0.4 : 1)
+        VStack(spacing: 8) {
+            if !pending.isEmpty || uploading {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(pending) { item in
+                            ZStack(alignment: .topTrailing) {
+                                if let image = UIImage(data: item.previewData) {
+                                    Image(uiImage: image)
+                                        .resizable()
+                                        .scaledToFill()
+                                        .frame(width: 64, height: 64)
+                                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                                }
+                                Button {
+                                    pending.removeAll { $0.id == item.id }
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .font(.system(size: 16))
+                                        .foregroundStyle(.white, .black.opacity(0.6))
+                                }
+                                .offset(x: 5, y: -5)
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        if uploading {
+                            ProgressView()
+                                .frame(width: 64, height: 64)
+                                .background(QTheme.surfaceMuted)
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                                .tint(QTheme.primary)
+                        }
+                    }
+                    .padding(.horizontal, 4)
+                }
             }
-            .buttonStyle(.plain)
-            .disabled(input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || sending)
+
+            HStack(spacing: 10) {
+                PhotosPicker(selection: $pickerItems, maxSelectionCount: 4, matching: .images) {
+                    Image(systemName: "photo.on.rectangle.angled")
+                        .font(.system(size: 17, weight: .regular))
+                        .foregroundStyle(QTheme.inkMuted)
+                        .frame(width: 36, height: 36)
+                }
+                .onChange(of: pickerItems) { _, items in
+                    Task { await ingestPhotos(items) }
+                }
+
+                TextField("Message…", text: $input, axis: .vertical)
+                    .focused($composerFocused)
+                    .lineLimit(1...4)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(QTheme.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(QTheme.hairline, lineWidth: 0.5))
+
+                Button {
+                    Task { await send() }
+                } label: {
+                    Image(systemName: "paperplane.fill")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(QTheme.primaryInk)
+                        .frame(width: 40, height: 40)
+                        .background(QTheme.primary)
+                        .clipShape(Circle())
+                        .opacity(sendDisabled ? 0.4 : 1)
+                }
+                .buttonStyle(.plain)
+                .disabled(sendDisabled)
+            }
         }
         .padding(12)
         .background(QTheme.canvas)
         .overlay(Rectangle().fill(QTheme.hairline).frame(height: 0.5), alignment: .top)
+    }
+
+    private var sendDisabled: Bool {
+        let noText = input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return (noText && pending.isEmpty) || sending || uploading
     }
 
     private func relativeShort(_ iso: String?) -> String? {
@@ -390,14 +452,57 @@ struct ConversationView: View {
         catch { self.error = error.localizedDescription }
     }
 
+    /// Transfer chosen PhotosPicker items into uploaded attachments. Each
+    /// item reserves a signed GCS URL and PUTs the image bytes. The slot
+    /// becomes a PendingAttachment the composer previews.
+    private func ingestPhotos(_ items: [PhotosPickerItem]) async {
+        guard !items.isEmpty else { return }
+        uploading = true
+        defer {
+            pickerItems = []
+            uploading = false
+        }
+        for item in items {
+            do {
+                guard let data = try await item.loadTransferable(type: Data.self) else { continue }
+                let contentType = item.supportedContentTypes
+                    .first(where: { $0.preferredMIMEType != nil })?
+                    .preferredMIMEType ?? "image/jpeg"
+                let ext = contentType.split(separator: "/").last.map(String.init) ?? "jpg"
+                let filename = "photo-\(Int(Date().timeIntervalSince1970)).\(ext)"
+                let slot = try await InboxService.shared.attachmentUploadURL(
+                    conversationId: thread.id,
+                    contentType: contentType,
+                    filename: filename
+                )
+                guard let url = URL(string: slot.uploadURL) else { continue }
+                try await InboxService.shared.uploadAttachment(to: url, contentType: contentType, data: data)
+                let ref = InboxService.AttachmentRef(
+                    blobPath: slot.blobPath,
+                    contentType: contentType,
+                    name: filename,
+                    sizeBytes: data.count
+                )
+                pending.append(PendingAttachment(previewData: data, ref: ref))
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
+    }
+
     private func send() async {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+        let refs = pending.map(\.ref)
+        guard !text.isEmpty || !refs.isEmpty else { return }
         sending = true
         do {
-            try await InboxService.shared.sendMessage(conversationId: thread.id, body: text)
+            try await InboxService.shared.sendMessage(
+                conversationId: thread.id,
+                body: text,
+                attachments: refs
+            )
             input = ""
-            // Refetch full conversation so the new message lands with a proper id + server time.
+            pending.removeAll()
             conversation = try await InboxService.shared.getConversation(id: thread.id)
         } catch {
             self.error = error.localizedDescription

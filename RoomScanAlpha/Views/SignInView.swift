@@ -26,122 +26,132 @@ struct SignInView: View {
     }
 
     private var signInContent: some View {
-        VStack(spacing: 24) {
-            Spacer()
+        ZStack {
+            QTheme.canvas.ignoresSafeArea()
 
-            Image(systemName: "camera.viewfinder")
-                .font(.system(size: 64))
-                .foregroundStyle(.blue)
+            ScrollView {
+                VStack(spacing: 24) {
+                    Spacer(minLength: 40)
 
-            Text("RoomScan")
-                .font(.largeTitle)
-                .fontWeight(.bold)
-
-            Text(isCreatingAccount ? "Create an account" : "Sign in to start scanning")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-
-            // Email + password fields
-            VStack(spacing: 12) {
-                TextField("Email", text: $email)
-                    .textContentType(.emailAddress)
-                    .keyboardType(.emailAddress)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .padding()
-                    .background(Color(uiColor: .systemGray6))
-                    .cornerRadius(10)
-
-                SecureField("Password", text: $password)
-                    .textContentType(isCreatingAccount ? .newPassword : .password)
-                    .padding()
-                    .background(Color(uiColor: .systemGray6))
-                    .cornerRadius(10)
-            }
-            .padding(.horizontal, 40)
-
-            if let error = errorMessage {
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 40)
-            }
-
-            // Primary action button
-            Button {
-                isCreatingAccount ? createAccount() : signIn()
-            } label: {
-                if isLoading {
-                    ProgressView()
-                        .tint(.white)
-                } else {
-                    Text(isCreatingAccount ? "Create Account" : "Sign In")
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: 50)
-            .background(.blue)
-            .foregroundStyle(.white)
-            .fontWeight(.semibold)
-            .cornerRadius(10)
-            .padding(.horizontal, 40)
-            .disabled(isLoading || email.isEmpty || password.isEmpty)
-
-            // Toggle + forgot password
-            VStack(spacing: 12) {
-                Button {
-                    isCreatingAccount.toggle()
-                    errorMessage = nil
-                } label: {
-                    Text(isCreatingAccount ? "Already have an account? Sign In" : "Don't have an account? Create one")
-                        .font(.subheadline)
-                }
-
-                if !isCreatingAccount {
-                    Button {
-                        resetEmail = email
-                        showResetPassword = true
-                    } label: {
-                        Text("Forgot password?")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                    // Quoterra Q tile — matches HomeView header
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(QTheme.primary)
+                        Text("Q")
+                            .font(.system(size: 28, weight: .black))
+                            .foregroundStyle(QTheme.primaryInk)
                     }
+                    .frame(width: 56, height: 56)
+
+                    VStack(spacing: 6) {
+                        Text("Quoterra")
+                            .font(.system(size: 34, weight: .bold))
+                            .tracking(-0.8)
+                            .foregroundStyle(QTheme.ink)
+                        Text(isCreatingAccount ? "Create an account" : "Sign in to manage your projects")
+                            .font(.system(size: 15))
+                            .foregroundStyle(QTheme.inkMuted)
+                    }
+
+                    // Email + password fields
+                    VStack(spacing: 10) {
+                        authField(icon: "envelope", placeholder: "Email", text: $email, secure: false)
+                        authField(icon: "lock", placeholder: "Password", text: $password, secure: true)
+                    }
+                    .padding(.horizontal, 28)
+
+                    if let error = errorMessage {
+                        Text(error)
+                            .font(.caption)
+                            .foregroundStyle(QTheme.danger)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 40)
+                    }
+
+                    // Primary action
+                    Button {
+                        isCreatingAccount ? createAccount() : signIn()
+                    } label: {
+                        ZStack {
+                            if isLoading {
+                                ProgressView().tint(QTheme.primaryInk)
+                            } else {
+                                Text(isCreatingAccount ? "Create account" : "Sign in")
+                                    .font(.system(size: 16, weight: .semibold))
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 52)
+                        .background(QTheme.primary)
+                        .foregroundStyle(QTheme.primaryInk)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .opacity(email.isEmpty || password.isEmpty ? 0.5 : 1)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 28)
+                    .disabled(isLoading || email.isEmpty || password.isEmpty)
+
+                    // Toggle + forgot password
+                    VStack(spacing: 10) {
+                        Button {
+                            isCreatingAccount.toggle()
+                            errorMessage = nil
+                        } label: {
+                            Text(isCreatingAccount ? "Already have an account? Sign in" : "Don't have an account? Create one")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(QTheme.primary)
+                        }
+
+                        if !isCreatingAccount {
+                            Button {
+                                resetEmail = email
+                                showResetPassword = true
+                            } label: {
+                                Text("Forgot password?")
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(QTheme.inkMuted)
+                            }
+                        }
+                    }
+
+                    // Divider
+                    HStack(spacing: 10) {
+                        Rectangle().frame(height: 0.5).foregroundStyle(QTheme.hairline)
+                        Text("or")
+                            .font(.system(size: 12))
+                            .foregroundStyle(QTheme.inkMuted)
+                        Rectangle().frame(height: 0.5).foregroundStyle(QTheme.hairline)
+                    }
+                    .padding(.horizontal, 40)
+
+                    // Google Sign-In
+                    Button {
+                        signInWithGoogle()
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "g.circle.fill")
+                                .font(.system(size: 18))
+                            Text("Sign in with Google")
+                                .font(.system(size: 15, weight: .semibold))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 50)
+                        .background(QTheme.surface)
+                        .foregroundStyle(QTheme.ink)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .strokeBorder(QTheme.hairline, lineWidth: 0.5)
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 28)
+                    .disabled(isLoading)
+
+                    Spacer(minLength: 24)
                 }
             }
-
-            // Divider
-            HStack {
-                Rectangle().frame(height: 1).foregroundStyle(.secondary.opacity(0.3))
-                Text("or")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Rectangle().frame(height: 1).foregroundStyle(.secondary.opacity(0.3))
-            }
-            .padding(.horizontal, 40)
-
-            // Google Sign-In
-            Button {
-                signInWithGoogle()
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "g.circle.fill")
-                        .font(.title3)
-                    Text("Sign in with Google")
-                }
-                .frame(maxWidth: .infinity)
-                .frame(height: 50)
-                .background(Color(uiColor: .systemGray6))
-                .foregroundStyle(.primary)
-                .fontWeight(.medium)
-                .cornerRadius(10)
-            }
-            .padding(.horizontal, 40)
-            .disabled(isLoading)
-
-            Spacer()
         }
-        .padding()
         .onAppear {
             if AuthManager.shared.isSignedIn {
                 onSignedIn()
@@ -164,6 +174,36 @@ struct SignInView: View {
         } message: {
             Text("A password reset link has been sent to \(resetEmail).")
         }
+    }
+
+    private func authField(icon: String, placeholder: String, text: Binding<String>, secure: Bool) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .foregroundStyle(QTheme.inkMuted)
+                .font(.system(size: 15))
+                .frame(width: 18)
+            Group {
+                if secure {
+                    SecureField(placeholder, text: text)
+                        .textContentType(isCreatingAccount ? .newPassword : .password)
+                } else {
+                    TextField(placeholder, text: text)
+                        .textContentType(.emailAddress)
+                        .keyboardType(.emailAddress)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                }
+            }
+            .foregroundStyle(QTheme.ink)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 14)
+        .background(QTheme.surface)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(QTheme.hairline, lineWidth: 0.5)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     private func signIn() {
@@ -235,61 +275,81 @@ private struct ProfileCompletionView: View {
     @State private var phone = ""
 
     var body: some View {
-        VStack(spacing: 24) {
-            Spacer()
+        ZStack {
+            QTheme.canvas.ignoresSafeArea()
+            VStack(spacing: 24) {
+                Spacer(minLength: 40)
 
-            Image(systemName: "person.crop.circle.badge.plus")
-                .font(.system(size: 48))
-                .foregroundStyle(.blue)
+                ZStack {
+                    Circle().fill(QTheme.primarySoft)
+                    Image(systemName: "person.crop.circle.badge.plus")
+                        .font(.system(size: 32))
+                        .foregroundStyle(QTheme.primary)
+                }
+                .frame(width: 64, height: 64)
 
-            Text("Complete Your Profile")
-                .font(.title2)
-                .fontWeight(.bold)
+                VStack(spacing: 6) {
+                    Text("Complete your profile")
+                        .font(.system(size: 24, weight: .bold))
+                        .tracking(-0.4)
+                        .foregroundStyle(QTheme.ink)
+                    Text("This helps contractors reach you about quotes.")
+                        .font(.system(size: 14))
+                        .foregroundStyle(QTheme.inkMuted)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 40)
+                }
 
-            Text("This helps contractors reach you about quotes.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+                VStack(spacing: 10) {
+                    profileField(icon: "person", placeholder: "Full name", text: $fullName, keyboard: .default)
+                    profileField(icon: "phone", placeholder: "Phone number (optional)", text: $phone, keyboard: .phonePad)
+                }
+                .padding(.horizontal, 28)
 
-            VStack(spacing: 12) {
-                TextField("Full Name", text: $fullName)
-                    .textContentType(.name)
-                    .padding()
-                    .background(Color(uiColor: .systemGray6))
-                    .cornerRadius(10)
+                Button {
+                    saveProfile()
+                } label: {
+                    Text("Continue")
+                        .font(.system(size: 16, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 52)
+                        .background(QTheme.primary)
+                        .foregroundStyle(QTheme.primaryInk)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .opacity(fullName.trimmingCharacters(in: .whitespaces).isEmpty ? 0.5 : 1)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 28)
+                .disabled(fullName.trimmingCharacters(in: .whitespaces).isEmpty)
 
-                TextField("Phone Number", text: $phone)
-                    .textContentType(.telephoneNumber)
-                    .keyboardType(.phonePad)
-                    .padding()
-                    .background(Color(uiColor: .systemGray6))
-                    .cornerRadius(10)
+                Button("Skip for now") { onComplete() }
+                    .font(.system(size: 14))
+                    .foregroundStyle(QTheme.inkMuted)
+
+                Spacer()
             }
-            .padding(.horizontal, 40)
-
-            Button {
-                saveProfile()
-            } label: {
-                Text("Continue")
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 50)
-                    .background(.blue)
-                    .foregroundStyle(.white)
-                    .fontWeight(.semibold)
-                    .cornerRadius(10)
-            }
-            .padding(.horizontal, 40)
-            .disabled(fullName.trimmingCharacters(in: .whitespaces).isEmpty)
-
-            Button("Skip for now") {
-                onComplete()
-            }
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
-
-            Spacer()
         }
-        .padding()
+    }
+
+    private func profileField(icon: String, placeholder: String, text: Binding<String>, keyboard: UIKeyboardType) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .foregroundStyle(QTheme.inkMuted)
+                .font(.system(size: 15))
+                .frame(width: 18)
+            TextField(placeholder, text: text)
+                .keyboardType(keyboard)
+                .textContentType(icon == "person" ? .name : .telephoneNumber)
+                .foregroundStyle(QTheme.ink)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 14)
+        .background(QTheme.surface)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(QTheme.hairline, lineWidth: 0.5)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     private func saveProfile() {

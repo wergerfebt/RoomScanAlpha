@@ -10,6 +10,8 @@ struct ContentView: View {
     @State private var showSearch = false
     @State private var showInbox = false
     @State private var showAccount = false
+    @State private var showWorkspace = false
+    @State private var workspaceOrgName: String?
 
 
     var body: some View {
@@ -513,6 +515,9 @@ struct ContentView: View {
             onOpenHistory: {
                 viewModel.showHistory = true
             },
+            onOpenWorkspace: {
+                showWorkspace = true
+            },
             onSignOut: {
                 try? AuthManager.shared.signOut()
                 isAuthenticated = false
@@ -529,6 +534,9 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showAccount) {
             AccountView { showAccount = false }
+        }
+        .sheet(isPresented: $showWorkspace) {
+            WorkspaceView(orgName: workspaceOrgName) { showWorkspace = false }
         }
     }
 

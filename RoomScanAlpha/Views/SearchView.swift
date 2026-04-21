@@ -12,6 +12,9 @@ struct SearchView: View {
     @State private var results: [ContractorSearchResult] = []
     @State private var loading = false
     @State private var error: String?
+    /// True after the user has run their first search. Empty state text
+    /// changes to reflect "try a different search" vs the initial prompt.
+    @State private var hasSearched = false
     @FocusState private var queryFocused: Bool
 
     var body: some View {
@@ -36,7 +39,6 @@ struct SearchView: View {
             }
         }
         .tint(QTheme.primary)
-        .task { await runSearch() }
     }
 
     // MARK: – Fields
@@ -93,11 +95,10 @@ struct SearchView: View {
     private var servicePicker: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                servicePill("All", active: service.isEmpty) { service = ""; Task { await runSearch() } }
+                servicePill("All", active: service.isEmpty) { service = "" }
                 ForEach(ServiceCategory.all, id: \.self) { s in
                     servicePill(s, active: service == s) {
                         service = (service == s) ? "" : s
-                        Task { await runSearch() }
                     }
                 }
             }
@@ -141,12 +142,15 @@ struct SearchView: View {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 32))
                     .foregroundStyle(QTheme.inkDim)
-                Text("No contractors found")
+                Text(hasSearched ? "No contractors found" : "Find a contractor")
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(QTheme.ink)
-                Text("Try a different service or location.")
+                Text(hasSearched
+                     ? "Try a different service or location."
+                     : "Pick a service, enter a zip or city, and tap search.")
                     .font(.subheadline)
                     .foregroundStyle(QTheme.inkMuted)
+                    .multilineTextAlignment(.center)
             }
             .padding(32)
             .frame(maxWidth: .infinity)
@@ -248,6 +252,7 @@ struct SearchView: View {
     private func runSearch() async {
         loading = true
         error = nil
+        hasSearched = true
         do {
             results = try await ContractorsService.shared.search(
                 service: service.isEmpty ? nil : service,

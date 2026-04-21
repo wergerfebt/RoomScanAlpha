@@ -18,9 +18,11 @@ struct HomeView: View {
     let onOpenSearch: () -> Void
     let onOpenInbox: () -> Void
     let onOpenHistory: () -> Void
+    let onOpenWorkspace: () -> Void
     let onSignOut: () -> Void
 
     @State private var rfqs: [RFQ] = []
+    @State private var account: Account?
     @State private var loading = true
     @State private var error: String?
     @State private var signOutConfirm = false
@@ -124,6 +126,18 @@ struct HomeView: View {
             iconButton(systemImage: "envelope", label: "Inbox", action: onOpenInbox)
 
             Menu {
+                if let org = account?.org {
+                    Button {
+                        onOpenWorkspace()
+                    } label: {
+                        Label {
+                            Text("Workspace · \(org.name)")
+                        } icon: {
+                            Image(systemName: "briefcase")
+                        }
+                    }
+                    Divider()
+                }
                 Button("My Projects", systemImage: "folder", action: onOpenProjects)
                 Button("Account", systemImage: "person.circle", action: onOpenAccount)
                 Button("Scan history", systemImage: "clock.arrow.circlepath", action: onOpenHistory)
@@ -397,8 +411,18 @@ struct HomeView: View {
 
     private func load() async {
         loading = true
-        do { rfqs = try await RFQService.shared.listRFQs() }
-        catch { self.error = error.localizedDescription }
+        // Run in parallel — neither depends on the other, and the account
+        // query is cheap (short-circuits on 401 if sign-in expired).
+        async let rfqsTask = RFQService.shared.listRFQs()
+        async let accountTask = AccountService.shared.getAccount()
+        do {
+            rfqs = try await rfqsTask
+        } catch {
+            self.error = error.localizedDescription
+        }
+        if let fetched = try? await accountTask {
+            account = fetched
+        }
         loading = false
     }
 }
