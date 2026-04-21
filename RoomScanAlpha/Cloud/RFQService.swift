@@ -176,6 +176,23 @@ final class RFQService {
         }
     }
 
+    /// `DELETE /api/rfqs/{id}` — soft-delete the RFQ and its scans.
+    /// Bids stay visible to contractors who submitted them.
+    func deleteRFQ(rfqId: String) async throws {
+        let token = try await AuthManager.shared.getToken()
+        var request = URLRequest(url: URL(string: "\(apiBaseURL)/api/rfqs/\(rfqId)")!)
+        request.httpMethod = "DELETE"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            throw URLError(.badServerResponse, userInfo: [
+                NSLocalizedDescriptionKey: "Delete project failed (HTTP \(code))"
+            ])
+        }
+    }
+
     /// Rename a scanned room. Backend validates RFQ ownership.
     func renameRoom(rfqId: String, scanId: String, label: String) async throws {
         let token = try await AuthManager.shared.getToken()

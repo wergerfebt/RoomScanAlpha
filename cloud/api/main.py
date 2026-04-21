@@ -600,13 +600,8 @@ async def update_rfq(rfq_id: str, request: Request, authorization: str = Header(
     try:
         cursor = conn.cursor()
 
-        # Verify ownership
-        cursor.execute("SELECT user_id FROM rfqs WHERE id = %s", (rfq_id,))
-        row = cursor.fetchone()
-        if not row:
-            raise HTTPException(404, "RFQ not found")
-        if row[0] != uid:
-            raise HTTPException(403, "Not the owner of this RFQ")
+        # Ownership via either legacy user_id or new homeowner_account_id.
+        _verify_rfq_owner(cursor, rfq_id, uid)
 
         allowed = {"title", "description", "address"}
         updates = {k: v for k, v in body.items() if k in allowed}
@@ -645,11 +640,14 @@ def delete_rfq(rfq_id: str, authorization: str = Header(None)) -> dict:
     Sets all scans to 'deleted' status, then deletes the RFQ row.
     GCS blobs are preserved for future model training.
     """
-    verify_firebase_token(authorization)
+    decoded = verify_firebase_token(authorization)
 
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
+
+        # Ownership via either legacy user_id or new homeowner_account_id.
+        _verify_rfq_owner(cursor, rfq_id, decoded["uid"])
 
         # Soft-delete the RFQ (preserves all data, bids stay visible to contractors)
         cursor.execute(
@@ -676,7 +674,6 @@ async def update_scan(rfq_id: str, scan_id: str, request: Request, authorization
     to the RFQ owner). Returns {"status": "ok", "room_label": "..."}.
     """
     decoded = verify_firebase_token(authorization)
-    uid = decoded["uid"]
     body = await request.json()
     label = body.get("room_label")
     if not isinstance(label, str) or not label.strip():
@@ -686,12 +683,8 @@ async def update_scan(rfq_id: str, scan_id: str, request: Request, authorization
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT user_id FROM rfqs WHERE id = %s", (rfq_id,))
-        row = cursor.fetchone()
-        if not row:
-            raise HTTPException(404, "RFQ not found")
-        if row[0] != uid:
-            raise HTTPException(403, "Not the owner of this RFQ")
+        # Ownership via either legacy user_id or new homeowner_account_id.
+        _verify_rfq_owner(cursor, rfq_id, decoded["uid"])
 
         cursor.execute(
             """UPDATE scanned_rooms SET room_label = %s

@@ -12,6 +12,7 @@ struct RoomLabelView: View {
 
     @State private var selectedScope: Set<String> = []
     @State private var notes: String = ""
+    @FocusState private var nameFocused: Bool
 
     private let suggestions = [
         "Kitchen", "Living Room", "Bedroom", "Bathroom",
@@ -72,11 +73,18 @@ struct RoomLabelView: View {
             sectionLabel("Name")
 
             TextField("Room name", text: $roomLabel)
+                .focused($nameFocused)
+                .submitLabel(.done)
+                .onSubmit { nameFocused = false }
+                .textInputAutocapitalization(.words)
+                .autocorrectionDisabled()
                 .font(.system(size: 17))
                 .padding(.horizontal, 14).padding(.vertical, 12)
                 .background(QTheme.surface)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(QTheme.hairline, lineWidth: 0.5))
+                .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .onTapGesture { nameFocused = true }
 
             FlowLayout(spacing: 8) {
                 ForEach(suggestions, id: \.self) { label in

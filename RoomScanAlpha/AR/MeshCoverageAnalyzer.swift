@@ -341,16 +341,23 @@ struct MeshCoverageAnalyzer {
 
     // MARK: - Hole Detection (voxel ray-cast from scan centroid)
 
-    /// Fibonacci-sphere rays cast from the scan centroid. Higher = finer hole
-    /// resolution; 500 hits every ~1.2° of solid angle, which is dense enough
-    /// to surface a fist-sized hole from 3 m away.
-    private static let holeRayCount: Int = 500
-    /// Voxel resolution for the occupancy grid. 20 cm resolves typical gaps
-    /// (e.g., missing ceiling patches) without blowing memory: a 6×3×6 m
-    /// room = 30×15×30 = 13.5 k cells.
-    private static let holeVoxelSize: Float = 0.20
+    /// Fibonacci-sphere rays cast from the room center. 300 hits every ~2°
+    /// of solid angle. We don't need higher resolution because we cluster
+    /// neighboring escaped rays into a single hole marker below — dense
+    /// sampling just creates cluster noise the user sees as "new holes"
+    /// after every re-scan.
+    private static let holeRayCount: Int = 300
+    /// Voxel resolution for the occupancy grid. 30 cm means a small missing
+    /// patch shared with a neighbor will still register as "covered".
+    /// Was 20 cm, which flagged every tiny seam on the ceiling as a hole
+    /// after subsequent scan passes.
+    private static let holeVoxelSize: Float = 0.30
     /// Bounding box padding beyond the mesh extent — lets rays exit cleanly.
     private static let holeBboxPad: Float = 0.15
+    /// Two escaped rays within this angular separation (radians, ~18°) collapse
+    /// into one hole marker. Prevents visual noise from multiple rays
+    /// exiting through the same physical gap.
+    private static let holeClusterAngle: Float = 0.30
 
     /// Cast `holeRayCount` rays from the scan centroid. Rays that fail to hit
     /// any occupied voxel before leaving the bounding box escape through a
@@ -392,18 +399,16 @@ struct MeshCoverageAnalyzer {
             grid[idx(ix, iy, iz)] = true
         }
 
-        // Ray origin: camera-path centroid, clamped inside the bbox.
-        var origin = SIMD3<Float>(0, 0, 0)
-        for cam in cameras { origin += cam.position }
-        origin /= Float(cameras.count)
-        origin = simd_clamp(
-            origin,
-            bmin + SIMD3(repeating: holeVoxelSize),
-            bmax - SIMD3(repeating: holeVoxelSize)
-        )
+        // Ray origin: bbox center, not camera-path centroid. The camera
+        // centroid drifts as the user walks further into the room, which
+        // shifts the ray directions between scans — so a "hole" seen in the
+        // first pass lands at a different direction in the second pass and
+        // the user thinks new holes appeared. The bbox center grows
+        // monotonically with the mesh and is stable across re-scans.
+        let origin = (bmin + bmax) * 0.5
 
         let goldenAngle = Float.pi * (sqrt(5.0) - 1.0)
-        var holes: [HoleSample] = []
+        var rawHoles: [SIMD3<Float>] = []  // direction vectors that escaped
 
         for i in 0..<holeRayCount {
             let fi = Float(i)
@@ -418,12 +423,47 @@ struct MeshCoverageAnalyzer {
                 grid: grid, gx: gx, gy: gy, gz: gz,
                 bmin: bmin, voxelSize: holeVoxelSize
             ) {
-                let exit = rayBboxExit(origin: origin, direction: dir, bmin: bmin, bmax: bmax)
-                holes.append(HoleSample(worldPosition: exit))
+                rawHoles.append(dir)
             }
         }
 
-        return holes
+        // Cluster escaped rays by angular proximity. Each cluster becomes
+        // one HoleSample at the average exit point. Without this, a
+        // ceiling gap produces a dozen red markers and the user sees the
+        // number fluctuate between scans even though it's the same gap.
+        let clusters = clusterDirections(rawHoles, angleThreshold: holeClusterAngle)
+        return clusters.map { cluster -> HoleSample in
+            var avg = SIMD3<Float>(repeating: 0)
+            for dir in cluster { avg += dir }
+            avg /= Float(cluster.count)
+            avg = simd_normalize(avg)
+            let exit = rayBboxExit(origin: origin, direction: avg, bmin: bmin, bmax: bmax)
+            return HoleSample(worldPosition: exit)
+        }
+    }
+
+    /// Greedy O(n²) angular clustering. Good enough for ~300 rays — about
+    /// 90k comparisons, a few ms. Returns groups of direction vectors whose
+    /// pairwise angle is within `angleThreshold` radians of a cluster seed.
+    private static func clusterDirections(
+        _ dirs: [SIMD3<Float>],
+        angleThreshold: Float
+    ) -> [[SIMD3<Float>]] {
+        var clusters: [[SIMD3<Float>]] = []
+        let cosThreshold = cos(angleThreshold)
+        for dir in dirs {
+            var placed = false
+            for i in 0..<clusters.count {
+                // Seed of each cluster is its first element.
+                if simd_dot(dir, clusters[i][0]) >= cosThreshold {
+                    clusters[i].append(dir)
+                    placed = true
+                    break
+                }
+            }
+            if !placed { clusters.append([dir]) }
+        }
+        return clusters
     }
 
     /// Amanatides-Woo voxel traversal. Returns true if any voxel along the ray

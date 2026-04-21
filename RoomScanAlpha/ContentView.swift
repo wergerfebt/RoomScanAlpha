@@ -17,6 +17,10 @@ struct ContentView: View {
     @State private var workspaceMode = false
     @State private var account: Account?
 
+    // "Create a project" sheet — shown from HomeView when the user taps
+    // Start scan or Pick project and has no projects yet.
+    @State private var showNewProjectSheet = false
+
     // Contractor-workspace destination sheets.
     @State private var showJobs = false
     @State private var showGallery = false
@@ -485,10 +489,14 @@ struct ContentView: View {
             onAccountLoaded: { account = $0 },
             onStartScan: { latest in
                 if let latest = latest {
+                    // Jump straight to the AR "Start Scan" view — no
+                    // intermediate project-overview page. User can back out
+                    // if this is the wrong project.
                     viewModel.selectedRFQ = latest
-                    viewModel.state = .projectOverview
+                    viewModel.prepareScan()
                 } else {
-                    viewModel.state = .selectingRFQ
+                    // No project yet → open the create-project sheet.
+                    showNewProjectSheet = true
                 }
             },
             onPickProject: {
@@ -525,6 +533,27 @@ struct ContentView: View {
                 onClose: { showAccount = false },
                 onGoToWorkspace: account?.org != nil ? { workspaceMode = true } : nil
             )
+        }
+        .sheet(isPresented: $showNewProjectSheet) {
+            NewProjectSheet { title, description, address in
+                showNewProjectSheet = false
+                Task { await createRFQAndScan(title: title, description: description, address: address) }
+            }
+        }
+    }
+
+    /// Create a new RFQ then jump straight into the scan flow. Used when
+    /// the user taps Start scan from an empty Home — they want to scan,
+    /// not land in a project picker.
+    private func createRFQAndScan(title: String, description: String, address: String?) async {
+        do {
+            let rfq = try await RFQService.shared.createRFQ(
+                title: title, description: description, address: address
+            )
+            viewModel.selectedRFQ = rfq
+            viewModel.prepareScan()
+        } catch {
+            print("[RoomScanAlpha] Failed to create RFQ: \(error.localizedDescription)")
         }
     }
 

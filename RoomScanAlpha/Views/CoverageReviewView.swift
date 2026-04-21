@@ -147,11 +147,12 @@ struct CoverageReviewView: View {
         }
     }
 
-    /// Automatically proceed only when the ray-cast found no holes and texture
-    /// coverage is strong. Zero holes means every direction from scan centroid
-    /// eventually hits mesh — i.e., the room is sealed.
+    /// Automatically proceed when the room is substantially sealed. The
+    /// bar is deliberately forgiving — ≤2 residual hole clusters and 75%
+    /// texture coverage is good enough for a useful scan. Holding to a
+    /// stricter threshold made users feel they could never finish.
     private var shouldProceed: Bool {
-        viewModel.localHoles.isEmpty && viewModel.coverageRatio >= 0.85
+        viewModel.localHoles.count <= 2 && viewModel.coverageRatio >= 0.75
     }
 
     // MARK: - Helpers

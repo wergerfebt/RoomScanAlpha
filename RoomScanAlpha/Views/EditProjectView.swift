@@ -8,6 +8,10 @@ struct EditProjectView: View {
     let detail: ProjectDetail?
     let onSave: () -> Void
     let onClose: () -> Void
+    /// Called after a successful project delete so the parent can pop back
+    /// to the Projects list. Separate from `onClose` so the caller can
+    /// differentiate "just closed the sheet" from "project no longer exists".
+    var onDeleted: (() -> Void)? = nil
 
     @State private var title: String
     @State private var description: String
@@ -17,12 +21,21 @@ struct EditProjectView: View {
     @State private var deleteTarget: ProjectRoom?
     @State private var renameTarget: ProjectRoom?
     @State private var scopeTarget: ProjectRoom?
+    @State private var confirmDeleteProject = false
+    @State private var deletingProject = false
 
-    init(rfq: RFQ, detail: ProjectDetail?, onSave: @escaping () -> Void, onClose: @escaping () -> Void) {
+    init(
+        rfq: RFQ,
+        detail: ProjectDetail?,
+        onSave: @escaping () -> Void,
+        onClose: @escaping () -> Void,
+        onDeleted: (() -> Void)? = nil
+    ) {
         self.rfq = rfq
         self.detail = detail
         self.onSave = onSave
         self.onClose = onClose
+        self.onDeleted = onDeleted
         _title = State(initialValue: detail?.title ?? rfq.title ?? "")
         _description = State(initialValue: detail?.jobDescription ?? rfq.description ?? "")
         _rooms = State(initialValue: detail?.rooms ?? [])
@@ -36,6 +49,7 @@ struct EditProjectView: View {
                     VStack(alignment: .leading, spacing: 22) {
                         detailsSection
                         if !rooms.isEmpty { roomsSection }
+                        dangerZone
                         if let error, !error.isEmpty {
                             Text(error).font(.caption).foregroundStyle(QTheme.danger)
                         }
@@ -85,6 +99,17 @@ struct EditProjectView: View {
                 }
             } message: { target in
                 Text("This removes \(target.displayLabel) from the project. Contractors who already bid will be notified the project changed.")
+            }
+            .alert(
+                "Delete project?",
+                isPresented: $confirmDeleteProject
+            ) {
+                Button("Cancel", role: .cancel) {}
+                Button("Delete project", role: .destructive) {
+                    Task { await deleteProject() }
+                }
+            } message: {
+                Text("This removes the project and all its rooms. Bids from contractors who already quoted will remain visible to them.")
             }
         }
         .tint(QTheme.primary)
@@ -185,7 +210,49 @@ struct EditProjectView: View {
         return parts.joined(separator: " · ")
     }
 
+    // MARK: – Danger zone
+
+    private var dangerZone: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionLabel("Danger zone")
+            Button {
+                confirmDeleteProject = true
+            } label: {
+                HStack(spacing: 10) {
+                    if deletingProject {
+                        ProgressView().tint(QTheme.danger)
+                    } else {
+                        Image(systemName: "trash.fill")
+                            .font(.system(size: 14, weight: .semibold))
+                    }
+                    Text("Delete project")
+                        .font(.system(size: 15, weight: .semibold))
+                    Spacer()
+                }
+                .foregroundStyle(QTheme.danger)
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(QTheme.danger.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(QTheme.danger.opacity(0.25), lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .disabled(deletingProject)
+        }
+    }
+
     // MARK: – Actions
+
+    private func deleteProject() async {
+        deletingProject = true
+        defer { deletingProject = false }
+        do {
+            try await RFQService.shared.deleteRFQ(rfqId: rfq.id)
+            onDeleted?()
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
 
     private func save() {
         Task {

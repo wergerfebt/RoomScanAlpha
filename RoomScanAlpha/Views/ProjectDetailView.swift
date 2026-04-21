@@ -143,7 +143,14 @@ struct ProjectDetailView: View {
                     showEdit = false
                     Task { await load() }
                 },
-                onClose: { showEdit = false }
+                onClose: { showEdit = false },
+                onDeleted: {
+                    // Project is gone — dismiss the sheet and pop back to the
+                    // projects list. The projects list refreshes on appear so
+                    // the deleted RFQ drops off.
+                    showEdit = false
+                    dismiss()
+                }
             )
         }
         .sheet(item: $conversationRoute) { route in
