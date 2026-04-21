@@ -14,6 +14,7 @@ struct ProjectDetailView: View {
     @State private var hiring = false
     @State private var hiredError: String?
     @State private var scanView: ScanView = .floorplan
+    @State private var interactingWithBEV = false
 
     private enum ScanView: String { case floorplan, birdseye }
 
@@ -33,6 +34,7 @@ struct ProjectDetailView: View {
             .padding(.top, 12)
             .padding(.bottom, 60)
         }
+        .scrollDisabled(interactingWithBEV)
         .background(QTheme.canvas.ignoresSafeArea())
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }
@@ -149,8 +151,22 @@ struct ProjectDetailView: View {
                                 .frame(height: 260)
                                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                                 .background(Color.black)
+                                // Claim touches inside the BEV region so the outer
+                                // ScrollView doesn't scroll while the user is
+                                // panning/rotating the 3D scene. The minimum
+                                // distance of 0 makes the state flip on touch-down.
+                                .simultaneousGesture(
+                                    DragGesture(minimumDistance: 0)
+                                        .onChanged { _ in
+                                            if !interactingWithBEV { interactingWithBEV = true }
+                                        }
+                                        .onEnded { _ in interactingWithBEV = false }
+                                )
                         }
                     }
+                }
+                .onChange(of: scanView) { _, newValue in
+                    if newValue != .birdseye { interactingWithBEV = false }
                 }
 
                 statsGrid(detail: detail)
