@@ -8,6 +8,14 @@ import { apiFetch } from "../api/client";
 import AddressAutocomplete from "../components/AddressAutocomplete";
 import Lightbox, { type LightboxItem } from "../components/Lightbox";
 
+interface JobAttachment {
+  blob_path: string;
+  content_type: string | null;
+  name: string | null;
+  size_bytes: number | null;
+  download_url?: string | null;
+}
+
 interface Job {
   rfq_id: string;
   title: string;
@@ -22,8 +30,10 @@ interface Job {
     received_at: string | null;
     description?: string | null;
     pdf_url?: string | null;
+    attachments?: JobAttachment[];
     rfq_modified_after_bid?: boolean;
   } | null;
+  rfq_attachments?: JobAttachment[];
   job_status: "new" | "pending" | "won" | "lost";
   rfq_deleted?: boolean;
 }
@@ -414,6 +424,50 @@ function JobReviewPane({ job, scanView, setScanView, onBack }: { job: Job; scanV
   );
 }
 
+function JobPhotosCarousel({ attachments }: { attachments: JobAttachment[] }) {
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+
+  // Only show image-like attachments in the visual carousel; PDFs and other
+  // docs would render as generic file cards elsewhere.
+  const images = useMemo(
+    () => attachments.filter((a) => (a.content_type || "").startsWith("image/") && a.download_url),
+    [attachments],
+  );
+  if (!images.length) return null;
+
+  const lbItems: LightboxItem[] = images.map((a) => ({
+    url: a.download_url!,
+    type: "image",
+  }));
+
+  return (
+    <>
+      <div className="ojw-photos-scroll" role="list">
+        {images.map((a, i) => (
+          <button
+            key={a.blob_path}
+            type="button"
+            role="listitem"
+            className="ojw-photos-tile"
+            onClick={() => setLightboxIndex(i)}
+            aria-label={`Open photo ${i + 1} of ${images.length}`}
+          >
+            <img src={a.download_url!} alt={a.name || `Photo ${i + 1}`} loading="lazy" />
+          </button>
+        ))}
+      </div>
+      {lightboxIndex !== null && (
+        <Lightbox
+          items={lbItems}
+          startIndex={lightboxIndex}
+          onClose={() => setLightboxIndex(null)}
+        />
+      )}
+    </>
+  );
+}
+
+
 function BidPdfCard({ url }: { url: string }) {
   const [sizeLabel, setSizeLabel] = useState<string | null>(null);
   const fileName = decodeURIComponent(url.split("?")[0].split("/").pop() || "Project breakdown.pdf");
@@ -537,6 +591,27 @@ function JobBidPane({ job, onUpdate }: { job: Job; onUpdate: (rfqId: string, pat
           {parsed.note && (
             <div className="ojw-bid-desc">{parsed.note}</div>
           )}
+
+          {(() => {
+            // Combine RFQ-level media (anything the homeowner shared about the
+            // project) with images on the bid itself. Dedupe by blob_path so
+            // chat-originated attachments that exist in both don't double up.
+            const combined: JobAttachment[] = [];
+            const seen = new Set<string>();
+            for (const a of [...(job.rfq_attachments ?? []), ...(job.bid!.attachments ?? [])]) {
+              if (!a?.blob_path || seen.has(a.blob_path)) continue;
+              seen.add(a.blob_path);
+              combined.push(a);
+            }
+            const visualCount = combined.filter((a) => (a.content_type || "").startsWith("image/")).length;
+            if (!visualCount) return null;
+            return (
+              <>
+                <div className="ojw-section-label" style={{ marginTop: 18 }}>Project photos</div>
+                <JobPhotosCarousel attachments={combined} />
+              </>
+            );
+          })()}
 
           {job.bid!.pdf_url && (
             <>
@@ -824,6 +899,25 @@ const OJW_CSS = `
 .ojw-alert strong { display: block; font-weight: 700; margin-bottom: 2px; }
 .ojw-alert-danger { background: #FEEFEF; color: #8A2A2A; border: 1px solid #F1D6D6; }
 .ojw-alert-warn   { background: #FFF8E8; color: #7A5500; border: 1px solid #FFE3A1; }
+
+/* Project photos carousel — horizontal scroll of thumbnail tiles, each opens
+   the shared Lightbox for full-screen viewing. Matches the cbf-file-card
+   visual treatment (rounded corners, hairline, muted surface). */
+.ojw-photos-scroll {
+  display: flex; gap: 8px; overflow-x: auto; padding: 4px 2px 8px;
+  scroll-snap-type: x proximity;
+}
+.ojw-photos-scroll::-webkit-scrollbar { height: 6px; }
+.ojw-photos-scroll::-webkit-scrollbar-thumb { background: var(--q-hairline); border-radius: 3px; }
+.ojw-photos-tile {
+  flex: 0 0 auto; width: 108px; height: 108px; padding: 0; border: none;
+  background: var(--q-surface-muted); border-radius: 10px; overflow: hidden;
+  box-shadow: inset 0 0 0 0.5px var(--q-hairline); cursor: pointer;
+  scroll-snap-align: start; transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+.ojw-photos-tile:hover { transform: translateY(-1px); box-shadow: 0 2px 8px rgba(0,0,0,0.08), inset 0 0 0 0.5px var(--q-hairline); }
+.ojw-photos-tile:focus-visible { outline: 2px solid var(--q-primary); outline-offset: 2px; }
+.ojw-photos-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
 `;
 
 
