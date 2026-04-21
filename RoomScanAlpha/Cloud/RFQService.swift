@@ -29,8 +29,73 @@ final class RFQService {
                 description: dict["description"] as? String,
                 status: status,
                 createdAt: dict["created_at"] as? String,
-                address: dict["address"] as? String
+                address: dict["address"] as? String,
+                scanCount: dict["scan_count"] as? Int,
+                bidCount: dict["bid_count"] as? Int
             )
+        }
+    }
+
+    /// Fetch full project detail (rooms + scope). Endpoint is link-auth on the
+    /// server so no token is strictly required, but we send one when we have it
+    /// so the backend can trust the caller's account linkage.
+    func getProjectDetail(rfqId: String) async throws -> ProjectDetail {
+        let url = URL(string: "\(apiBaseURL)/api/rfqs/\(rfqId)/contractor-view")!
+        var request = URLRequest(url: url)
+        if let token = try? await AuthManager.shared.getToken() {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            throw URLError(.badServerResponse, userInfo: [
+                NSLocalizedDescriptionKey: "Project not found (HTTP \(code))"
+            ])
+        }
+        let decoder = JSONDecoder()
+        return try decoder.decode(ProjectDetail.self, from: data)
+    }
+
+    /// Fetch bids for an RFQ. JWT-authed — scan-api allows ownership via
+    /// user_id OR homeowner_account_id → firebase_uid. Returns empty list
+    /// if the caller is not the owner (silently, to keep UIs simple).
+    func getBids(rfqId: String) async throws -> [Bid] {
+        let token = try await AuthManager.shared.getToken()
+        let url = URL(string: "\(apiBaseURL)/api/rfqs/\(rfqId)/bids")!
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        if http.statusCode == 403 { return [] }
+        guard http.statusCode == 200 else {
+            throw URLError(.badServerResponse, userInfo: [
+                NSLocalizedDescriptionKey: "Bids fetch failed (HTTP \(http.statusCode))"
+            ])
+        }
+        let decoder = JSONDecoder()
+        struct BidsResponse: Codable { let bids: [Bid] }
+        return try decoder.decode(BidsResponse.self, from: data).bids
+    }
+
+    /// Accept a bid. Server rejects others.
+    func acceptBid(rfqId: String, bidId: String) async throws {
+        let token = try await AuthManager.shared.getToken()
+        let url = URL(string: "\(apiBaseURL)/api/rfqs/\(rfqId)/accept-bid")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["bid_id": bidId])
+
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            throw URLError(.badServerResponse, userInfo: [
+                NSLocalizedDescriptionKey: "Hire failed (HTTP \(code))"
+            ])
         }
     }
 

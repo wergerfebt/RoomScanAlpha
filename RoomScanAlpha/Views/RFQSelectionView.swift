@@ -25,30 +25,58 @@ struct RFQSelectionView: View {
                     }
                 } else {
                     List(rfqs) { rfq in
-                        Button {
-                            selectedRFQ = rfq
-                        } label: {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(rfq.displayTitle)
-                                        .font(.headline)
-                                    if let address = rfq.address, !address.isEmpty {
-                                        Text(address)
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
+                        HStack(spacing: 10) {
+                            Button {
+                                selectedRFQ = rfq
+                            } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(rfq.displayTitle)
+                                            .font(.headline)
+                                        if let address = rfq.address, !address.isEmpty {
+                                            Text(address)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        HStack(spacing: 6) {
+                                            Text(rfq.status.replacingOccurrences(of: "_", with: " ").capitalized)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                            if rfq.hasBids {
+                                                Text("·").foregroundStyle(.secondary).font(.caption)
+                                                HStack(spacing: 3) {
+                                                    Image(systemName: "dollarsign.circle.fill")
+                                                        .font(.caption2)
+                                                        .foregroundStyle(Color.accentColor)
+                                                    Text("\(rfq.bidCount ?? 0) \((rfq.bidCount ?? 0) == 1 ? "bid" : "bids")")
+                                                        .font(.caption)
+                                                        .foregroundStyle(Color.accentColor)
+                                                        .fontWeight(.semibold)
+                                                }
+                                            }
+                                        }
                                     }
-                                    Text(rfq.status.replacingOccurrences(of: "_", with: " ").capitalized)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                if selectedRFQ?.id == rfq.id {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundStyle(.blue)
+                                    Spacer()
+                                    if selectedRFQ?.id == rfq.id {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundStyle(.blue)
+                                    }
                                 }
                             }
+                            .foregroundStyle(.primary)
+                            .buttonStyle(.plain)
+                            .contentShape(Rectangle())
+
+                            NavigationLink {
+                                ProjectDetailView(rfq: rfq)
+                            } label: {
+                                Image(systemName: "info.circle")
+                                    .font(.title3)
+                                    .foregroundStyle(Color.accentColor)
+                            }
+                            .frame(width: 28)
+                            .buttonStyle(.plain)
                         }
-                        .foregroundStyle(.primary)
                     }
                 }
             }
