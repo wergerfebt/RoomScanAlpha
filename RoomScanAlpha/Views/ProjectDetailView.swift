@@ -66,6 +66,7 @@ struct ProjectDetailView: View {
                     scanBand(detail: detail)
                 }
                 scopeSection
+                ProjectMediaView(rfqId: rfq.id, canEdit: true)
                 bidsSection
                 rfqIdFooter
             }

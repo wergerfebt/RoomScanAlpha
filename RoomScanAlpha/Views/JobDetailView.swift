@@ -20,6 +20,7 @@ struct JobDetailView: View {
     @State private var bevFullscreen = false
     @State private var openingConversation = false
     @State private var conversationRoute: ConversationRoute?
+    @State private var showBidForm = false
 
     private enum ScanView: String { case floorplan, birdseye }
 
@@ -52,6 +53,7 @@ struct JobDetailView: View {
                     scanBand(detail: detail)
                 }
                 scopeSection
+                ProjectMediaView(rfqId: job.rfqId, canEdit: false)
                 bidSection
                 messageButton
                 rfqIdFooter
@@ -69,6 +71,19 @@ struct JobDetailView: View {
             if let url = bevURL {
                 JobBEVFullscreenView(url: url) { bevFullscreen = false }
             }
+        }
+        .sheet(isPresented: $showBidForm) {
+            BidFormView(
+                job: job,
+                onSaved: {
+                    showBidForm = false
+                    // Detail fetch re-runs via parent jobs-list refetch; we can
+                    // also re-pull here, but the job's bid fields come from the
+                    // jobs list not contractor-view, so there's no quick local
+                    // refresh. Pop-and-refresh happens on next Jobs visit.
+                },
+                onClose: { showBidForm = false }
+            )
         }
         .sheet(item: $conversationRoute) { route in
             NavigationStack {
@@ -347,7 +362,24 @@ struct JobDetailView: View {
     private var bidSection: some View {
         if let bid = job.bid {
             VStack(alignment: .leading, spacing: 12) {
-                sectionLabel("Your bid")
+                HStack {
+                    sectionLabel("Your bid")
+                    Spacer()
+                    if bid.status != "accepted" && bid.status != "rejected" {
+                        Button {
+                            showBidForm = true
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "pencil")
+                                    .font(.system(size: 12, weight: .semibold))
+                                Text("Update")
+                                    .font(.system(size: 13, weight: .semibold))
+                            }
+                            .foregroundStyle(QTheme.primary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
                 VStack(alignment: .leading, spacing: 12) {
                     HStack(alignment: .firstTextBaseline) {
                         Text("$\(bid.priceCents / 100)")
@@ -388,16 +420,23 @@ struct JobDetailView: View {
                 .overlay(RoundedRectangle(cornerRadius: QTheme.radiusXLarge, style: .continuous).strokeBorder(QTheme.hairline))
             }
         } else {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Not bid yet").font(.headline).foregroundStyle(QTheme.ink)
-                Text("Submit a quote from the web dashboard at roomscanalpha.com — the bid form with PDF attachments lives there.")
-                    .font(.callout).foregroundStyle(QTheme.inkMuted)
+            Button {
+                showBidForm = true
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "square.and.pencil").font(.system(size: 15, weight: .semibold))
+                    Text("Submit bid").font(.system(size: 15, weight: .semibold))
+                    Spacer()
+                    Image(systemName: "chevron.right").font(.caption.weight(.semibold))
+                }
+                .foregroundStyle(QTheme.primary)
+                .padding(18)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(QTheme.primarySoft)
+                .clipShape(RoundedRectangle(cornerRadius: QTheme.radiusXLarge, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: QTheme.radiusXLarge, style: .continuous).strokeBorder(QTheme.primary, lineWidth: 1.5))
             }
-            .padding(20)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(QTheme.surface)
-            .clipShape(RoundedRectangle(cornerRadius: QTheme.radiusXLarge, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: QTheme.radiusXLarge, style: .continuous).strokeBorder(QTheme.hairline))
+            .buttonStyle(.plain)
         }
     }
 
