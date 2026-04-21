@@ -41,12 +41,18 @@ export default function PhotosCarousel({
   const [deleting, setDeleting] = useState<string | null>(null);
 
   const images = useMemo(
-    () => attachments.filter((a) => (a.content_type || "").startsWith("image/") && a.download_url),
+    () => attachments.filter((a) => {
+      const ct = a.content_type || "";
+      return (ct.startsWith("image/") || ct.startsWith("video/")) && a.download_url;
+    }),
     [attachments],
   );
   if (!images.length) return null;
 
-  const lbItems: LightboxItem[] = images.map((a) => ({ url: a.download_url!, type: "image" }));
+  const lbItems: LightboxItem[] = images.map((a) => ({
+    url: a.download_url!,
+    type: (a.content_type || "").startsWith("video/") ? "video" : "image",
+  }));
   const style = tileSize ? ({ ["--pc-tile-size" as string]: `${tileSize}px` } as React.CSSProperties) : undefined;
 
   async function handleDelete(e: React.MouseEvent, a: CarouselAttachment) {
@@ -65,15 +71,30 @@ export default function PhotosCarousel({
   return (
     <>
       <div className={`pc-scroll ${className || ""}`} style={style} role="list">
-        {images.map((a, i) => (
+        {images.map((a, i) => {
+          const isVideo = (a.content_type || "").startsWith("video/");
+          return (
           <div key={a.blob_path} role="listitem" className="pc-tile-wrap">
             <button
               type="button"
               className="pc-tile"
               onClick={() => setLightboxIndex(i)}
-              aria-label={`Open photo ${i + 1} of ${images.length}`}
+              aria-label={`Open ${isVideo ? "video" : "photo"} ${i + 1} of ${images.length}`}
             >
-              <img src={a.download_url!} alt={a.name || `Photo ${i + 1}`} loading="lazy" />
+              {isVideo ? (
+                <>
+                  <video
+                    src={a.download_url!}
+                    preload="metadata"
+                    muted
+                    playsInline
+                    aria-label={a.name || `Video ${i + 1}`}
+                  />
+                  <div className="pc-play-badge" aria-hidden="true">▶</div>
+                </>
+              ) : (
+                <img src={a.download_url!} alt={a.name || `Photo ${i + 1}`} loading="lazy" />
+              )}
             </button>
             {onDelete && (
               <button
@@ -81,14 +102,15 @@ export default function PhotosCarousel({
                 className="pc-tile-remove"
                 disabled={deleting === a.blob_path}
                 onClick={(e) => handleDelete(e, a)}
-                aria-label={`Remove ${a.name || "photo"}`}
+                aria-label={`Remove ${a.name || (isVideo ? "video" : "photo")}`}
                 title="Remove"
               >
                 {deleting === a.blob_path ? "…" : "×"}
               </button>
             )}
           </div>
-        ))}
+        );
+        })}
       </div>
       {lightboxIndex !== null && (
         <Lightbox items={lbItems} startIndex={lightboxIndex} onClose={() => setLightboxIndex(null)} />
@@ -120,7 +142,13 @@ const PC_CSS = `
 }
 .pc-tile:hover { transform: translateY(-1px); box-shadow: 0 2px 8px rgba(0,0,0,0.08), inset 0 0 0 0.5px var(--q-hairline); }
 .pc-tile:focus-visible { outline: 2px solid var(--q-primary); outline-offset: 2px; }
-.pc-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pc-tile img, .pc-tile video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pc-play-badge {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 28px; line-height: 1;
+  text-shadow: 0 1px 6px rgba(0,0,0,0.55);
+  pointer-events: none;
+}
 .pc-tile-remove {
   position: absolute; top: 4px; right: 4px; z-index: 2;
   width: 22px; height: 22px; padding: 0; border: none;

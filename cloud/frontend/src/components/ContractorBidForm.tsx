@@ -252,10 +252,19 @@ export default function ContractorBidForm({ rfqId, bidId, onSubmitted, onCancel,
       </div>
 
       <div className="cbf-media-row">
-        {existingMedia.map((a) => (
+        {existingMedia.map((a) => {
+          const isVideo = (a.content_type || "").startsWith("video/");
+          return (
           <div key={a.blob_path} className="cbf-media-tile">
             {a.download_url ? (
-              <img src={a.download_url} alt={a.name || ""} loading="lazy" />
+              isVideo ? (
+                <>
+                  <video src={a.download_url} preload="metadata" muted playsInline />
+                  <div className="cbf-media-play">▶</div>
+                </>
+              ) : (
+                <img src={a.download_url} alt={a.name || ""} loading="lazy" />
+              )
             ) : <div className="cbf-media-fallback">{(a.name || "File").slice(0, 8)}</div>}
             <button
               type="button"
@@ -278,10 +287,21 @@ export default function ContractorBidForm({ rfqId, bidId, onSubmitted, onCancel,
               }}
             >×</button>
           </div>
-        ))}
-        {newMedia.map((f, i) => (
+          );
+        })}
+        {newMedia.map((f, i) => {
+          const isVideo = (f.type || "").startsWith("video/");
+          const url = URL.createObjectURL(f);
+          return (
           <div key={`${f.name}-${i}`} className="cbf-media-tile cbf-media-tile-pending">
-            <img src={URL.createObjectURL(f)} alt={f.name} />
+            {isVideo ? (
+              <>
+                <video src={url} preload="metadata" muted playsInline />
+                <div className="cbf-media-play">▶</div>
+              </>
+            ) : (
+              <img src={url} alt={f.name} />
+            )}
             <button
               type="button"
               className="cbf-media-remove"
@@ -292,18 +312,29 @@ export default function ContractorBidForm({ rfqId, bidId, onSubmitted, onCancel,
             >×</button>
             <div className="cbf-media-pending-badge">New</div>
           </div>
-        ))}
+          );
+        })}
         <label className="cbf-media-add" title="Add photos or videos">
           <span>+</span>
           <input
             ref={mediaInputRef}
             type="file"
-            accept="image/jpeg,image/png,image/webp,image/gif,image/heic"
+            accept="image/jpeg,image/png,image/webp,image/gif,image/heic,video/mp4,video/quicktime,video/webm"
             multiple
             style={{ display: "none" }}
             onChange={(e) => {
               const files = Array.from(e.target.files || []);
-              if (files.length) setNewMedia((prev) => [...prev, ...files]);
+              // The bid POST is a multipart Cloud Run request with a ~32MB body
+              // limit. Block obvious over-sized files before the request fails
+              // opaquely server-side; large videos should go through the
+              // signed-URL path once we wire it up in the form.
+              const MAX_BYTES = 28 * 1024 * 1024;
+              const tooLarge = files.filter((f) => f.size > MAX_BYTES);
+              if (tooLarge.length) {
+                alert(`These files are larger than 28 MB and can't be attached this way:\n\n${tooLarge.map((f) => `• ${f.name}`).join("\n")}\n\nConsider sending them via chat instead.`);
+              }
+              const ok = files.filter((f) => f.size <= MAX_BYTES);
+              if (ok.length) setNewMedia((prev) => [...prev, ...ok]);
               if (mediaInputRef.current) mediaInputRef.current.value = "";
             }}
           />
@@ -444,7 +475,12 @@ const CBF_CSS = `
   overflow: hidden; box-shadow: inset 0 0 0 0.5px var(--q-hairline);
   background: var(--q-surface-muted);
 }
-.cbf-media-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.cbf-media-tile img, .cbf-media-tile video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.cbf-media-play {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 22px; line-height: 1;
+  text-shadow: 0 1px 6px rgba(0,0,0,0.55); pointer-events: none;
+}
 .cbf-media-fallback {
   width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;
   font-size: 10px; color: var(--q-ink-muted);

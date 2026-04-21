@@ -983,7 +983,8 @@ async def submit_bid(
             ct = image.content_type or "application/octet-stream"
             ext = ATTACHMENT_TYPES.get(ct, "")
             if ct not in ATTACHMENT_TYPES or ct == "application/pdf":
-                # Only allow image content types here; PDFs go through the `pdf` field.
+                # PDFs go through the dedicated `pdf` field; anything outside the
+                # allowlist is rejected silently.
                 continue
             image_id = str(uuid.uuid4())
             img_blob_path = f"bids/{rfq_id}/{bid_id}/{image_id}{ext}"
@@ -3333,6 +3334,9 @@ ATTACHMENT_TYPES = {
     "image/webp": ".webp",
     "image/gif": ".gif",
     "image/heic": ".heic",
+    "video/mp4": ".mp4",
+    "video/quicktime": ".mov",
+    "video/webm": ".webm",
     "application/pdf": ".pdf",
 }
 

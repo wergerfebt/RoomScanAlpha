@@ -477,7 +477,7 @@ export default function ProjectDetail() {
                     <input
                       ref={photoInputRef}
                       type="file"
-                      accept="image/jpeg,image/png,image/webp,image/gif,image/heic"
+                      accept="image/jpeg,image/png,image/webp,image/gif,image/heic,video/mp4,video/quicktime,video/webm"
                       multiple
                       style={{ display: "none" }}
                       onChange={(e) => handlePhotoUpload(e.target.files)}
