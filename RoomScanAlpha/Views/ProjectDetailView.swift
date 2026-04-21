@@ -21,13 +21,30 @@ struct ProjectDetailView: View {
     @State private var scanView: ScanView = .floorplan
     @State private var interactingWithBEV = false
     @State private var bevFullscreen = false
+    /// scan_id of the room currently highlighted. Nil until detail loads —
+    /// we default to the first room on first appearance.
+    @State private var selectedScanId: String?
+    /// When true, show the RFQ-scoped inbox as a sheet.
+    @State private var showMessages = false
 
     private enum ScanView: String { case floorplan, birdseye }
 
     private let embedBase = "https://scan-api-839349778883.us-central1.run.app"
 
+    private var selectedRoom: ProjectRoom? {
+        guard let detail else { return nil }
+        if let id = selectedScanId, let hit = detail.rooms.first(where: { $0.scanId == id }) {
+            return hit
+        }
+        return detail.rooms.first
+    }
+
     private var bevURL: URL? {
-        URL(string: "\(embedBase)/embed/scan/\(rfq.id)?view=bev&measurements=on")
+        var params = "view=bev&measurements=on"
+        if let room = selectedRoom {
+            params += "&room=\(room.scanId)"
+        }
+        return URL(string: "\(embedBase)/embed/scan/\(rfq.id)?\(params)")
     }
 
     var body: some View {
@@ -48,8 +65,17 @@ struct ProjectDetailView: View {
         .background(QTheme.canvas.ignoresSafeArea())
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            if onScanRoom != nil {
-                ToolbarItem(placement: .primaryAction) {
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button {
+                    showMessages = true
+                } label: {
+                    Image(systemName: "envelope")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(QTheme.primary)
+                }
+                .accessibilityLabel("Messages")
+
+                if onScanRoom != nil {
                     Button {
                         onScanRoom?()
                         dismiss()
@@ -63,6 +89,11 @@ struct ProjectDetailView: View {
                         .foregroundStyle(QTheme.primary)
                     }
                 }
+            }
+        }
+        .sheet(isPresented: $showMessages) {
+            InboxView(role: .homeowner, rfqFilter: rfq.id) {
+                showMessages = false
             }
         }
         .task { await load() }
@@ -106,12 +137,19 @@ struct ProjectDetailView: View {
         return nil
     }
 
-    private var roomsWithScope: [ProjectRoom] {
-        (detail?.rooms ?? []).filter { !($0.scope?.items?.isEmpty ?? true) }
+    /// Scope of the currently-selected room, or nil if the room has none.
+    private var selectedRoomScope: RoomScopeSummary? {
+        guard let items = selectedRoom?.scope?.items, !items.isEmpty else {
+            if let notes = selectedRoom?.scope?.notes, !notes.isEmpty {
+                return selectedRoom?.scope
+            }
+            return nil
+        }
+        return selectedRoom?.scope
     }
 
     private var hasAnyScope: Bool {
-        (scopeText?.isEmpty == false) || !roomsWithScope.isEmpty
+        (scopeText?.isEmpty == false) || selectedRoomScope != nil
     }
 
     private var sortedBids: [Bid] {
@@ -252,35 +290,50 @@ struct ProjectDetailView: View {
     }
 
     private func roomRow(_ room: ProjectRoom) -> some View {
-        HStack(spacing: 12) {
-            ZStack {
-                Circle().fill(QTheme.success)
-                Image(systemName: "checkmark")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(.white)
-            }
-            .frame(width: 22, height: 22)
+        let isSelected = selectedRoom?.scanId == room.scanId
+        return Button {
+            selectedScanId = room.scanId
+        } label: {
+            HStack(spacing: 12) {
+                ZStack {
+                    Circle().fill(isSelected ? QTheme.scanAccent : QTheme.success)
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.white)
+                }
+                .frame(width: 22, height: 22)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(room.displayLabel)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(QTheme.ink)
-                Text(roomSubtitle(room))
-                    .font(.caption)
-                    .foregroundStyle(QTheme.inkMuted)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(room.displayLabel)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(QTheme.ink)
+                    Text(roomSubtitle(room))
+                        .font(.caption)
+                        .foregroundStyle(QTheme.inkMuted)
+                }
+                Spacer(minLength: 0)
+                if isSelected {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(QTheme.scanAccent)
+                }
             }
-            Spacer(minLength: 0)
+            .padding(.vertical, 10)
+            .padding(.horizontal, 14)
+            .background(isSelected ? QTheme.scanAccentSoft : Color.clear)
         }
-        .padding(.vertical, 10)
-        .padding(.horizontal, 14)
+        .buttonStyle(.plain)
     }
 
     private func statsGrid(detail: ProjectDetail) -> some View {
+        // Stats reflect the selected room — matches the scope title and the
+        // BEV viewport so the scan band is internally consistent.
+        let room = selectedRoom
         let items: [(String, String, String)] = [
-            ("Total floor", formattedNumber(detail.totalFloorSqft), "sqft"),
-            ("Rooms", "\(detail.rooms.count)", ""),
-            ("Wall area", formattedNumber(detail.rooms.reduce(0) { $0 + ($1.wallAreaSqft ?? 0) }), "sqft"),
-            ("Ceiling", detail.averageCeilingFt.map { String(format: "%.1f", $0) } ?? "—", "ft")
+            ("Floor area", room?.floorAreaSqft.map(formattedNumber) ?? "—", "sqft"),
+            ("Wall area", room?.wallAreaSqft.map(formattedNumber) ?? "—", "sqft"),
+            ("Ceiling", room?.ceilingHeightFt.map { String(format: "%.1f", $0) } ?? "—", "ft"),
+            ("Perimeter", room?.perimeterLinearFt.map(formattedNumber) ?? "—", "ft")
         ]
         return LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
             ForEach(items, id: \.0) { item in
@@ -320,40 +373,34 @@ struct ProjectDetailView: View {
     private var scopeSection: some View {
         if hasAnyScope {
             VStack(alignment: .leading, spacing: 12) {
-                sectionLabel("Scope of work")
+                sectionLabel(scopeTitle)
                 VStack(alignment: .leading, spacing: 16) {
-                    if let scopeText, !scopeText.isEmpty {
+                    if let scopeText, !scopeText.isEmpty, selectedRoomScope == nil {
                         Text(scopeText)
                             .font(.system(size: 15))
                             .foregroundStyle(QTheme.ink)
                             .lineSpacing(4)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    if !roomsWithScope.isEmpty {
-                        if scopeText?.isEmpty == false {
-                            Divider().background(QTheme.divider)
-                        }
-                        VStack(alignment: .leading, spacing: 14) {
-                            ForEach(roomsWithScope) { room in
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text(room.displayLabel)
-                                        .font(.system(size: 13, weight: .bold))
-                                        .foregroundStyle(QTheme.ink)
-                                    ChipFlowLayout(spacing: 6, lineSpacing: 6) {
-                                        ForEach(room.scope?.items ?? [], id: \.self) { item in
-                                            scopeChip(formatScopeLabel(item))
-                                        }
-                                    }
-                                    if let note = room.scope?.notes, !note.isEmpty {
-                                        Text(note)
-                                            .font(.system(size: 13, design: .default))
-                                            .foregroundStyle(QTheme.inkMuted)
-                                            .italic()
-                                            .padding(.top, 4)
-                                    }
+                    if let scope = selectedRoomScope {
+                        VStack(alignment: .leading, spacing: 10) {
+                            ChipFlowLayout(spacing: 6, lineSpacing: 6) {
+                                ForEach(scope.items ?? [], id: \.self) { item in
+                                    scopeChip(formatScopeLabel(item))
                                 }
                             }
+                            if let note = scope.notes, !note.isEmpty {
+                                Text(note)
+                                    .font(.system(size: 13, design: .default))
+                                    .foregroundStyle(QTheme.inkMuted)
+                                    .italic()
+                                    .padding(.top, 4)
+                            }
                         }
+                    } else if scopeText == nil || scopeText?.isEmpty == true {
+                        Text("No scope items selected for \(selectedRoom?.displayLabel ?? "this room").")
+                            .font(.callout)
+                            .foregroundStyle(QTheme.inkMuted)
                     }
                 }
                 .padding(20)
@@ -363,6 +410,11 @@ struct ProjectDetailView: View {
                 .overlay(RoundedRectangle(cornerRadius: QTheme.radiusXLarge, style: .continuous).strokeBorder(QTheme.hairline))
             }
         }
+    }
+
+    private var scopeTitle: String {
+        if let name = selectedRoom?.displayLabel { return "Scope of work — \(name)" }
+        return "Scope of work"
     }
 
     private func scopeChip(_ text: String) -> some View {
@@ -645,6 +697,9 @@ struct ProjectDetailView: View {
             let (d, b) = try await (detailTask, bidsTask)
             detail = d
             bids = b
+            if selectedScanId == nil, let first = d.rooms.first {
+                selectedScanId = first.scanId
+            }
         } catch {
             self.error = (error as NSError).localizedDescription
         }

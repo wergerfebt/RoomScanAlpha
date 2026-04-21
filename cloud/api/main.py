@@ -3914,16 +3914,25 @@ async def create_conversation(request: Request, authorization: str = Header(None
             raise HTTPException(403, "Account not found — sign in required")
         caller_account_id = str(acct[0])
 
-        # Verify caller owns the RFQ (resolves legacy user_id → account_id)
         homeowner_account_id = _resolve_rfq_homeowner(cursor, rfq_id)
         if not homeowner_account_id:
             raise HTTPException(404, "RFQ not found")
-        if homeowner_account_id != caller_account_id:
-            raise HTTPException(403, "Only the RFQ owner can start a conversation")
 
         cursor.execute("SELECT 1 FROM organizations WHERE id = %s AND deleted_at IS NULL", (org_id,))
         if not cursor.fetchone():
             raise HTTPException(404, "Organization not found")
+
+        is_owner = homeowner_account_id == caller_account_id
+        is_org_member = False
+        if not is_owner:
+            cursor.execute(
+                """SELECT 1 FROM org_members
+                   WHERE org_id = %s AND account_id = %s AND invite_status = 'accepted'""",
+                (org_id, caller_account_id),
+            )
+            is_org_member = cursor.fetchone() is not None
+        if not (is_owner or is_org_member):
+            raise HTTPException(403, "Only the RFQ owner or a member of the target org can start a conversation")
 
         conv_id = _ensure_conversation(cursor, rfq_id, homeowner_account_id, org_id)
         conn.commit()

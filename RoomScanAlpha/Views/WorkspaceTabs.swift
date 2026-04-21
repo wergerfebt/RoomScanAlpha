@@ -63,7 +63,12 @@ struct JobsView: View {
 
                 LazyVStack(spacing: 10) {
                     ForEach(filtered) { job in
-                        jobRow(job)
+                        NavigationLink {
+                            JobDetailView(job: job)
+                        } label: {
+                            jobRow(job)
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
                 .padding(.horizontal, 20)

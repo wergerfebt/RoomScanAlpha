@@ -24,6 +24,27 @@ final class InboxService {
         return try JSONDecoder().decode(Envelope.self, from: data).conversations
     }
 
+    /// `POST /api/conversations` — open (or create) a thread for an rfq × org.
+    /// Idempotent. Caller must be either the RFQ owner or a member of `orgId`.
+    func createConversation(rfqId: String, orgId: String) async throws -> String {
+        let token = try await AuthManager.shared.getToken()
+        var request = URLRequest(url: URL(string: "\(apiBaseURL)/api/conversations")!)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let payload: [String: String] = ["rfq_id": rfqId, "org_id": orgId]
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            throw URLError(.badServerResponse, userInfo: [
+                NSLocalizedDescriptionKey: "Couldn't open conversation (HTTP \(code))"
+            ])
+        }
+        struct Envelope: Codable { let id: String }
+        return try JSONDecoder().decode(Envelope.self, from: data).id
+    }
+
     /// `/api/conversations/{id}` — full thread. Server marks caller-side read.
     func getConversation(id: String) async throws -> Conversation {
         let token = try await AuthManager.shared.getToken()

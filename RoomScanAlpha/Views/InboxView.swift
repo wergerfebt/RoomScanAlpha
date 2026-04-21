@@ -5,10 +5,14 @@ import PhotosUI
 /// `/inbox` pattern (2-page on narrow screens).
 struct InboxView: View {
     let role: InboxService.Role
+    /// When set, only threads tied to this RFQ are shown and the title reads
+    /// "Messages" (scoped). Used by the project-detail "Message" shortcut.
+    let rfqFilter: String?
     let onClose: () -> Void
 
-    init(role: InboxService.Role = .homeowner, onClose: @escaping () -> Void) {
+    init(role: InboxService.Role = .homeowner, rfqFilter: String? = nil, onClose: @escaping () -> Void) {
         self.role = role
+        self.rfqFilter = rfqFilter
         self.onClose = onClose
     }
 
@@ -16,23 +20,28 @@ struct InboxView: View {
     @State private var loading = true
     @State private var error: String?
 
+    private var visibleThreads: [InboxThread] {
+        guard let rfqFilter else { return threads }
+        return threads.filter { $0.rfqId == rfqFilter }
+    }
+
     var body: some View {
         NavigationStack {
             ZStack {
                 QTheme.canvas.ignoresSafeArea()
                 Group {
-                    if loading && threads.isEmpty {
+                    if loading && visibleThreads.isEmpty {
                         ProgressView().tint(QTheme.primary)
-                    } else if let error, threads.isEmpty {
+                    } else if let error, visibleThreads.isEmpty {
                         errorState(error)
-                    } else if threads.isEmpty {
+                    } else if visibleThreads.isEmpty {
                         emptyState
                     } else {
                         threadList
                     }
                 }
             }
-            .navigationTitle("Inbox")
+            .navigationTitle(rfqFilter == nil ? "Inbox" : "Messages")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -51,10 +60,12 @@ struct InboxView: View {
             Image(systemName: "tray")
                 .font(.system(size: 34))
                 .foregroundStyle(QTheme.inkDim)
-            Text("No conversations yet")
+            Text(rfqFilter == nil ? "No conversations yet" : "No messages for this project")
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(QTheme.ink)
-            Text("Reach out to a contractor from their profile to start a message.")
+            Text(rfqFilter == nil
+                 ? "Reach out to a contractor from their profile to start a message."
+                 : "Contractors you invite or who submit a bid will appear here.")
                 .font(.subheadline)
                 .foregroundStyle(QTheme.inkMuted)
                 .multilineTextAlignment(.center)
@@ -73,7 +84,7 @@ struct InboxView: View {
     private var threadList: some View {
         ScrollView {
             LazyVStack(spacing: 0) {
-                ForEach(Array(threads.enumerated()), id: \.element.id) { idx, thread in
+                ForEach(Array(visibleThreads.enumerated()), id: \.element.id) { idx, thread in
                     if idx > 0 { Divider().background(QTheme.divider).padding(.leading, 78) }
                     NavigationLink {
                         ConversationView(thread: thread)
@@ -95,7 +106,6 @@ struct InboxView: View {
         let cp = thread.counterpart
         return HStack(alignment: .top, spacing: 12) {
             avatar(cp)
-                .frame(width: 44, height: 44)
 
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 4) {
@@ -153,18 +163,24 @@ struct InboxView: View {
 
     @ViewBuilder
     private func avatar(_ cp: InboxThread.Counterpart) -> some View {
-        if let urlString = cp.iconURL, let url = URL(string: urlString) {
-            AsyncImage(url: url) { phase in
-                if let image = phase.image {
-                    image.resizable().scaledToFill()
-                } else {
-                    initialsTile(cp.name)
+        // Size + clipShape live *inside* the group, so an AsyncImage that
+        // loads late (and uses scaledToFill to cover the tile) is clipped
+        // to the intended 44×44 even before it finishes loading.
+        Group {
+            if let urlString = cp.iconURL, let url = URL(string: urlString) {
+                AsyncImage(url: url) { phase in
+                    if let image = phase.image {
+                        image.resizable().scaledToFill()
+                    } else {
+                        initialsTile(cp.name)
+                    }
                 }
+            } else {
+                initialsTile(cp.name)
             }
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        } else {
-            initialsTile(cp.name)
         }
+        .frame(width: 44, height: 44)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
     private func initialsTile(_ name: String?) -> some View {
@@ -196,7 +212,23 @@ struct InboxView: View {
 // MARK: – Conversation view
 
 struct ConversationView: View {
-    let thread: InboxThread
+    /// Conversation id is the only piece we need to load the thread —
+    /// everything else (counterpart name, rfq context) comes from the
+    /// server response. Callers who have a thread summary can pass its
+    /// counterpart name as `initialTitle` so the nav bar has something
+    /// to show before the fetch lands.
+    let conversationId: String
+    let initialTitle: String
+
+    init(thread: InboxThread) {
+        self.conversationId = thread.id
+        self.initialTitle = thread.counterpart.name ?? "Conversation"
+    }
+
+    init(conversationId: String, initialTitle: String = "Conversation") {
+        self.conversationId = conversationId
+        self.initialTitle = initialTitle
+    }
 
     @State private var conversation: Conversation?
     @State private var input = ""
@@ -247,7 +279,7 @@ struct ConversationView: View {
             composer
         }
         .background(QTheme.canvas.ignoresSafeArea())
-        .navigationTitle(thread.counterpart.name ?? "Conversation")
+        .navigationTitle(conversation.flatMap { $0.callerSide == "homeowner" ? $0.org.name : $0.homeowner.name } ?? initialTitle)
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }
     }
@@ -454,7 +486,7 @@ struct ConversationView: View {
     }
 
     private func load() async {
-        do { conversation = try await InboxService.shared.getConversation(id: thread.id) }
+        do { conversation = try await InboxService.shared.getConversation(id: conversationId) }
         catch { self.error = error.localizedDescription }
     }
 
@@ -477,7 +509,7 @@ struct ConversationView: View {
                 let ext = contentType.split(separator: "/").last.map(String.init) ?? "jpg"
                 let filename = "photo-\(Int(Date().timeIntervalSince1970)).\(ext)"
                 let slot = try await InboxService.shared.attachmentUploadURL(
-                    conversationId: thread.id,
+                    conversationId: conversationId,
                     contentType: contentType,
                     filename: filename
                 )
@@ -503,13 +535,13 @@ struct ConversationView: View {
         sending = true
         do {
             try await InboxService.shared.sendMessage(
-                conversationId: thread.id,
+                conversationId: conversationId,
                 body: text,
                 attachments: refs
             )
             input = ""
             pending.removeAll()
-            conversation = try await InboxService.shared.getConversation(id: thread.id)
+            conversation = try await InboxService.shared.getConversation(id: conversationId)
         } catch {
             self.error = error.localizedDescription
         }
