@@ -78,22 +78,32 @@ Vertex AI Custom Job: gs-processor (g2-standard-8, L4 GPU, on-demand)
   → ~18 min end-to-end, auto-terminates after completion, ~$0.35/job
 
 Cloud Run: scan-api (public)
-  → Firebase Auth JWT on all endpoints
-  → Serves contractor_view.html (Three.js OBJ viewer with HD toggle, MTLLoader for multi-atlas)
+  → Firebase Auth JWT on most endpoints; `/quote/` + `/embed/scan/` are link-as-auth
+  → Serves contractor_view.html (full OBJ viewer with HD toggle, sidebar, MTLLoader)
+  → Serves embed_viewer.html (chrome-less embed; URL params ?view=bev|tour, ?measurements, ?room)
   → Serves splat_viewer.html (Gaussian Splatting viewer with 2D covariance projection)
-  → Generates signed GCS URLs for OBJ meshes
+  → Generates signed GCS URLs for OBJ meshes + signed PUT URLs for chat attachments
   → Proxies MTL + atlas + splat files via /api/rfqs/{rfq_id}/scans/{scan_id}/files/{path}
+  → Hosts /api/inbox + /api/conversations/* for homeowner ↔ contractor messaging
+  → Auto-posts lifecycle events (bid_submitted, bid_accepted/rejected, rfq_updated) into threads
   → Proxies to processor for coverage checks
 
 React SPA (Firebase Hosting: roomscanalpha.com / roomscanalpha.web.app)
   → Vite + React + TypeScript frontend
   → Firebase Auth (email/password + Google OAuth)
-  → Shared components: TopBar, SearchBar, SearchOverlay, AuthModal, FilterSidebar, ContractorCard, JobCard, AddressAutocomplete
-  → Pages: Landing, Login, Projects, ProjectQuotes, Search, Account, OrgDashboard, OrgProfile, Invite
-  → Mobile-responsive: sticky TopBar, collapsible filters, carousel "How it works", single-column layouts
+  → Design system: forest palette, iOS type scale (44/28/17/15/12), soft-white cards on warm canvas.
+    --q-primary is marketplace accent; --q-scan-accent is locked to indigo across palettes.
+  → Two Layout modes:
+      - regular TopBar: homeowners + contractors on personal pages
+      - dark ContractorTopBar with inline/dropdown nav + UserMenu: triggered only on /org*
+  → Pages: Landing, Login, Projects, ProjectDetail, ProjectQuotes, Search, Inbox,
+           Account, OrgDashboard, OrgProfile, Invite
+  → Mobile: single-row contractor topbar (tabs → native <select>), Inbox + Jobs adopt a
+    list→detail 2-page pattern with back button
   → Address autocomplete via Google Places API (key in .env: VITE_GOOGLE_MAPS_API_KEY)
-  → Persistent org sidebar for contractor accounts
-  → /api/* proxied to Cloud Run scan-api via Firebase Hosting rewrites
+  → /api/*, /quote/**, /embed/**, /splat/**, /bids/**, /admin/** rewritten to scan-api via
+    Firebase Hosting. All links into those paths use <a href> (full-page nav) so the
+    rewrite fires; react-router Link falls through to the SPA catch-all.
 ```
 
 ### Services
@@ -182,6 +192,23 @@ React SPA (Firebase Hosting: roomscanalpha.com / roomscanalpha.web.app)
 1. **OBJ Mesh** (primary): Loads `textured.obj` via signed URL + MTL/atlas via file proxy (`MTLLoader` + `OBJLoader`). "HD On" toggles to `standard_textured.obj` with multi-atlas support. File proxy: `GET /api/rfqs/{rfq_id}/scans/{scan_id}/files/{path}` — maps `standard/` prefix to `standard_` prefixed GCS blobs.
 2. **Quad Room** (fallback): Builds rectangular walls from annotation polygon, applies per-surface JPEGs
 
+**URL params** on `/quote/{rfq_id}`:
+- `?bev=1` — auto-enter Bird's Eye View once the mesh loads (used when iframed)
+- `?embed=1` — legacy CSS-hide hack for chrome (superseded by the dedicated embed viewer below)
+
+### Minimal Embed Viewer (`embed_viewer.html`)
+
+**Route**: `GET /embed/scan/{rfq_id}` serves a chrome-less version of the Three.js viewer for iframing from any page (project detail, iOS WebView, future contractor review page). Shares the viewer math with `contractor_view.html` but has no sidebar, top-bar, modals, joystick, WASD, teleport, or iso thumbnail. Auth is link-based — no JWT required.
+
+**URL params**:
+| Param | Values | Default | Behavior |
+|---|---|---|---|
+| `view` | `bev` \| `tour` | `tour` | View mode is applied after the mesh finishes loading (so scene bounds are real) |
+| `measurements` | `on` \| `off` | `on` | Controls CSS2D label visibility |
+| `room` | `<scan_id>` | first room | Picks which room to show |
+
+Used by `ProjectDetail.tsx` for the "Bird's eye" tab and by the Landing page's product preview. `contractor_view.html` and `splat_viewer.html` still exist as separate viewers — a later consolidation can merge them.
+
 ### Gaussian Splat Viewer
 
 **3D Gaussian Splatting viewer** (`splat_viewer.html`) at `/splat/{rfq_id}` for viewing `.splat` files as an alternative to OBJ meshes. Uses proper 3DGS rendering math for photorealistic room visualization. Linked from contractor view via "View Splat" button (shown only for rooms with `.splat` files).
@@ -222,8 +249,23 @@ React SPA (Firebase Hosting: roomscanalpha.com / roomscanalpha.web.app)
 |--------|------|---------|
 | GET | `/api/contractors/search?service=&location=&q=` | Search orgs by service, location (geocoded), text. Returns org profiles with gallery preview. |
 | GET | `/api/orgs/{org_id}` | Full public org profile (services, gallery, team, hours, map) |
+| GET | `/api/rfqs/{rfq_id}/contractor-view` | RFQ detail (rooms, mesh URLs, features). Link-as-auth. |
 
 Location search geocodes via Google Maps Geocoding API (`GOOGLE_MAPS_API_KEY` env var on scan-api) and filters by Haversine distance against each org's `service_radius_miles`.
+
+**Inbox / messaging endpoints** (Firebase JWT required):
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/inbox?role=homeowner\|org\|auto` | Thread list for caller's side, with `kind`/`kind_label` (rfq/bid/won/msg) |
+| POST | `/api/conversations` | `{ rfq_id, org_id }` — homeowner-initiated thread. Idempotent. Returns `{ id }`. |
+| GET | `/api/conversations/{id}` | Full thread + ordered messages. Auto-marks caller's side read. |
+| POST | `/api/conversations/{id}/messages` | Send `{ body, attachments }`. Bumps counterpart unread + emails them. |
+| POST | `/api/conversations/{id}/read` | Manual mark-read. |
+| GET | `/api/conversations/{id}/attachment-upload-url?content_type=&filename=` | Signed PUT URL for GCS. Blob path is scoped to the conversation. |
+
+Messages can be `kind = text | event | bid`. Event messages are auto-posted from lifecycle hooks in `submit_bid`, `accept_bid`, and `update_rfq` (when pending bids get flagged). Bid messages embed a `bid_snapshot` JSONB so the card renders inline in the thread without re-fetching.
+
+**Account-linked ownership** (important): `list_rfqs` and `list_bids` accept JWT ownership via *either* `rfqs.user_id == firebase_uid` (legacy) *or* `rfqs.homeowner_account_id == accounts.id` linked to the calling `firebase_uid`. New homeowner accounts go through the account table; older RFQs still pivot on the Firebase UID directly.
 
 ## React Frontend (Quoterra Platform)
 
@@ -248,32 +290,48 @@ firebase deploy --only hosting    # ~10 seconds, no API rebuild needed
 | `cloud/frontend/src/api/firebase.ts` | Firebase singleton + auth helpers |
 | `cloud/frontend/src/api/client.ts` | `apiFetch()` with JWT injection |
 | `cloud/frontend/src/hooks/useAuth.ts` | Auth context (user, signIn, signOut) |
-| `cloud/frontend/src/hooks/useAccount.ts` | Account/org context for sidebar |
-| `cloud/frontend/src/components/TopBar.tsx` | Shared nav bar |
+| `cloud/frontend/src/hooks/useAccount.ts` | Account/org context for TopBar workspace chip |
+| `cloud/frontend/src/styles/tokens.css` | Design tokens — forest palette, iOS type scale, radii, spacing, `data-q-palette` swap attr |
+| `cloud/frontend/src/components/Layout.tsx` | Mode switcher: dark ContractorTopBar on `/org*`, regular TopBar elsewhere |
+| `cloud/frontend/src/components/TopBar.tsx` | Regular nav bar (logo, search, Inbox icon, Workspace chip for contractors, UserMenu) |
+| `cloud/frontend/src/components/ContractorTopBar.tsx` | Dark contractor chrome: Q + "Acting as" + tabs (native `<select>` on mobile) + UserMenu |
 | `cloud/frontend/src/components/SearchBar.tsx` | Two-field search (service + location) with mobile overlay |
 | `cloud/frontend/src/components/SearchOverlay.tsx` | Full-screen mobile search with service list + location |
 | `cloud/frontend/src/components/AddressAutocomplete.tsx` | Google Places autocomplete for address/location inputs |
 | `cloud/frontend/src/components/AuthModal.tsx` | Sign in/create account/Google/forgot password |
 | `cloud/frontend/src/components/FilterSidebar.tsx` | Price histogram, rating, service filters (collapsed on mobile) |
 | `cloud/frontend/src/components/ContractorCard.tsx` | Expandable contractor card with profile, gallery, CTA |
-| `cloud/frontend/src/components/JobCard.tsx` | Expandable RFQ card for contractors with floor plan |
-| `cloud/frontend/src/components/FloorPlan.tsx` | Canvas-rendered room polygon floor plan |
-| `cloud/frontend/src/components/SubmitQuoteForm.tsx` | Inline quote submission (price + desc + PDF) |
-| `cloud/frontend/src/components/OrgSidebar.tsx` | Persistent left sidebar for org members |
+| `cloud/frontend/src/components/ContractorBidForm.tsx` | Wireframe bid form: big Total + Timeline/Start + PDF card + Note. Exports `parseBidDescription` to round-trip structured fields through the description column. |
+| `cloud/frontend/src/components/FloorPlan.tsx` | Canvas-rendered room polygon, responsive to parent size via ResizeObserver |
+| `cloud/frontend/src/components/SubmitQuoteForm.tsx` | Legacy quote submission form (kept for /quote/ legacy embed) |
+| `cloud/frontend/src/components/UserMenu.tsx` | Avatar dropdown (My Projects / Account / Sign out); prefers `account.icon_url` over Firebase photoURL |
 
 ### Pages
 | Path | Page | Auth | Purpose |
 |------|------|------|---------|
-| `/` | Landing | Public | Hero + search + how it works |
+| `/` | Landing | Public | 72px hero + Google Places search + real-data product preview (c05cc122) + 4-step "How it works" |
 | `/login` | Login | Public | Firebase auth (email/password + Google) |
-| `/search` | Search | Public | Contractor discovery via `GET /api/contractors/search` with filters |
-| `/contractors/{orgId}` | OrgProfile | Public | Public org profile with gallery, map, hours, "Join Alpha" CTA |
-| `/projects` | Projects | Auth | Homeowner RFQ list with expandable details, edit, delete |
-| `/projects/{rfqId}/quotes` | ProjectQuotes | Auth | Bid comparison with filters, hire button |
+| `/search` | Search | Public | Contractor discovery via `GET /api/contractors/search`. Gradient "Compare quotes" CTA banner. |
+| `/contractors/{orgId}` | OrgProfile | Public | Public org profile + **Message** button (starts conversation; auto-creates a stub RFQ for "general inquiry") |
+| `/projects` | Projects | Auth | Single-column card list (floor-plan thumb + title + status chip + meta + description). Cards link to `/projects/:rfqId`. |
+| `/projects/{rfqId}` | ProjectDetail | Auth/link | Long-scroll: header + scan band (Floor plan / Bird's eye toggle) + scope + bids (ContractorCard + filters). Owner-only Edit modal contains Delete. |
+| `/projects/{rfqId}/quotes` | ProjectQuotes | Auth | Legacy bid-only page (email deep links still land here) |
+| `/inbox` | Inbox | Auth | Homeowner messaging; 2-pane desktop, list↔conversation on mobile |
 | `/account` | Account | Auth | Profile editor, contractor request |
-| `/org` | OrgDashboard | Auth+Org | Tabs: Jobs, Settings, Gallery, Members, Services |
+| `/org` | OrgDashboard | Auth+Org | Tab router for the contractor workspace (default `jobs`). All tabs render inside the dark ContractorTopBar chrome. |
+| `/org?tab=inbox` | Inbox (org mode) | Auth+Org | Contractor-side messaging |
+| `/org?tab=jobs` | OrgJobsWorkspace | Auth+Org | 3-pane: jobs list · scan review (embed viewer) · bid form. Mobile: list→detail |
+| `/org?tab=gallery\|members\|services\|settings` | Org admin tabs | Auth+Org | Legacy admin surfaces (not yet redesigned) |
 | `/invite` | Invite | Public | Token-based org invite acceptance |
 | `/info` | (static) | Public | Original marketing landing page |
+
+### Design system & tokens
+
+`cloud/frontend/src/styles/tokens.css` is the source of truth. Forest palette is default; swap via `<html data-q-palette="indigo|terra|graphite">`.
+
+Key variables: `--q-primary / --q-primary-soft / --q-primary-ink`, `--q-canvas / --q-surface / --q-surface-muted`, `--q-ink / --q-ink-soft / --q-ink-muted / --q-ink-dim`, `--q-hairline / --q-divider`, `--q-success / --q-warning / --q-danger`, `--q-scan-accent / --q-scan-accent-soft` (always indigo — scans/floor plans never adopt the marketplace palette).
+
+Type scale: `--q-fs-display 44px / --q-fs-headline 28px / --q-fs-title 17px / --q-fs-body 15px / --q-fs-label 12px`. Radii: 8/12/16/20 + ios:26 + pill:9999. Legacy `--color-*` aliases still exist; migrate to `--q-*` when touching a file.
 
 ### Marketplace Database (implemented)
 | Table | Purpose |
@@ -291,12 +349,17 @@ firebase deploy --only hosting    # ~10 seconds, no API rebuild needed
 | `bids.rfq_modified_after_bid` | Flag when homeowner edits project after bid |
 | `rfqs.homeowner_account_id` | Links RFQs to account system |
 | `rfqs.deleted_at` | Soft-delete (preserves bids for contractors) |
+| `conversations` | One per (rfq_id, homeowner_account, org). Per-side unread counts + last-message preview (migration 019). |
+| `messages` | Text / event / bid card. `attachments` JSONB stores `blob_path`; `/api/conversations/*` signs `download_url` at read time. `bid_snapshot` JSONB embeds price/desc for inline rendering. |
+
+**Bid submission is now an upsert.** `POST /api/rfqs/{id}/bids` updates the caller's existing *pending* bid in place (keeps `bid_id`, preserves prior `pdf_url` unless a new file is attached, clears `rfq_modified_after_bid`). Only accepted/rejected bids are frozen. Timeline + start are stored as a structured prefix in `bids.description` (`Timeline: 6 weeks · Start: May 5\n\n{note}`) — `parseBidDescription()` in `ContractorBidForm.tsx` round-trips them.
 
 ### Email Notifications (SendGrid via `notifications@roomscanalpha.com`)
 - **Contractor request**: Confirmation to requester + approval link to admin (jake@roomscanalpha.com)
 - **Org approval**: One-click approve URL → auto-creates org + welcome email with dashboard link
 - **Member invite**: Deep link token → `/invite?token=...` → sign in + auto-join org
 - **Bid accepted**: Winner gets full project details + homeowner contact; homeowner gets contractor info; losers get brief notification
+- **New inbox message**: fires only on user-authored `text` messages (not events/bid cards) — notifies the counterpart side with a deep link to the thread
 
 ## iOS App
 
@@ -371,14 +434,35 @@ This is necessary because OpenMVS binaries (`TextureMesh`, `InterfaceCOLMAP`) + 
 
 ### GCS Scan Structure
 ```
-gs://roomscanalpha-scans/scans/{rfq_id}/{scan_id}/
-  ├── scan.zip                              # Uploaded from iOS
-  ├── supplemental_scan.zip                 # Uploaded from iOS (gap re-scan)
-  ├── mesh.ply                              # Uploaded by processor
-  ├── textured.obj / .mtl / _material_00_map_Kd.jpg    # OpenMVS preview (50K faces)
-  ├── standard_textured.obj / .mtl / ...jpg             # OpenMVS HD (300K faces, may have multiple atlases)
-  └── room_scan.splat                                   # Gaussian Splat (ARKit world frame, from gs-processor)
+gs://roomscanalpha-scans/
+  ├── scans/{rfq_id}/{scan_id}/                         # Per-scan data
+  │   ├── scan.zip                                      # Uploaded from iOS
+  │   ├── supplemental_scan.zip                         # Uploaded from iOS (gap re-scan)
+  │   ├── mesh.ply                                      # Uploaded by processor
+  │   ├── textured.obj / .mtl / _material_00_map_Kd.jpg # OpenMVS preview (50K faces)
+  │   ├── standard_textured.obj / .mtl / ...jpg         # OpenMVS HD (300K faces, multi-atlas ok)
+  │   └── room_scan_glomap.splat                        # Gaussian Splat (ARKit world frame)
+  ├── conversations/{conversation_id}/                  # Inbox attachments
+  │   └── {uuid}.{jpg|png|pdf|...}                      # Per-message blobs, caller-validated paths
+  └── bids/{rfq_id}/{bid_id}.pdf                        # Bid breakdown PDFs
 ```
+
+### Hosting Rewrites (Firebase → scan-api)
+The SPA lives at the root; these prefixes proxy to the Cloud Run scan-api so the backend can serve raw HTML viewers + legacy endpoints without leaking through React Router:
+- `/api/**`, `/quote/**`, `/embed/**`, `/splat/**`, `/bids/**`, `/admin/**`
+
+**Gotcha**: links into these prefixes must use `<a href>` (full-page navigation). `<Link>` from react-router does a pushState that React matches against its SPA routes, hits the catch-all (`index.html`), and renders blank. Reloading the same URL does a real HTTP GET that hits the rewrite and works — which is the classic "broken until I refresh" bug. `X-Frame-Options: SAMEORIGIN` lets these pages be iframed by the SPA (BEV thumbnail).
+
+### Migrations
+Numbered files in `cloud/migrations/` (019 = `conversations` + `messages`). Applied manually via:
+```bash
+# Start Cloud SQL Auth Proxy then psql (PGPASSWORD from Secret Manager)
+cloud-sql-proxy --port=5433 roomscanalpha:us-central1:roomscanalpha-db &
+PGPASSWORD="$(gcloud secrets versions access latest --secret=db-password --project=roomscanalpha)" \
+  psql -h 127.0.0.1 -p 5433 -U postgres -d quoterra -f cloud/migrations/019_conversations.sql
+pkill -f cloud-sql-proxy
+```
+Apply migrations *before* deploying scan-api if the new revision references new tables/columns.
 
 ## Dead Code & Known Issues
 
@@ -394,6 +478,8 @@ gs://roomscanalpha-scans/scans/{rfq_id}/{scan_id}/
 - `models/roomformer_finetuned.pt` + `roomformer_pretrained.pt` — 316MB of RoomFormer DNN models baked into container. Never loaded. Phase 2 placeholder.
 - `training_data/` — 500 density map images + COCO annotations. Phase 2 training data, unused.
 - `_load_cameras()` + `_check_face_coverage()` in `main.py` — Old camera-viability coverage check. Superseded by UV-area + atlas + ray-cast coverage endpoint.
+- `contractor_view.html` `?embed=1` CSS-hide mode — superseded by dedicated `/embed/scan/` viewer; kept as fallback for any stale bookmarks.
+- `splat_viewer.html` is a 1792-line copy-paste fork of contractor_view.html. Future: consolidate both + embed_viewer into one module with a `?mode=mesh|splat` param.
 
 ### Known Issues
 - **ARFrame retention warnings** — ARSCNView delegate retains 11-13 frames during annotation. Caused by multiple ARSCNView instances sharing one session. Needs shared ARSCNView architecture (planned).
