@@ -6,12 +6,23 @@ struct ContentView: View {
     @State private var sessionManager = ARSessionManager()
     @State private var isAuthenticated = false
 
-    // Root-level sheets (presented from Home).
+    // Root-level sheets (presented from Home or ContractorHome).
     @State private var showSearch = false
     @State private var showInbox = false
     @State private var showAccount = false
-    @State private var showWorkspace = false
-    @State private var workspaceOrgName: String?
+
+    // Workspace mode: swaps idleView between HomeView (personal) and
+    // ContractorHomeView. Fetched once from /api/account and shared with both
+    // so the user's org identity is available without re-fetching.
+    @State private var workspaceMode = false
+    @State private var account: Account?
+
+    // Contractor-workspace destination sheets.
+    @State private var showJobs = false
+    @State private var showGallery = false
+    @State private var showTeam = false
+    @State private var showServices = false
+    @State private var showSettings = false
 
 
     var body: some View {
@@ -493,8 +504,19 @@ struct ContentView: View {
 
     // MARK: - Idle View
 
+    @ViewBuilder
     private var idleView: some View {
+        if workspaceMode, let org = account?.org {
+            contractorIdleView(org: org)
+        } else {
+            personalIdleView
+        }
+    }
+
+    private var personalIdleView: some View {
         HomeView(
+            account: account,
+            onAccountLoaded: { account = $0 },
             onStartScan: { latest in
                 if let latest = latest {
                     viewModel.selectedRFQ = latest
@@ -515,8 +537,8 @@ struct ContentView: View {
             onOpenHistory: {
                 viewModel.showHistory = true
             },
-            onOpenWorkspace: {
-                showWorkspace = true
+            onEnterWorkspace: {
+                workspaceMode = true
             },
             onSignOut: {
                 try? AuthManager.shared.signOut()
@@ -530,13 +552,45 @@ struct ContentView: View {
             SearchView { showSearch = false }
         }
         .sheet(isPresented: $showInbox) {
-            InboxView { showInbox = false }
+            InboxView(role: .homeowner) { showInbox = false }
         }
         .sheet(isPresented: $showAccount) {
             AccountView { showAccount = false }
         }
-        .sheet(isPresented: $showWorkspace) {
-            WorkspaceView(orgName: workspaceOrgName) { showWorkspace = false }
+    }
+
+    private func contractorIdleView(org: Account.OrgMembership) -> some View {
+        ContractorHomeView(
+            org: org,
+            onSwitchToPersonal: { workspaceMode = false },
+            onOpenInbox: { showInbox = true },
+            onOpenJobs: { showJobs = true },
+            onOpenGallery: { showGallery = true },
+            onOpenTeam: { showTeam = true },
+            onOpenServices: { showServices = true },
+            onOpenSettings: { showSettings = true },
+            onSignOut: {
+                try? AuthManager.shared.signOut()
+                isAuthenticated = false
+            }
+        )
+        .sheet(isPresented: $showInbox) {
+            InboxView(role: .org) { showInbox = false }
+        }
+        .sheet(isPresented: $showJobs) {
+            JobsView { showJobs = false }
+        }
+        .sheet(isPresented: $showGallery) {
+            OrgGalleryView { showGallery = false }
+        }
+        .sheet(isPresented: $showTeam) {
+            OrgTeamView { showTeam = false }
+        }
+        .sheet(isPresented: $showServices) {
+            OrgServicesView { showServices = false }
+        }
+        .sheet(isPresented: $showSettings) {
+            OrgSettingsView { showSettings = false }
         }
     }
 

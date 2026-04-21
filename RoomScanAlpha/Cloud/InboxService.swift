@@ -8,10 +8,13 @@ final class InboxService {
     private let apiBaseURL = "https://scan-api-839349778883.us-central1.run.app"
     private init() {}
 
-    /// `/api/inbox?role=homeowner`
-    func listThreads() async throws -> [InboxThread] {
+    /// Inbox role — scopes `/api/inbox` to the caller's side.
+    enum Role: String { case homeowner, org }
+
+    /// `/api/inbox?role=...`
+    func listThreads(role: Role = .homeowner) async throws -> [InboxThread] {
         let token = try await AuthManager.shared.getToken()
-        var request = URLRequest(url: URL(string: "\(apiBaseURL)/api/inbox?role=homeowner")!)
+        var request = URLRequest(url: URL(string: "\(apiBaseURL)/api/inbox?role=\(role.rawValue)")!)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {

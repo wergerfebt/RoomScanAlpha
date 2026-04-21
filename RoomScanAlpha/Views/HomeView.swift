@@ -9,6 +9,13 @@ import FirebaseAuth
 /// `/api/rfqs` feed for now (new bids, processed scans) — full event-stream
 /// integration can come later.
 struct HomeView: View {
+    /// Optional initial account passed from parent so we don't flash the
+    /// homeowner chrome on launch when the caller already knows the user is
+    /// in an org.
+    let account: Account?
+    /// Fired when a background fetch refreshes the account — lets the parent
+    /// cache it for workspace-mode switching.
+    let onAccountLoaded: (Account) -> Void
     /// Start a scan into the most-recently-touched project (or picker if none).
     let onStartScan: (RFQ?) -> Void
     /// Always opens the project picker.
@@ -18,14 +25,15 @@ struct HomeView: View {
     let onOpenSearch: () -> Void
     let onOpenInbox: () -> Void
     let onOpenHistory: () -> Void
-    let onOpenWorkspace: () -> Void
+    let onEnterWorkspace: () -> Void
     let onSignOut: () -> Void
 
     @State private var rfqs: [RFQ] = []
-    @State private var account: Account?
     @State private var loading = true
     @State private var error: String?
     @State private var signOutConfirm = false
+
+    private var currentAccount: Account? { account }
 
     private var greeting: String {
         let hour = Calendar.current.component(.hour, from: Date())
@@ -126,9 +134,9 @@ struct HomeView: View {
             iconButton(systemImage: "envelope", label: "Inbox", action: onOpenInbox)
 
             Menu {
-                if let org = account?.org {
+                if let org = currentAccount?.org {
                     Button {
-                        onOpenWorkspace()
+                        onEnterWorkspace()
                     } label: {
                         Label {
                             Text("Workspace · \(org.name)")
@@ -421,7 +429,7 @@ struct HomeView: View {
             self.error = error.localizedDescription
         }
         if let fetched = try? await accountTask {
-            account = fetched
+            onAccountLoaded(fetched)
         }
         loading = false
     }

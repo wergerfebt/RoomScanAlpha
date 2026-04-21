@@ -4,7 +4,13 @@ import PhotosUI
 /// Homeowner inbox — thread list + conversation view. Mirrors the mobile-web
 /// `/inbox` pattern (2-page on narrow screens).
 struct InboxView: View {
+    let role: InboxService.Role
     let onClose: () -> Void
+
+    init(role: InboxService.Role = .homeowner, onClose: @escaping () -> Void) {
+        self.role = role
+        self.onClose = onClose
+    }
 
     @State private var threads: [InboxThread] = []
     @State private var loading = true
@@ -181,7 +187,7 @@ struct InboxView: View {
 
     private func load() async {
         loading = true
-        do { threads = try await InboxService.shared.listThreads() }
+        do { threads = try await InboxService.shared.listThreads(role: role) }
         catch { self.error = error.localizedDescription }
         loading = false
     }
