@@ -54,6 +54,7 @@ struct JobDetailView: View {
                 scopeSection
                 bidSection
                 messageButton
+                rfqIdFooter
             }
             .padding(.horizontal, 20)
             .padding(.top, 12)
@@ -455,6 +456,25 @@ struct JobDetailView: View {
         } catch {
             self.error = error.localizedDescription
         }
+    }
+
+    // MARK: – RFQ ID footer
+
+    private var rfqIdFooter: some View {
+        HStack {
+            Spacer()
+            Button {
+                UIPasteboard.general.string = job.rfqId
+            } label: {
+                Text("RFQ ID · \(job.rfqId)")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(QTheme.inkDim)
+            }
+            .buttonStyle(.plain)
+            Spacer()
+        }
+        .padding(.top, 24)
+        .accessibilityHint("Tap to copy")
     }
 
     // MARK: – Data

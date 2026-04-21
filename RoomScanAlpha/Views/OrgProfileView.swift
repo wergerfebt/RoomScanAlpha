@@ -5,10 +5,14 @@ import SwiftUI
 /// links to Yelp/Google reviews.
 struct OrgProfileView: View {
     let orgId: String
+    /// Optional "Message" callback — when provided, a CTA button sits under
+    /// the header so homeowners can start a conversation with this org.
+    var onMessage: (() -> Void)? = nil
 
     @State private var org: OrgProfile?
     @State private var loading = true
     @State private var error: String?
+    @State private var lightboxURL: URL?
 
     var body: some View {
         ScrollView {
@@ -17,6 +21,9 @@ struct OrgProfileView: View {
                     banner(org)
                     VStack(alignment: .leading, spacing: 24) {
                         header(org)
+                        if onMessage != nil {
+                            messageButton
+                        }
                         if let description = org.description, !description.isEmpty {
                             aboutBlock(description)
                         }
@@ -49,6 +56,29 @@ struct OrgProfileView: View {
         .navigationTitle(org?.name ?? "")
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }
+        .fullScreenCover(item: Binding(
+            get: { lightboxURL.map(LightboxItem.init) },
+            set: { lightboxURL = $0?.url }
+        )) { item in
+            GalleryLightbox(url: item.url) { lightboxURL = nil }
+        }
+    }
+
+    private var messageButton: some View {
+        Button {
+            onMessage?()
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "envelope.fill").font(.system(size: 15, weight: .semibold))
+                Text("Message").font(.system(size: 15, weight: .semibold))
+            }
+            .foregroundStyle(QTheme.primaryInk)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+            .background(QTheme.primary)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: – Sections
@@ -167,15 +197,20 @@ struct OrgProfileView: View {
                 HStack(spacing: 10) {
                     ForEach(gallery) { img in
                         if let urlString = img.imageURL, let url = URL(string: urlString) {
-                            AsyncImage(url: url) { phase in
-                                if let image = phase.image {
-                                    image.resizable().scaledToFill()
-                                } else {
-                                    Rectangle().fill(QTheme.surfaceMuted)
+                            Button {
+                                lightboxURL = url
+                            } label: {
+                                AsyncImage(url: url) { phase in
+                                    if let image = phase.image {
+                                        image.resizable().scaledToFill()
+                                    } else {
+                                        Rectangle().fill(QTheme.surfaceMuted)
+                                    }
                                 }
+                                .frame(width: 200, height: 140)
+                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                             }
-                            .frame(width: 200, height: 140)
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .buttonStyle(.plain)
                         }
                     }
                 }
@@ -249,6 +284,66 @@ struct OrgProfileView: View {
         do { org = try await ContractorsService.shared.getOrg(id: orgId) }
         catch { self.error = error.localizedDescription }
         loading = false
+    }
+}
+
+private struct LightboxItem: Identifiable {
+    let url: URL
+    var id: String { url.absoluteString }
+}
+
+/// Fullscreen image viewer with pinch-to-zoom. Tapped from the gallery
+/// + workspace photo grid so the user can actually see detail.
+struct GalleryLightbox: View {
+    let url: URL
+    let onDismiss: () -> Void
+
+    @State private var scale: CGFloat = 1
+    @GestureState private var gestureScale: CGFloat = 1
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            Color.black.ignoresSafeArea()
+            AsyncImage(url: url) { phase in
+                if let image = phase.image {
+                    image
+                        .resizable()
+                        .scaledToFit()
+                        .scaleEffect(scale * gestureScale)
+                        .gesture(
+                            MagnificationGesture()
+                                .updating($gestureScale) { value, state, _ in state = value }
+                                .onEnded { value in
+                                    scale = max(1, min(scale * value, 4))
+                                }
+                        )
+                        .onTapGesture(count: 2) {
+                            withAnimation { scale = scale > 1 ? 1 : 2 }
+                        }
+                } else if phase.error != nil {
+                    Image(systemName: "photo").font(.system(size: 48)).foregroundStyle(.white.opacity(0.6))
+                } else {
+                    ProgressView().tint(.white)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            Button(action: onDismiss) {
+                HStack(spacing: 6) {
+                    Image(systemName: "xmark").font(.system(size: 13, weight: .semibold))
+                    Text("Close").font(.system(size: 14, weight: .semibold))
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14).padding(.vertical, 8)
+                .background(.ultraThinMaterial)
+                .background(Color.black.opacity(0.35))
+                .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 8)
+            .padding(.leading, 16)
+        }
+        .statusBarHidden(true)
     }
 }
 

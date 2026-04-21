@@ -179,6 +179,7 @@ struct OrgGalleryView: View {
     let onClose: () -> Void
     @State private var items: [GalleryItem] = []
     @State private var loading = true
+    @State private var lightboxURL: URL?
 
     var body: some View {
         NavigationStack {
@@ -192,16 +193,22 @@ struct OrgGalleryView: View {
                         LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
                             ForEach(items) { item in
                                 if let urlString = item.imageURL, let url = URL(string: urlString) {
-                                    AsyncImage(url: url) { phase in
-                                        if let image = phase.image {
-                                            image.resizable().scaledToFill()
-                                        } else {
-                                            Rectangle().fill(QTheme.surfaceMuted)
+                                    Button {
+                                        lightboxURL = url
+                                    } label: {
+                                        AsyncImage(url: url) { phase in
+                                            if let image = phase.image {
+                                                image.resizable().scaledToFill()
+                                            } else {
+                                                Rectangle().fill(QTheme.surfaceMuted)
+                                            }
                                         }
+                                        .frame(height: 140)
+                                        .frame(maxWidth: .infinity)
+                                        .clipped()
+                                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                                     }
-                                    .frame(height: 140)
-                                    .clipped()
-                                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                    .buttonStyle(.plain)
                                 }
                             }
                         }
@@ -216,6 +223,12 @@ struct OrgGalleryView: View {
                     Button("Close", action: onClose).foregroundStyle(QTheme.ink)
                 }
             }
+            .fullScreenCover(item: Binding(
+                get: { lightboxURL.map { URLItem(url: $0) } },
+                set: { lightboxURL = $0?.url }
+            )) { item in
+                GalleryLightbox(url: item.url) { lightboxURL = nil }
+            }
         }
         .tint(QTheme.primary)
         .task {
@@ -223,6 +236,11 @@ struct OrgGalleryView: View {
             loading = false
         }
     }
+}
+
+private struct URLItem: Identifiable {
+    let url: URL
+    var id: String { url.absoluteString }
 }
 
 // MARK: – Team

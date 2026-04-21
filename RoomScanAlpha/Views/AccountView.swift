@@ -7,6 +7,8 @@ import FirebaseAuth
 struct AccountView: View {
     let onClose: () -> Void
 
+    @State private var account: Account?
+
     var body: some View {
         NavigationStack {
             ZStack {
@@ -27,6 +29,9 @@ struct AccountView: View {
                         .foregroundStyle(QTheme.ink)
                 }
             }
+            .task {
+                account = try? await AccountService.shared.getAccount()
+            }
         }
         .tint(QTheme.primary)
     }
@@ -34,7 +39,7 @@ struct AccountView: View {
     private var user: User? { Auth.auth().currentUser }
 
     private var initials: String {
-        let name = user?.displayName ?? user?.email ?? "?"
+        let name = account?.name ?? user?.displayName ?? user?.email ?? "?"
         let parts = name.split(separator: " ").prefix(2).compactMap { $0.first }
         return String(parts).uppercased()
     }
@@ -42,8 +47,10 @@ struct AccountView: View {
     private var profileCard: some View {
         HStack(spacing: 16) {
             Group {
-                if let photoURL = user?.photoURL {
-                    AsyncImage(url: photoURL) { phase in
+                let accountIcon = account?.iconURL.flatMap { URL(string: $0) }
+                let firebaseIcon = user?.photoURL
+                if let url = accountIcon ?? firebaseIcon {
+                    AsyncImage(url: url) { phase in
                         if let image = phase.image {
                             image.resizable().scaledToFill()
                         } else {
@@ -58,10 +65,10 @@ struct AccountView: View {
             .frame(width: 64, height: 64)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(user?.displayName ?? user?.email ?? "Signed in")
+                Text(account?.name ?? user?.displayName ?? user?.email ?? "Signed in")
                     .font(.system(size: 18, weight: .bold))
                     .foregroundStyle(QTheme.ink)
-                if let email = user?.email {
+                if let email = account?.email ?? user?.email {
                     Text(email)
                         .font(.system(size: 13))
                         .foregroundStyle(QTheme.inkMuted)

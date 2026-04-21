@@ -154,15 +154,40 @@ struct HomeView: View {
                     signOutConfirm = true
                 }
             } label: {
-                Circle()
-                    .fill(QTheme.primarySoft)
-                    .overlay(Text(initials).font(.system(size: 13, weight: .bold)).foregroundStyle(QTheme.primary))
+                userAvatar
                     .frame(width: 34, height: 34)
                     .accessibilityLabel("Account")
             }
         }
         .padding(.horizontal, 20)
         .padding(.top, 16)
+    }
+
+    /// Avatar for the header Menu. Prefers the account's icon_url (what the
+    /// user uploads on the web), falls back to Firebase Auth photoURL, then
+    /// to a two-letter initials tile.
+    @ViewBuilder
+    private var userAvatar: some View {
+        let accountIcon = account?.iconURL.flatMap { URL(string: $0) }
+        let firebaseIcon = Auth.auth().currentUser?.photoURL
+        if let url = accountIcon ?? firebaseIcon {
+            AsyncImage(url: url) { phase in
+                if let image = phase.image {
+                    image.resizable().scaledToFill()
+                } else {
+                    initialsTile
+                }
+            }
+            .clipShape(Circle())
+        } else {
+            initialsTile
+        }
+    }
+
+    private var initialsTile: some View {
+        Circle()
+            .fill(QTheme.primarySoft)
+            .overlay(Text(initials).font(.system(size: 13, weight: .bold)).foregroundStyle(QTheme.primary))
     }
 
     private func iconButton(systemImage: String, label: String, action: @escaping () -> Void) -> some View {

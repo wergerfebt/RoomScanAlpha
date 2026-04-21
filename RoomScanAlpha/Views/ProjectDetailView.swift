@@ -26,6 +26,15 @@ struct ProjectDetailView: View {
     @State private var selectedScanId: String?
     /// When true, show the RFQ-scoped inbox as a sheet.
     @State private var showMessages = false
+    /// Route for "Message contractor X" — when set, presents the conversation sheet.
+    @State private var conversationRoute: ConversationRoute?
+    /// Bid-card "Message" buttons show a spinner while the POST is in flight.
+    @State private var openingMessageForBidId: String?
+
+    private struct ConversationRoute: Identifiable {
+        let id: String
+        let title: String
+    }
 
     private enum ScanView: String { case floorplan, birdseye }
 
@@ -56,6 +65,7 @@ struct ProjectDetailView: View {
                 }
                 scopeSection
                 bidsSection
+                rfqIdFooter
             }
             .padding(.horizontal, 20)
             .padding(.top, 12)
@@ -95,6 +105,18 @@ struct ProjectDetailView: View {
             InboxView(role: .homeowner, rfqFilter: rfq.id) {
                 showMessages = false
             }
+        }
+        .sheet(item: $conversationRoute) { route in
+            NavigationStack {
+                ConversationView(conversationId: route.id, initialTitle: route.title)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button("Close") { conversationRoute = nil }
+                                .foregroundStyle(QTheme.ink)
+                        }
+                    }
+            }
+            .tint(QTheme.primary)
         }
         .task { await load() }
         .refreshable { await load() }
@@ -494,26 +516,37 @@ struct ProjectDetailView: View {
                 flag(text: "HIRED", color: QTheme.success)
             }
 
-            HStack(spacing: 12) {
-                contractorAvatar(bid.contractor).frame(width: 46, height: 46)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(bid.contractor.displayName)
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(QTheme.ink)
-                    if let rating = bid.contractor.reviewRating {
-                        HStack(spacing: 4) {
-                            Image(systemName: "star.fill").foregroundStyle(QTheme.warning).font(.caption)
-                            Text(String(format: "%.1f", rating)).font(.caption).fontWeight(.semibold).foregroundStyle(QTheme.inkSoft)
-                            if let count = bid.contractor.reviewCount {
-                                Text("· \(count) reviews").font(.caption).foregroundStyle(QTheme.inkMuted)
-                            }
-                        }
-                    } else {
-                        Text("No reviews yet").font(.caption).foregroundStyle(QTheme.inkDim)
-                    }
+            NavigationLink {
+                OrgProfileView(orgId: bid.contractor.id) {
+                    Task { await openConversation(with: bid) }
                 }
-                Spacer()
+            } label: {
+                HStack(spacing: 12) {
+                    contractorAvatar(bid.contractor).frame(width: 46, height: 46)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(bid.contractor.displayName)
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(QTheme.ink)
+                        if let rating = bid.contractor.reviewRating {
+                            HStack(spacing: 4) {
+                                Image(systemName: "star.fill").foregroundStyle(QTheme.warning).font(.caption)
+                                Text(String(format: "%.1f", rating)).font(.caption).fontWeight(.semibold).foregroundStyle(QTheme.inkSoft)
+                                if let count = bid.contractor.reviewCount {
+                                    Text("· \(count) reviews").font(.caption).foregroundStyle(QTheme.inkMuted)
+                                }
+                            }
+                        } else {
+                            Text("No reviews yet").font(.caption).foregroundStyle(QTheme.inkDim)
+                        }
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(QTheme.inkDim)
+                }
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
 
             Text(bid.displayPrice)
                 .font(.system(size: 34, weight: .bold))
@@ -559,20 +592,41 @@ struct ProjectDetailView: View {
                 }
             }
 
-            Button {
-                hireConfirmation = bid
-            } label: {
-                Text(accepted ? "Hired" : "Hire")
-                    .font(.headline)
+            HStack(spacing: 10) {
+                Button {
+                    Task { await openConversation(with: bid) }
+                } label: {
+                    HStack(spacing: 6) {
+                        if openingMessageForBidId == bid.id {
+                            ProgressView().tint(QTheme.primary).scaleEffect(0.8)
+                        } else {
+                            Image(systemName: "envelope").font(.system(size: 13, weight: .semibold))
+                        }
+                        Text("Message").font(.system(size: 14, weight: .semibold))
+                    }
+                    .foregroundStyle(QTheme.primary)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
-                    .foregroundStyle(QTheme.primaryInk)
-                    .background(accepted ? QTheme.success : QTheme.primary)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(QTheme.primary, lineWidth: 1.5))
+                }
+                .buttonStyle(.plain)
+                .disabled(openingMessageForBidId != nil)
+
+                Button {
+                    hireConfirmation = bid
+                } label: {
+                    Text(accepted ? "Hired" : "Hire")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .foregroundStyle(QTheme.primaryInk)
+                        .background(accepted ? QTheme.success : QTheme.primary)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+                .buttonStyle(.plain)
+                .disabled(hiring || accepted || anyAccepted)
+                .opacity((hiring || anyAccepted) && !accepted ? 0.4 : 1)
             }
-            .buttonStyle(.plain)
-            .disabled(hiring || accepted || anyAccepted)
-            .opacity((hiring || anyAccepted) && !accepted ? 0.4 : 1)
         }
         .padding(18)
         .background(QTheme.surface)
@@ -584,6 +638,26 @@ struct ProjectDetailView: View {
                 )
         )
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    // MARK: – RFQ ID footer
+
+    /// Dim ID line at the bottom of the page. Long-pressable to copy.
+    private var rfqIdFooter: some View {
+        HStack {
+            Spacer()
+            Button {
+                UIPasteboard.general.string = rfq.id
+            } label: {
+                Text("RFQ ID · \(rfq.id)")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(QTheme.inkDim)
+            }
+            .buttonStyle(.plain)
+            Spacer()
+        }
+        .padding(.top, 24)
+        .accessibilityHint("Tap to copy")
     }
 
     // MARK: – Small helpers
@@ -704,6 +778,25 @@ struct ProjectDetailView: View {
             self.error = (error as NSError).localizedDescription
         }
         loading = false
+    }
+
+    /// Open (or create) a conversation with the contractor behind a bid.
+    /// Used by the bid-card Message button and the OrgProfileView CTA.
+    private func openConversation(with bid: Bid) async {
+        openingMessageForBidId = bid.id
+        defer { openingMessageForBidId = nil }
+        do {
+            let convId = try await InboxService.shared.createConversation(
+                rfqId: rfq.id,
+                orgId: bid.contractor.id
+            )
+            conversationRoute = ConversationRoute(
+                id: convId,
+                title: bid.contractor.displayName
+            )
+        } catch {
+            self.hiredError = error.localizedDescription
+        }
     }
 
     private func hire(bid: Bid) async {
