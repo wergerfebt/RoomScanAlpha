@@ -118,7 +118,10 @@ struct ContentView: View {
                     }
                 )
             case .labelingRoom:
-                RoomLabelView(roomLabel: $viewModel.roomLabel) {
+                RoomLabelView(
+                    roomLabel: $viewModel.roomLabel,
+                    roomScope: $viewModel.roomScope
+                ) {
                     if let frame = sessionManager.session.currentFrame {
                         viewModel.buildRFQContext(worldTransform: frame.camera.transform)
                     } else {
@@ -387,64 +390,27 @@ struct ContentView: View {
                 )
                 viewModel.lastScanId = result.scanId
                 viewModel.uploadStatus = "Upload complete"
+                viewModel.saveToHistory(scanId: result.scanId, status: "uploaded")
                 print("[RoomScanAlpha] Upload complete — scan ID: \(result.scanId)")
-                startPolling(scanId: result.scanId, rfqId: rfqId)
+
+                // Processing now happens entirely server-side; the 360 room
+                // view surfaces "Processing" as a scan status until the mesh
+                // is ready. No need to poll here.
+                viewModel.scanResult = CloudUploader.ScanResult(
+                    scanId: result.scanId,
+                    status: "uploaded",
+                    floorAreaSqft: nil, wallAreaSqft: nil,
+                    ceilingHeightFt: nil, perimeterLinearFt: nil,
+                    detectedComponents: nil, scanDimensions: nil,
+                    roomPolygonFt: nil, wallHeightsFt: nil,
+                    polygonSource: nil, scanMeshUrl: nil,
+                    fastCoverage: nil, inlineCoverage: nil
+                )
+                viewModel.state = .viewingResults
             } catch {
                 viewModel.uploadError = error.localizedDescription
                 viewModel.uploadStatus = "Upload failed"
                 print("[RoomScanAlpha] Upload error: \(error)")
-            }
-        }
-    }
-
-    /// Poll the backend for scan processing results. On failure, we still show the result
-    /// view with a "failed" status so the user can see something went wrong and retry,
-    /// rather than being stuck on a loading screen.
-    /// Poll until scan processing completes (~30-40s). The processor now does
-    /// metrics + preview texture + inline coverage in a single pass, writing "complete".
-    /// If inline coverage is available in the response, use it directly (no /coverage call).
-    private func startPolling(scanId: String, rfqId: String) {
-        viewModel.state = .viewingResults
-
-        Task {
-            do {
-                let result = try await CloudUploader.shared.pollForResult(scanId: scanId, rfqId: rfqId)
-                viewModel.scanResult = result
-                viewModel.saveToHistory(scanId: scanId, status: result.status)
-                print("[RoomScanAlpha] Scan result: \(result.status)")
-
-                if result.status == "metrics_ready" {
-                    // Two-phase pipeline fallback: keep polling until texturing completes.
-                    print("[RoomScanAlpha] metrics_ready — continuing to poll for complete...")
-                    do {
-                        let finalResult = try await CloudUploader.shared.pollForComplete(
-                            scanId: scanId, rfqId: rfqId
-                        )
-                        viewModel.scanResult = finalResult
-                        viewModel.saveToHistory(scanId: scanId, status: finalResult.status)
-                    } catch {
-                        print("[RoomScanAlpha] Phase 2 polling timed out: \(error)")
-                    }
-                }
-            } catch {
-                viewModel.saveToHistory(scanId: scanId, status: "failed")
-                viewModel.scanResult = CloudUploader.ScanResult(
-                    scanId: scanId,
-                    status: "failed",
-                    floorAreaSqft: nil,
-                    wallAreaSqft: nil,
-                    ceilingHeightFt: nil,
-                    perimeterLinearFt: nil,
-                    detectedComponents: nil,
-                    scanDimensions: nil,
-                    roomPolygonFt: nil,
-                    wallHeightsFt: nil,
-                    polygonSource: nil,
-                    scanMeshUrl: nil,
-                    fastCoverage: nil,
-                    inlineCoverage: nil
-                )
-                print("[RoomScanAlpha] Polling error: \(error)")
             }
         }
     }

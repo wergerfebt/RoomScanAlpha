@@ -58,6 +58,23 @@ struct ProjectDetailView: View {
         return URL(string: "\(embedBase)/embed/scan/\(rfq.id)?\(params)")
     }
 
+    /// True when the selected room's cloud-side processing is done and a
+    /// mesh is available for the embed viewer. Anything else is "processing".
+    private var isSelectedRoomReady: Bool {
+        switch selectedRoom?.scanStatus {
+        case "complete", "completed": return true
+        default: return false
+        }
+    }
+
+    private var selectedRoomStatusLabel: String {
+        switch selectedRoom?.scanStatus {
+        case "failed": return "Processing failed"
+        case .none: return "Processing"
+        default: return "Processing"
+        }
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
@@ -262,7 +279,7 @@ struct ProjectDetailView: View {
                             .frame(height: 220)
                             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     case .birdseye:
-                        if let url = bevURL {
+                        if isSelectedRoomReady, let url = bevURL {
                             ZStack(alignment: .topTrailing) {
                                 EmbedWebView(url: url)
                                     .background(Color.black)
@@ -296,6 +313,8 @@ struct ProjectDetailView: View {
                             }
                             .frame(height: 260)
                             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        } else {
+                            processingPlaceholder
                         }
                     }
                 }
@@ -319,6 +338,38 @@ struct ProjectDetailView: View {
             .clipShape(RoundedRectangle(cornerRadius: QTheme.radiusXLarge, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: QTheme.radiusXLarge, style: .continuous).strokeBorder(QTheme.hairline))
         }
+    }
+
+    /// Shown in the Bird's-eye tab when the selected room's mesh isn't
+    /// ready yet. The scan has uploaded successfully; the cloud processor
+    /// is rebuilding the textured OBJ (~30-60s typical, longer for large
+    /// rooms). Takes the same frame as the live BEV so the layout doesn't
+    /// jump when processing finishes.
+    private var processingPlaceholder: some View {
+        let failed = selectedRoom?.scanStatus == "failed"
+        return VStack(spacing: 12) {
+            if failed {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 28))
+                    .foregroundStyle(QTheme.danger)
+            } else {
+                ProgressView().tint(QTheme.primary)
+            }
+            Text(selectedRoomStatusLabel)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(QTheme.ink)
+            Text(failed
+                 ? "This scan couldn't be processed. Try re-scanning the room."
+                 : "Your 3D model is being built. This usually takes under a minute.")
+                .font(.caption)
+                .foregroundStyle(QTheme.inkMuted)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 260)
+        .background(QTheme.surfaceMuted)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
     private func tabButton(_ label: String, active: Bool, onTap: @escaping () -> Void) -> some View {

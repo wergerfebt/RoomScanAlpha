@@ -299,7 +299,10 @@ struct CornerAnnotationView: View {
 
         // Place corner spheres
         for (i, corner) in corners.enumerated() {
-            let sphere = SCNSphere(radius: 0.04)
+            // 2cm sphere — was 4cm, which occluded the actual corner and
+            // made ceiling tracing imprecise (users couldn't see where the
+            // ceiling line met the wall). 2cm still touchable for undo.
+            let sphere = SCNSphere(radius: 0.02)
             let material = SCNMaterial()
             material.diffuse.contents = UIColor.systemYellow
             sphere.materials = [material]
