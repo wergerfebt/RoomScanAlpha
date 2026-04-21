@@ -3134,6 +3134,26 @@ def list_org_jobs(authorization: str = Header(None)) -> dict:
                     entry["images"].append({
                         "blob_path": bp, "content_type": ct, "name": nm, "size_bytes": sb,
                     })
+
+        # Batch-fetch RFQ-level attachments so contractor Job cards can surface
+        # media the homeowner has shared about the project (whether via chat or
+        # direct upload). Keyed by rfq_id across both bid-based and available jobs.
+        all_rfq_ids = list({str(row[0]) for row in bid_rows} | {str(row[0]) for row in avail_rows})
+        rfq_attachments_by_rfq: dict[str, list] = {rid: [] for rid in all_rfq_ids}
+        if all_rfq_ids:
+            placeholders = ",".join(["%s"] * len(all_rfq_ids))
+            cursor.execute(
+                f"""SELECT ra.rfq_id, a.blob_path, a.content_type, a.name, a.size_bytes
+                    FROM rfq_attachments ra
+                    JOIN attachments a ON a.id = ra.attachment_id
+                    WHERE ra.rfq_id IN ({placeholders})
+                    ORDER BY ra.created_at""",
+                all_rfq_ids,
+            )
+            for rid, bp, ct, nm, sb in cursor.fetchall():
+                rfq_attachments_by_rfq.setdefault(str(rid), []).append({
+                    "blob_path": bp, "content_type": ct, "name": nm, "size_bytes": sb,
+                })
     finally:
         conn.close()
 
@@ -3173,6 +3193,7 @@ def list_org_jobs(authorization: str = Header(None)) -> dict:
                 "attachments": _resolve_attachments(att_info["images"]),
                 "rfq_modified_after_bid": bool(bid_modified_flag),
             },
+            "rfq_attachments": _resolve_attachments(rfq_attachments_by_rfq.get(str(rfq_id), [])),
             "job_status": job_status,
             "rfq_deleted": rfq_deleted_at is not None,
         })
@@ -3191,6 +3212,7 @@ def list_org_jobs(authorization: str = Header(None)) -> dict:
             "created_at": created.isoformat() if created else None,
             "homeowner": {"name": ho_name, "icon_url": ho_icon, "email": ho_email},
             "bid": None,
+            "rfq_attachments": _resolve_attachments(rfq_attachments_by_rfq.get(str(rfq_id), [])),
             "job_status": "new",
         })
 
