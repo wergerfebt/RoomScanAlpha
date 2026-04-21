@@ -854,9 +854,17 @@ async def submit_bid(
     price_cents: int = Form(...),
     description: str = Form(...),
     pdf: Optional[UploadFile] = File(None),
+    images: list[UploadFile] = File(default=[]),
     authorization: str = Header(None),
 ) -> dict:
-    """Submit a bid for an RFQ. Requires Firebase Auth. Accepts multipart/form-data for PDF upload."""
+    """Submit (or upsert-update) a bid for an RFQ. multipart/form-data.
+
+    Accepts a single quote PDF (`pdf` field) and zero or more images (`images[]`).
+    The PDF writes to both the legacy `bids.pdf_url` column and the unified
+    `attachments` + `bid_attachments` (role='quote_pdf') tables during the
+    dual-phase rollout; migration 021 will drop the legacy column.
+    Images only write to the unified tables with role='image'.
+    """
     decoded = verify_firebase_token(authorization)
     uid = decoded["uid"]
 
@@ -915,10 +923,17 @@ async def submit_bid(
         existing_pdf_url = existing[1] if is_update else None
         pdf_url = existing_pdf_url  # keep prior PDF unless caller sends a new file
 
+        # Resolve uploader account_id for attachment provenance (may be None
+        # if this is a legacy contractor with no linked account).
+        cursor.execute("SELECT id FROM accounts WHERE firebase_uid = %s", (uid,))
+        uploader_acct_row = cursor.fetchone()
+        uploader_account_id = str(uploader_acct_row[0]) if uploader_acct_row else None
+
+        pdf_blob_path: Optional[str] = None
         if pdf and pdf.filename:
-            blob_path = f"bids/{rfq_id}/{bid_id}.pdf"
+            pdf_blob_path = f"bids/{rfq_id}/{bid_id}.pdf"
             bucket = storage_client.bucket(BUCKET_NAME)
-            blob = bucket.blob(blob_path)
+            blob = bucket.blob(pdf_blob_path)
             content = await pdf.read()
             blob.upload_from_string(content, content_type="application/pdf")
 
@@ -946,6 +961,50 @@ async def submit_bid(
                    VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())""",
                 (bid_id, rfq_id, contractor_id, org_id, price_cents, description, pdf_url),
             )
+
+        # Dual-write the PDF into the unified attachments tables so future reads
+        # via `bid_attachments WHERE role='quote_pdf'` keep returning it. For
+        # updates that reuse the same blob_path, the upsert collapses to a no-op.
+        if pdf_blob_path:
+            pdf_attachment_id = _register_attachment(
+                cursor, blob_path=pdf_blob_path, content_type="application/pdf",
+                name=pdf.filename if pdf else None,
+                uploader_account_id=uploader_account_id,
+            )
+            _link_bid_attachment(
+                cursor, bid_id=bid_id, attachment_id=pdf_attachment_id, role="quote_pdf",
+            )
+
+        # Bid images — unified tables only (no legacy column exists).
+        image_attachments_info: list[dict] = []
+        for image in (images or []):
+            if not image or not image.filename:
+                continue
+            ct = image.content_type or "application/octet-stream"
+            ext = ATTACHMENT_TYPES.get(ct, "")
+            if ct not in ATTACHMENT_TYPES or ct == "application/pdf":
+                # Only allow image content types here; PDFs go through the `pdf` field.
+                continue
+            image_id = str(uuid.uuid4())
+            img_blob_path = f"bids/{rfq_id}/{bid_id}/{image_id}{ext}"
+            img_content = await image.read()
+            bucket = storage_client.bucket(BUCKET_NAME)
+            bucket.blob(img_blob_path).upload_from_string(img_content, content_type=ct)
+
+            attachment_id = _register_attachment(
+                cursor, blob_path=img_blob_path, content_type=ct,
+                name=image.filename, size_bytes=len(img_content),
+                uploader_account_id=uploader_account_id,
+            )
+            _link_bid_attachment(
+                cursor, bid_id=bid_id, attachment_id=attachment_id, role="image",
+            )
+            image_attachments_info.append({
+                "blob_path": img_blob_path,
+                "content_type": ct,
+                "name": image.filename,
+                "size_bytes": len(img_content),
+            })
 
         # Auto-post the bid into the inbox conversation (creating it if needed).
         # Wrapped to avoid blocking the bid insert if anything goes wrong here.
@@ -1001,6 +1060,7 @@ async def submit_bid(
         "price_cents": price_cents,
         "description": description,
         "pdf_url": pdf_url,
+        "attachments": _resolve_attachments(image_attachments_info),
         "received_at": received_at.isoformat() if received_at else None,
     }
 
@@ -1061,6 +1121,30 @@ def list_bids(rfq_id: str, token: str = None, authorization: Optional[str] = Hea
             (rfq_id,),
         )
         rows = cursor.fetchall()
+
+        # Batch-fetch bid attachments (quote PDFs + images) from the unified
+        # table. Used both to refresh expired legacy pdf_url signed URLs and
+        # to expose bid images to clients that render them.
+        bid_ids = [row[0] for row in rows]
+        attachments_by_bid: dict[str, dict] = {str(bid_id): {"pdf_blob_path": None, "images": []} for bid_id in bid_ids}
+        if bid_ids:
+            placeholders = ",".join(["%s"] * len(bid_ids))
+            cursor.execute(
+                f"""SELECT ba.bid_id, ba.role, a.blob_path, a.content_type, a.name, a.size_bytes
+                    FROM bid_attachments ba
+                    JOIN attachments a ON a.id = ba.attachment_id
+                    WHERE ba.bid_id IN ({placeholders})
+                    ORDER BY ba.created_at""",
+                bid_ids,
+            )
+            for bid_id_val, role, bp, ct, nm, sb in cursor.fetchall():
+                entry = attachments_by_bid.setdefault(str(bid_id_val), {"pdf_blob_path": None, "images": []})
+                if role == "quote_pdf":
+                    entry["pdf_blob_path"] = bp
+                else:
+                    entry["images"].append({
+                        "blob_path": bp, "content_type": ct, "name": nm, "size_bytes": sb,
+                    })
 
         # Collect org IDs to batch-fetch gallery images
         org_ids = [row[12] for row in rows if row[12]]
@@ -1123,11 +1207,21 @@ def list_bids(rfq_id: str, token: str = None, authorization: Optional[str] = Hea
             "description": org_desc,
             "gallery": gallery_by_org.get(str(org_id), [])[:3] if org_id else [],
         }
+        att_info = attachments_by_bid.get(str(bid_id), {"pdf_blob_path": None, "images": []})
+        # Prefer a freshly-signed URL from the unified table; fall back to the
+        # legacy stored URL (may be expired for bids older than 7 days).
+        effective_pdf_url = pdf_url
+        if att_info["pdf_blob_path"]:
+            try:
+                effective_pdf_url = _sign_attachment_get(att_info["pdf_blob_path"])
+            except Exception:
+                pass
         bids.append({
             "id": str(bid_id),
             "price_cents": price_cents,
             "description": desc,
-            "pdf_url": pdf_url,
+            "pdf_url": effective_pdf_url,
+            "attachments": _resolve_attachments(att_info["images"]),
             "received_at": received_at.isoformat() if received_at else None,
             "contractor": contractor,
         })
@@ -3017,6 +3111,29 @@ def list_org_jobs(authorization: str = Header(None)) -> dict:
             exclude_params,
         )
         avail_rows = cursor.fetchall()
+
+        # Batch-fetch unified bid attachments so we can refresh pdf_url and
+        # expose bid images. Same pattern as list_bids.
+        bid_ids_for_lookup = [row[6] for row in bid_rows]
+        attachments_by_bid: dict[str, dict] = {}
+        if bid_ids_for_lookup:
+            placeholders = ",".join(["%s"] * len(bid_ids_for_lookup))
+            cursor.execute(
+                f"""SELECT ba.bid_id, ba.role, a.blob_path, a.content_type, a.name, a.size_bytes
+                    FROM bid_attachments ba
+                    JOIN attachments a ON a.id = ba.attachment_id
+                    WHERE ba.bid_id IN ({placeholders})
+                    ORDER BY ba.created_at""",
+                bid_ids_for_lookup,
+            )
+            for bid_id_val, role, bp, ct, nm, sb in cursor.fetchall():
+                entry = attachments_by_bid.setdefault(str(bid_id_val), {"pdf_blob_path": None, "images": []})
+                if role == "quote_pdf":
+                    entry["pdf_blob_path"] = bp
+                else:
+                    entry["images"].append({
+                        "blob_path": bp, "content_type": ct, "name": nm, "size_bytes": sb,
+                    })
     finally:
         conn.close()
 
@@ -3031,6 +3148,14 @@ def list_org_jobs(authorization: str = Header(None)) -> dict:
         elif bid_status == "rejected":
             job_status = "lost"
 
+        att_info = attachments_by_bid.get(str(bid_id), {"pdf_blob_path": None, "images": []})
+        effective_pdf_url = bid_pdf
+        if att_info["pdf_blob_path"]:
+            try:
+                effective_pdf_url = _sign_attachment_get(att_info["pdf_blob_path"])
+            except Exception:
+                pass
+
         jobs.append({
             "rfq_id": str(rfq_id),
             "title": title or "Untitled Project",
@@ -3044,7 +3169,8 @@ def list_org_jobs(authorization: str = Header(None)) -> dict:
                 "status": bid_status or "pending",
                 "received_at": received.isoformat() if received else None,
                 "description": bid_desc,
-                "pdf_url": bid_pdf,
+                "pdf_url": effective_pdf_url,
+                "attachments": _resolve_attachments(att_info["images"]),
                 "rfq_modified_after_bid": bool(bid_modified_flag),
             },
             "job_status": job_status,
@@ -3186,7 +3312,11 @@ def _sign_attachment_get(blob_path: str) -> str:
 
 
 def _resolve_attachments(attachments: Optional[list]) -> list:
-    """Add signed `download_url` to each attachment entry for client rendering."""
+    """Add signed `download_url` to each attachment entry for client rendering.
+
+    Accepts either legacy JSONB-shaped dicts or new attachments-table rows — both
+    have `blob_path` + `content_type` + `name` + `size_bytes`.
+    """
     if not attachments:
         return []
     out = []
@@ -3204,6 +3334,122 @@ def _resolve_attachments(attachments: Optional[list]) -> list:
     return out
 
 
+# --- Unified attachment helpers (migration 020) ---
+#
+# During the dual-phase rollout the scan-api writes both to the legacy shapes
+# (bids.pdf_url, messages.attachments JSONB) AND the new unified tables
+# (attachments, bid_attachments, rfq_attachments, message_attachments).
+# Reads prefer the unified tables and fall back to legacy shapes so the API
+# keeps working before migration 020_backfill.py has run. Migration 021 will
+# drop the legacy columns once the unified path is stable in production.
+
+def _register_attachment(cursor, *, blob_path: str, content_type: str,
+                         name: Optional[str] = None, size_bytes: Optional[int] = None,
+                         uploader_account_id: Optional[str] = None) -> str:
+    """Upsert an `attachments` row keyed by blob_path. Returns the attachment_id."""
+    cursor.execute(
+        """INSERT INTO attachments (blob_path, content_type, name, size_bytes, uploader_account_id)
+           VALUES (%s, %s, %s, %s, %s)
+           ON CONFLICT (blob_path) DO UPDATE
+             SET content_type = COALESCE(attachments.content_type, EXCLUDED.content_type),
+                 name = COALESCE(attachments.name, EXCLUDED.name),
+                 size_bytes = COALESCE(attachments.size_bytes, EXCLUDED.size_bytes),
+                 uploader_account_id = COALESCE(attachments.uploader_account_id, EXCLUDED.uploader_account_id)
+           RETURNING id""",
+        (blob_path, content_type, name, size_bytes, uploader_account_id),
+    )
+    return str(cursor.fetchone()[0])
+
+
+def _fetch_message_attachments(cursor, message_id: str) -> list:
+    """Load attachments linked to a message via the join table. Empty list if none.
+
+    Returned dict shape matches the legacy JSONB contract:
+      {blob_path, content_type, name, size_bytes}
+    Callers that need `download_url` should pipe through `_resolve_attachments`.
+    """
+    cursor.execute(
+        """SELECT a.blob_path, a.content_type, a.name, a.size_bytes
+           FROM message_attachments ma
+           JOIN attachments a ON a.id = ma.attachment_id
+           WHERE ma.message_id = %s
+           ORDER BY a.created_at""",
+        (message_id,),
+    )
+    return [
+        {"blob_path": bp, "content_type": ct, "name": nm, "size_bytes": sb}
+        for bp, ct, nm, sb in cursor.fetchall()
+    ]
+
+
+def _get_bid_pdf_url_compat(cursor, bid_id: str, legacy_pdf_url: Optional[str]) -> Optional[str]:
+    """Return a signed GET URL for a bid's quote PDF, preferring the unified table.
+
+    Compat shim for the `bid.pdf_url` field that the deployed frontend reads
+    (ContractorCard, OrgDashboard, ProjectQuotes). If the unified table has a
+    `quote_pdf` attachment, re-sign it fresh. Otherwise fall back to the legacy
+    `bids.pdf_url` column (which stores a pre-signed URL that may be expired).
+    """
+    cursor.execute(
+        """SELECT a.blob_path FROM bid_attachments ba
+           JOIN attachments a ON a.id = ba.attachment_id
+           WHERE ba.bid_id = %s AND ba.role = 'quote_pdf'
+           ORDER BY ba.created_at DESC LIMIT 1""",
+        (bid_id,),
+    )
+    row = cursor.fetchone()
+    if row:
+        try:
+            return _sign_attachment_get(row[0])
+        except Exception:
+            pass
+    return legacy_pdf_url
+
+
+def _link_bid_attachment(cursor, *, bid_id: str, attachment_id: str, role: str,
+                         added_via_message_id: Optional[str] = None) -> None:
+    """Upsert a bid_attachments link. No-op if already present."""
+    cursor.execute(
+        """INSERT INTO bid_attachments (bid_id, attachment_id, role, added_via_message_id)
+           VALUES (%s, %s, %s, %s)
+           ON CONFLICT (bid_id, attachment_id) DO NOTHING""",
+        (bid_id, attachment_id, role, added_via_message_id),
+    )
+
+
+def _link_rfq_attachment(cursor, *, rfq_id: str, attachment_id: str,
+                         added_via_message_id: Optional[str] = None) -> None:
+    """Upsert an rfq_attachments link. No-op if already present."""
+    cursor.execute(
+        """INSERT INTO rfq_attachments (rfq_id, attachment_id, added_via_message_id)
+           VALUES (%s, %s, %s)
+           ON CONFLICT (rfq_id, attachment_id) DO NOTHING""",
+        (rfq_id, attachment_id, added_via_message_id),
+    )
+
+
+def _link_message_attachment(cursor, *, message_id: str, attachment_id: str) -> None:
+    """Upsert a message_attachments link."""
+    cursor.execute(
+        """INSERT INTO message_attachments (message_id, attachment_id)
+           VALUES (%s, %s)
+           ON CONFLICT (message_id, attachment_id) DO NOTHING""",
+        (message_id, attachment_id),
+    )
+
+
+def _find_pending_bid_for_org(cursor, rfq_id: str, org_id: str) -> Optional[str]:
+    """Return the most recent pending/accepted bid_id for an (rfq, org), if any."""
+    cursor.execute(
+        """SELECT id FROM bids
+           WHERE rfq_id = %s AND org_id = %s AND status IN ('pending', 'accepted')
+           ORDER BY received_at DESC LIMIT 1""",
+        (rfq_id, org_id),
+    )
+    row = cursor.fetchone()
+    return str(row[0]) if row else None
+
+
 def _event_preview(event_type: str, bid_snapshot: Optional[dict]) -> str:
     """Short one-line preview text for an event message, used in thread lists."""
     if event_type == "bid_submitted":
@@ -3216,6 +3462,8 @@ def _event_preview(event_type: str, bid_snapshot: Optional[dict]) -> str:
         return "Another contractor was selected"
     if event_type == "rfq_updated":
         return "Homeowner updated the project"
+    if event_type == "bid_updated":
+        return "Contractor updated the bid"
     if event_type == "thread_started":
         return "Conversation started"
     return "Update"
@@ -3675,6 +3923,24 @@ def get_conversation(conversation_id: str, authorization: str = Header(None)) ->
         )
         msg_rows = cursor.fetchall()
 
+        # Load attachments from unified join table. Merge with legacy JSONB by
+        # blob_path so messages keep working during the dual-phase rollout
+        # (either source alone is sufficient; duplicates collapse).
+        cursor.execute(
+            """SELECT ma.message_id, a.blob_path, a.content_type, a.name, a.size_bytes
+               FROM message_attachments ma
+               JOIN attachments a ON a.id = ma.attachment_id
+               JOIN messages m ON m.id = ma.message_id
+               WHERE m.conversation_id = %s
+               ORDER BY a.created_at""",
+            (conversation_id,),
+        )
+        unified_by_mid: dict[str, list] = {}
+        for mid_row, bp, ct, nm, sb in cursor.fetchall():
+            unified_by_mid.setdefault(str(mid_row), []).append({
+                "blob_path": bp, "content_type": ct, "name": nm, "size_bytes": sb,
+            })
+
         # Participants (homeowner + accepted org members)
         cursor.execute(
             """SELECT a.id, a.name, a.email, a.icon_url, 'homeowner'
@@ -3711,6 +3977,13 @@ def get_conversation(conversation_id: str, authorization: str = Header(None)) ->
     messages = []
     for (mid, m_side, m_kind, m_body, ev, b_id, snap, atts, created,
          s_id, s_name, s_email, s_icon) in msg_rows:
+        # Merge unified-table attachments with legacy JSONB by blob_path (unique).
+        merged: dict[str, dict] = {}
+        for a in (atts or []):
+            if isinstance(a, dict) and a.get("blob_path"):
+                merged[a["blob_path"]] = a
+        for a in unified_by_mid.get(str(mid), []):
+            merged[a["blob_path"]] = a
         messages.append({
             "id": str(mid),
             "side": m_side,
@@ -3719,7 +3992,7 @@ def get_conversation(conversation_id: str, authorization: str = Header(None)) ->
             "event_type": ev,
             "bid_id": str(b_id) if b_id else None,
             "bid_snapshot": snap,
-            "attachments": _resolve_attachments(atts),
+            "attachments": _resolve_attachments(list(merged.values())),
             "created_at": created.isoformat() if created else None,
             "sender": {
                 "id": str(s_id), "name": s_name, "email": s_email,
@@ -3783,6 +4056,35 @@ async def post_message(conversation_id: str, request: Request, authorization: st
             sender_account_id=account_id, body=text or None,
             attachments=clean_attachments or None,
         )
+
+        # Dual-write attachments into the unified tables. Also auto-link to the
+        # RFQ (homeowner side) or the org's bid if one exists (contractor side),
+        # so images flow through to the underlying project/bid surfaces.
+        if clean_attachments:
+            bid_id_for_link = None
+            if side == "org":
+                bid_id_for_link = _find_pending_bid_for_org(cursor, conv["rfq_id"], conv["org_id"])
+
+            for att in clean_attachments:
+                attachment_id = _register_attachment(
+                    cursor,
+                    blob_path=att["blob_path"],
+                    content_type=att.get("content_type") or "application/octet-stream",
+                    name=att.get("name"),
+                    size_bytes=att.get("size_bytes"),
+                    uploader_account_id=account_id,
+                )
+                _link_message_attachment(cursor, message_id=mid, attachment_id=attachment_id)
+                if side == "homeowner":
+                    _link_rfq_attachment(
+                        cursor, rfq_id=conv["rfq_id"], attachment_id=attachment_id,
+                        added_via_message_id=mid,
+                    )
+                elif side == "org" and bid_id_for_link:
+                    _link_bid_attachment(
+                        cursor, bid_id=bid_id_for_link, attachment_id=attachment_id,
+                        role="image", added_via_message_id=mid,
+                    )
 
         # Gather notification recipients + metadata for email
         cursor.execute(
@@ -3916,6 +4218,310 @@ def conversation_attachment_upload_url(
         "content_type": content_type,
         "filename": filename,
     }
+
+
+# --- Direct RFQ attachments (homeowner-attached photos/docs outside chat) ---
+
+def _verify_rfq_owner(cursor, rfq_id: str, uid: str) -> str:
+    """Return the owner's account_id; raise 403 if caller is not the owner."""
+    cursor.execute("SELECT id FROM accounts WHERE firebase_uid = %s", (uid,))
+    acct = cursor.fetchone()
+    if not acct:
+        raise HTTPException(403, "Account not found")
+    account_id = str(acct[0])
+
+    owner_account_id = _resolve_rfq_homeowner(cursor, rfq_id)
+    if not owner_account_id:
+        raise HTTPException(404, "RFQ not found")
+    if owner_account_id != account_id:
+        raise HTTPException(403, "Not the owner of this RFQ")
+    return account_id
+
+
+@app.get("/api/rfqs/{rfq_id}/attachment-upload-url")
+def rfq_attachment_upload_url(
+    rfq_id: str,
+    content_type: str = "image/jpeg",
+    filename: Optional[str] = None,
+    authorization: str = Header(None),
+) -> dict:
+    """Signed PUT URL for an RFQ-scoped attachment. Only the RFQ owner can upload."""
+    decoded = verify_firebase_token(authorization)
+    if content_type not in ATTACHMENT_TYPES:
+        raise HTTPException(400, f"Unsupported content type. Allowed: {', '.join(ATTACHMENT_TYPES)}")
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        _verify_rfq_owner(cursor, rfq_id, decoded["uid"])
+    finally:
+        conn.close()
+
+    ext = ATTACHMENT_TYPES[content_type]
+    attachment_id = str(uuid.uuid4())
+    blob_path = f"rfqs/{rfq_id}/attachments/{attachment_id}{ext}"
+
+    _credentials.refresh(_auth_request)
+    bucket = storage_client.bucket(BUCKET_NAME)
+    upload_url = bucket.blob(blob_path).generate_signed_url(
+        version="v4",
+        expiration=datetime.timedelta(minutes=SIGNED_URL_EXPIRY_MINUTES),
+        method="PUT",
+        content_type=content_type,
+        service_account_email=SIGNING_SA_EMAIL,
+        access_token=_credentials.token,
+    )
+    return {"upload_url": upload_url, "blob_path": blob_path, "content_type": content_type, "filename": filename}
+
+
+@app.post("/api/rfqs/{rfq_id}/attachments")
+async def register_rfq_attachments(rfq_id: str, request: Request, authorization: str = Header(None)) -> dict:
+    """Register previously-uploaded blobs as RFQ attachments.
+
+    Body: { attachments: [{blob_path, content_type, name?, size_bytes?}] }
+    """
+    decoded = verify_firebase_token(authorization)
+    body = await request.json()
+    items = body.get("attachments") or []
+    if not items:
+        raise HTTPException(400, "attachments list is required")
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        uploader_account_id = _verify_rfq_owner(cursor, rfq_id, decoded["uid"])
+
+        created = []
+        for a in items:
+            if not isinstance(a, dict):
+                continue
+            bp = a.get("blob_path", "")
+            if not bp.startswith(f"rfqs/{rfq_id}/attachments/"):
+                raise HTTPException(400, f"Invalid blob_path for this RFQ: {bp}")
+            aid = _register_attachment(
+                cursor, blob_path=bp,
+                content_type=a.get("content_type") or "application/octet-stream",
+                name=a.get("name"), size_bytes=a.get("size_bytes"),
+                uploader_account_id=uploader_account_id,
+            )
+            _link_rfq_attachment(cursor, rfq_id=rfq_id, attachment_id=aid)
+            created.append({"attachment_id": aid, "blob_path": bp,
+                            "content_type": a.get("content_type"),
+                            "name": a.get("name"), "size_bytes": a.get("size_bytes")})
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"attachments": _resolve_attachments(created)}
+
+
+@app.get("/api/rfqs/{rfq_id}/attachments")
+def list_rfq_attachments(rfq_id: str, authorization: str = Header(None)) -> dict:
+    """List attachments on an RFQ. Accessible to the RFQ owner and to any org member
+    whose org has a conversation or bid on this RFQ.
+    """
+    decoded = verify_firebase_token(authorization)
+    uid = decoded["uid"]
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM accounts WHERE firebase_uid = %s", (uid,))
+        acct = cursor.fetchone()
+        if not acct:
+            raise HTTPException(403, "Account not found")
+        account_id = str(acct[0])
+
+        # Access: RFQ owner, or org member of any org with a bid/conversation on this RFQ
+        owner_id = _resolve_rfq_homeowner(cursor, rfq_id)
+        if not owner_id:
+            raise HTTPException(404, "RFQ not found")
+        authorized = owner_id == account_id
+        if not authorized:
+            cursor.execute(
+                """SELECT 1
+                   FROM org_members om
+                   WHERE om.account_id = %s AND om.invite_status = 'accepted'
+                     AND (
+                       EXISTS (SELECT 1 FROM bids b WHERE b.rfq_id = %s AND b.org_id = om.org_id)
+                       OR EXISTS (SELECT 1 FROM conversations c WHERE c.rfq_id = %s AND c.org_id = om.org_id)
+                     )
+                   LIMIT 1""",
+                (account_id, rfq_id, rfq_id),
+            )
+            authorized = cursor.fetchone() is not None
+        if not authorized:
+            raise HTTPException(403, "Not authorized to view this RFQ's attachments")
+
+        cursor.execute(
+            """SELECT a.id, a.blob_path, a.content_type, a.name, a.size_bytes,
+                      a.uploader_account_id, a.created_at, ra.added_via_message_id
+               FROM rfq_attachments ra
+               JOIN attachments a ON a.id = ra.attachment_id
+               WHERE ra.rfq_id = %s
+               ORDER BY a.created_at""",
+            (rfq_id,),
+        )
+        rows = cursor.fetchall()
+    finally:
+        conn.close()
+
+    out = []
+    for aid, bp, ct, nm, sb, up_id, created_at, via_mid in rows:
+        entry = {
+            "attachment_id": str(aid), "blob_path": bp, "content_type": ct,
+            "name": nm, "size_bytes": sb,
+            "uploader_account_id": str(up_id) if up_id else None,
+            "added_via_message_id": str(via_mid) if via_mid else None,
+            "created_at": created_at.isoformat() if created_at else None,
+        }
+        out.append(entry)
+    return {"attachments": _resolve_attachments(out)}
+
+
+@app.delete("/api/rfqs/{rfq_id}/attachments/{attachment_id}")
+def delete_rfq_attachment(rfq_id: str, attachment_id: str, authorization: str = Header(None)) -> dict:
+    """Unlink an attachment from an RFQ. Keeps the blob + `attachments` row if still referenced."""
+    decoded = verify_firebase_token(authorization)
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        _verify_rfq_owner(cursor, rfq_id, decoded["uid"])
+        cursor.execute(
+            "DELETE FROM rfq_attachments WHERE rfq_id = %s AND attachment_id = %s",
+            (rfq_id, attachment_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"status": "unlinked"}
+
+
+# --- Direct bid attachments (contractor image uploads outside the chat/submit flow) ---
+
+def _verify_bid_org_access(cursor, rfq_id: str, bid_id: str, uid: str) -> tuple[str, str]:
+    """Return (account_id, org_id) for a caller who is an admin/user of the bid's org."""
+    cursor.execute("SELECT id FROM accounts WHERE firebase_uid = %s", (uid,))
+    acct = cursor.fetchone()
+    if not acct:
+        raise HTTPException(403, "Account not found")
+    account_id = str(acct[0])
+
+    cursor.execute("SELECT org_id FROM bids WHERE id = %s AND rfq_id = %s", (bid_id, rfq_id))
+    row = cursor.fetchone()
+    if not row or not row[0]:
+        raise HTTPException(404, "Bid not found")
+    org_id = str(row[0])
+
+    cursor.execute(
+        """SELECT 1 FROM org_members
+           WHERE org_id = %s AND account_id = %s AND invite_status = 'accepted'""",
+        (org_id, account_id),
+    )
+    if not cursor.fetchone():
+        raise HTTPException(403, "Not a member of the bid's organization")
+    return account_id, org_id
+
+
+@app.get("/api/rfqs/{rfq_id}/bids/{bid_id}/attachment-upload-url")
+def bid_attachment_upload_url(
+    rfq_id: str,
+    bid_id: str,
+    content_type: str = "image/jpeg",
+    filename: Optional[str] = None,
+    authorization: str = Header(None),
+) -> dict:
+    """Signed PUT URL for a bid-scoped attachment."""
+    decoded = verify_firebase_token(authorization)
+    if content_type not in ATTACHMENT_TYPES:
+        raise HTTPException(400, f"Unsupported content type. Allowed: {', '.join(ATTACHMENT_TYPES)}")
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        _verify_bid_org_access(cursor, rfq_id, bid_id, decoded["uid"])
+    finally:
+        conn.close()
+
+    ext = ATTACHMENT_TYPES[content_type]
+    attachment_id = str(uuid.uuid4())
+    blob_path = f"bids/{rfq_id}/{bid_id}/{attachment_id}{ext}"
+
+    _credentials.refresh(_auth_request)
+    bucket = storage_client.bucket(BUCKET_NAME)
+    upload_url = bucket.blob(blob_path).generate_signed_url(
+        version="v4",
+        expiration=datetime.timedelta(minutes=SIGNED_URL_EXPIRY_MINUTES),
+        method="PUT",
+        content_type=content_type,
+        service_account_email=SIGNING_SA_EMAIL,
+        access_token=_credentials.token,
+    )
+    return {"upload_url": upload_url, "blob_path": blob_path, "content_type": content_type, "filename": filename}
+
+
+@app.post("/api/rfqs/{rfq_id}/bids/{bid_id}/attachments")
+async def register_bid_attachments(rfq_id: str, bid_id: str, request: Request, authorization: str = Header(None)) -> dict:
+    """Register previously-uploaded blobs as bid attachments.
+
+    Body: { attachments: [{blob_path, content_type, name?, size_bytes?, role?}] }
+    `role` defaults to 'image'. Use 'quote_pdf' to register/replace the primary quote PDF.
+    On success, posts an `event(bid_updated)` in the related conversation (if any).
+    """
+    decoded = verify_firebase_token(authorization)
+    body = await request.json()
+    items = body.get("attachments") or []
+    if not items:
+        raise HTTPException(400, "attachments list is required")
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        uploader_account_id, org_id = _verify_bid_org_access(cursor, rfq_id, bid_id, decoded["uid"])
+
+        created = []
+        created_attachment_ids: list[str] = []
+        for a in items:
+            if not isinstance(a, dict):
+                continue
+            bp = a.get("blob_path", "")
+            if not bp.startswith(f"bids/{rfq_id}/{bid_id}/"):
+                raise HTTPException(400, f"Invalid blob_path for this bid: {bp}")
+            role = a.get("role") or "image"
+            if role not in ("image", "quote_pdf", "other"):
+                raise HTTPException(400, f"Invalid role: {role}")
+            aid = _register_attachment(
+                cursor, blob_path=bp,
+                content_type=a.get("content_type") or "application/octet-stream",
+                name=a.get("name"), size_bytes=a.get("size_bytes"),
+                uploader_account_id=uploader_account_id,
+            )
+            _link_bid_attachment(cursor, bid_id=bid_id, attachment_id=aid, role=role)
+            created_attachment_ids.append(aid)
+            created.append({"attachment_id": aid, "blob_path": bp, "role": role,
+                            "content_type": a.get("content_type"),
+                            "name": a.get("name"), "size_bytes": a.get("size_bytes")})
+
+        # Surface the update in the conversation thread, if one exists.
+        cursor.execute(
+            "SELECT id FROM conversations WHERE rfq_id = %s AND org_id = %s LIMIT 1",
+            (rfq_id, org_id),
+        )
+        conv_row = cursor.fetchone()
+        if conv_row:
+            conv_id = str(conv_row[0])
+            event_mid, _ = _insert_message(
+                cursor, conversation_id=conv_id, side="system", kind="event",
+                event_type="bid_updated", bid_id=bid_id,
+            )
+            for aid in created_attachment_ids:
+                _link_message_attachment(cursor, message_id=event_mid, attachment_id=aid)
+
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"attachments": _resolve_attachments(created)}
 
 
 @app.get("/health")
