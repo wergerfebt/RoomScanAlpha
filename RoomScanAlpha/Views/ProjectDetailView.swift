@@ -26,6 +26,8 @@ struct ProjectDetailView: View {
     @State private var selectedScanId: String?
     /// When true, show the RFQ-scoped inbox as a sheet.
     @State private var showMessages = false
+    /// When true, show the project editor sheet.
+    @State private var showEdit = false
     /// Route for "Message contractor X" — when set, presents the conversation sheet.
     @State private var conversationRoute: ConversationRoute?
     /// Bid-card "Message" buttons show a spinner while the POST is in flight.
@@ -77,6 +79,15 @@ struct ProjectDetailView: View {
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button {
+                    showEdit = true
+                } label: {
+                    Image(systemName: "square.and.pencil")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(QTheme.primary)
+                }
+                .accessibilityLabel("Edit project")
+
+                Button {
                     showMessages = true
                 } label: {
                     Image(systemName: "envelope")
@@ -105,6 +116,17 @@ struct ProjectDetailView: View {
             InboxView(role: .homeowner, rfqFilter: rfq.id) {
                 showMessages = false
             }
+        }
+        .sheet(isPresented: $showEdit) {
+            EditProjectView(
+                rfq: rfq,
+                detail: detail,
+                onSave: {
+                    showEdit = false
+                    Task { await load() }
+                },
+                onClose: { showEdit = false }
+            )
         }
         .sheet(item: $conversationRoute) { route in
             NavigationStack {

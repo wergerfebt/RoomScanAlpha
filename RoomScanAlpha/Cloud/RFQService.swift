@@ -147,6 +147,47 @@ final class RFQService {
         )
     }
 
+    /// Update mutable RFQ fields. All args are optional; only non-nil fields
+    /// are sent to the server. Server flags pending bids as "project updated".
+    func updateRFQ(rfqId: String, title: String? = nil, description: String? = nil, address: String? = nil) async throws {
+        let token = try await AuthManager.shared.getToken()
+        var request = URLRequest(url: URL(string: "\(apiBaseURL)/api/rfqs/\(rfqId)")!)
+        request.httpMethod = "PUT"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        var body: [String: Any] = [:]
+        if let title { body["title"] = title }
+        if let description { body["description"] = description }
+        if let address { body["address"] = address }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            throw URLError(.badServerResponse, userInfo: [
+                NSLocalizedDescriptionKey: "Update failed (HTTP \(code))"
+            ])
+        }
+    }
+
+    /// Rename a scanned room. Backend validates RFQ ownership.
+    func renameRoom(rfqId: String, scanId: String, label: String) async throws {
+        let token = try await AuthManager.shared.getToken()
+        var request = URLRequest(url: URL(string: "\(apiBaseURL)/api/rfqs/\(rfqId)/scans/\(scanId)")!)
+        request.httpMethod = "PUT"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["room_label": label])
+
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            throw URLError(.badServerResponse, userInfo: [
+                NSLocalizedDescriptionKey: "Rename failed (HTTP \(code))"
+            ])
+        }
+    }
+
     /// Save scope of work items for a scanned room.
     func saveScope(rfqId: String, scanId: String, scope: RoomScope) async throws {
         let token = try await AuthManager.shared.getToken()

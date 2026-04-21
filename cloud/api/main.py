@@ -668,6 +668,45 @@ def delete_rfq(rfq_id: str, authorization: str = Header(None)) -> dict:
     return {"status": "deleted", "rfq_id": rfq_id, "scans_deleted": deleted_scans}
 
 
+@app.put("/api/rfqs/{rfq_id}/scans/{scan_id}")
+async def update_scan(rfq_id: str, scan_id: str, request: Request, authorization: str = Header(None)) -> dict:
+    """Update mutable fields on a scanned room. Currently: `room_label`.
+
+    Ownership check piggybacks on the surrounding rfqs row (scans belong
+    to the RFQ owner). Returns {"status": "ok", "room_label": "..."}.
+    """
+    decoded = verify_firebase_token(authorization)
+    uid = decoded["uid"]
+    body = await request.json()
+    label = body.get("room_label")
+    if not isinstance(label, str) or not label.strip():
+        raise HTTPException(400, "room_label is required")
+    label = label.strip()[:80]
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT user_id FROM rfqs WHERE id = %s", (rfq_id,))
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(404, "RFQ not found")
+        if row[0] != uid:
+            raise HTTPException(403, "Not the owner of this RFQ")
+
+        cursor.execute(
+            """UPDATE scanned_rooms SET room_label = %s
+               WHERE id = %s AND rfq_id = %s""",
+            (label, scan_id, rfq_id),
+        )
+        if cursor.rowcount == 0:
+            raise HTTPException(404, "Scan not found")
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"status": "ok", "room_label": label}
+
+
 @app.put("/api/rfqs/{rfq_id}/scans/{scan_id}/scope")
 async def save_scope(rfq_id: str, scan_id: str, request: Request, authorization: str = Header(None)) -> dict:
     """Save scope-of-work items and notes for a scanned room."""

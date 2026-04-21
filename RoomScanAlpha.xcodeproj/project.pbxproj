@@ -64,6 +64,7 @@
 		A11111110000000000000083 /* ContractorHomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000083 /* ContractorHomeView.swift */; };
 		A11111110000000000000084 /* WorkspaceTabs.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000084 /* WorkspaceTabs.swift */; };
 		A11111110000000000000085 /* JobDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000085 /* JobDetailView.swift */; };
+		A11111110000000000000086 /* EditProjectView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000086 /* EditProjectView.swift */; };
 		B11111110000000000000001 /* ScanViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000001 /* ScanViewModelTests.swift */; };
 		B11111110000000000000002 /* MeshExtractorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000002 /* MeshExtractorTests.swift */; };
 		B11111110000000000000003 /* CapturedFrameTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000003 /* CapturedFrameTests.swift */; };
@@ -163,6 +164,7 @@
 		A10000000000000000000083 /* ContractorHomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContractorHomeView.swift; sourceTree = "<group>"; };
 		A10000000000000000000084 /* WorkspaceTabs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceTabs.swift; sourceTree = "<group>"; };
 		A10000000000000000000085 /* JobDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JobDetailView.swift; sourceTree = "<group>"; };
+		A10000000000000000000086 /* EditProjectView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditProjectView.swift; sourceTree = "<group>"; };
 		B10000000000000000000001 /* ScanViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanViewModelTests.swift; sourceTree = "<group>"; };
 		B10000000000000000000002 /* MeshExtractorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeshExtractorTests.swift; sourceTree = "<group>"; };
 		B10000000000000000000003 /* CapturedFrameTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CapturedFrameTests.swift; sourceTree = "<group>"; };
@@ -309,6 +311,7 @@
 				A10000000000000000000083 /* ContractorHomeView.swift */,
 				A10000000000000000000084 /* WorkspaceTabs.swift */,
 				A10000000000000000000085 /* JobDetailView.swift */,
+				A10000000000000000000086 /* EditProjectView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -543,6 +546,7 @@
 				A11111110000000000000083 /* ContractorHomeView.swift in Sources */,
 				A11111110000000000000084 /* WorkspaceTabs.swift in Sources */,
 				A11111110000000000000085 /* JobDetailView.swift in Sources */,
+				A11111110000000000000086 /* EditProjectView.swift in Sources */,
 				A11111110000000000000025 /* FrameQualityScorer.swift in Sources */,
 				A11111110000000000000026 /* CornerAnnotation.swift in Sources */,
 				A11111110000000000000027 /* CornerAnnotationViewModel.swift in Sources */,
