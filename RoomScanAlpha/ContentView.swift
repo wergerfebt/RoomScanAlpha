@@ -6,6 +6,11 @@ struct ContentView: View {
     @State private var sessionManager = ARSessionManager()
     @State private var isAuthenticated = false
 
+    // Root-level sheets (presented from Home).
+    @State private var showSearch = false
+    @State private var showInbox = false
+    @State private var showAccount = false
+
 
     var body: some View {
         if !isAuthenticated {
@@ -488,8 +493,9 @@ struct ContentView: View {
 
     private var idleView: some View {
         HomeView(
-            onStartScan: {
-                if viewModel.hasRFQSelected {
+            onStartScan: { latest in
+                if let latest = latest {
+                    viewModel.selectedRFQ = latest
                     viewModel.state = .projectOverview
                 } else {
                     viewModel.state = .selectingRFQ
@@ -498,6 +504,12 @@ struct ContentView: View {
             onPickProject: {
                 viewModel.state = .selectingRFQ
             },
+            onOpenProjects: {
+                viewModel.state = .selectingRFQ
+            },
+            onOpenAccount: { showAccount = true },
+            onOpenSearch: { showSearch = true },
+            onOpenInbox: { showInbox = true },
             onOpenHistory: {
                 viewModel.showHistory = true
             },
@@ -508,6 +520,15 @@ struct ContentView: View {
         )
         .sheet(isPresented: $viewModel.showHistory) {
             ScanHistoryView()
+        }
+        .sheet(isPresented: $showSearch) {
+            SearchView { showSearch = false }
+        }
+        .sheet(isPresented: $showInbox) {
+            InboxView { showInbox = false }
+        }
+        .sheet(isPresented: $showAccount) {
+            AccountView { showAccount = false }
         }
     }
 

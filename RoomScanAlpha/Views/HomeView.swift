@@ -9,8 +9,14 @@ import FirebaseAuth
 /// `/api/rfqs` feed for now (new bids, processed scans) — full event-stream
 /// integration can come later.
 struct HomeView: View {
-    let onStartScan: () -> Void
+    /// Start a scan into the most-recently-touched project (or picker if none).
+    let onStartScan: (RFQ?) -> Void
+    /// Always opens the project picker.
     let onPickProject: () -> Void
+    let onOpenProjects: () -> Void
+    let onOpenAccount: () -> Void
+    let onOpenSearch: () -> Void
+    let onOpenInbox: () -> Void
     let onOpenHistory: () -> Void
     let onSignOut: () -> Void
 
@@ -56,6 +62,23 @@ struct HomeView: View {
 
     private var hasLiDAR: Bool { DeviceCapability.supportsLiDAR }
 
+    /// The project the user worked on most recently. Used as the "current
+    /// target" for the Start-scan CTA — mirrors how the iOS Photos app
+    /// defaults the next photo to the active album.
+    private var latestRFQ: RFQ? {
+        rfqs
+            .filter { $0.status != "completed" }
+            .max { lhs, rhs in (lhs.createdAt ?? "") < (rhs.createdAt ?? "") }
+    }
+
+    private var captureTargetText: String {
+        if let rfq = latestRFQ {
+            return "to \(rfq.displayTitle)."
+        } else {
+            return "to a project."
+        }
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 26) {
@@ -79,7 +102,7 @@ struct HomeView: View {
     // MARK: – Header
 
     private var header: some View {
-        HStack(alignment: .center) {
+        HStack(alignment: .center, spacing: 10) {
             HStack(spacing: 10) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -97,8 +120,14 @@ struct HomeView: View {
 
             Spacer()
 
+            iconButton(systemImage: "magnifyingglass", label: "Search", action: onOpenSearch)
+            iconButton(systemImage: "envelope", label: "Inbox", action: onOpenInbox)
+
             Menu {
+                Button("My Projects", systemImage: "folder", action: onOpenProjects)
+                Button("Account", systemImage: "person.circle", action: onOpenAccount)
                 Button("Scan history", systemImage: "clock.arrow.circlepath", action: onOpenHistory)
+                Divider()
                 Button("Sign out", systemImage: "rectangle.portrait.and.arrow.right", role: .destructive) {
                     signOutConfirm = true
                 }
@@ -112,6 +141,20 @@ struct HomeView: View {
         }
         .padding(.horizontal, 20)
         .padding(.top, 16)
+    }
+
+    private func iconButton(systemImage: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(QTheme.ink)
+                .frame(width: 34, height: 34)
+                .background(QTheme.surface)
+                .overlay(Circle().strokeBorder(QTheme.hairline, lineWidth: 0.5))
+                .clipShape(Circle())
+                .accessibilityLabel(label)
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: – Greeting + stats
@@ -165,8 +208,8 @@ struct HomeView: View {
                 .tracking(0.5)
                 .foregroundStyle(.white.opacity(0.7))
             (
-                Text("Scan a new room").foregroundStyle(.white) +
-                Text("\nto a project.").foregroundStyle(.white.opacity(0.65)).fontWeight(.medium)
+                Text("Scan a new room\n").foregroundStyle(.white) +
+                Text(captureTargetText).foregroundStyle(.white.opacity(0.65)).fontWeight(.medium)
             )
             .font(.system(size: 24, weight: .bold))
             .tracking(-0.4)
@@ -174,7 +217,9 @@ struct HomeView: View {
             .padding(.top, 10)
 
             HStack(spacing: 10) {
-                Button(action: onStartScan) {
+                Button {
+                    onStartScan(latestRFQ)
+                } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "camera.viewfinder")
                             .font(.system(size: 15, weight: .semibold))
@@ -190,7 +235,7 @@ struct HomeView: View {
                 .opacity(hasLiDAR ? 1 : 0.5)
 
                 Button(action: onPickProject) {
-                    Text("Pick project")
+                    Text(latestRFQ == nil ? "Pick project" : "Change project")
                         .font(.system(size: 15, weight: .semibold))
                         .padding(.horizontal, 20).padding(.vertical, 12)
                         .foregroundStyle(.white)

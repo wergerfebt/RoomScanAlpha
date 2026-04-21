@@ -49,6 +49,14 @@
 		A11111110000000000000073 /* QTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000073 /* QTheme.swift */; };
 		A11111110000000000000074 /* EmbedWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000074 /* EmbedWebView.swift */; };
 		A11111110000000000000075 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000075 /* HomeView.swift */; };
+		A11111110000000000000076 /* Contractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000076 /* Contractor.swift */; };
+		A11111110000000000000077 /* ContractorsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000077 /* ContractorsService.swift */; };
+		A11111110000000000000078 /* SearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000078 /* SearchView.swift */; };
+		A11111110000000000000079 /* OrgProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000079 /* OrgProfileView.swift */; };
+		A1111111000000000000007A /* Message.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000007A /* Message.swift */; };
+		A1111111000000000000007B /* InboxService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000007B /* InboxService.swift */; };
+		A1111111000000000000007C /* InboxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000007C /* InboxView.swift */; };
+		A1111111000000000000007D /* AccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000007D /* AccountView.swift */; };
 		B11111110000000000000001 /* ScanViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000001 /* ScanViewModelTests.swift */; };
 		B11111110000000000000002 /* MeshExtractorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000002 /* MeshExtractorTests.swift */; };
 		B11111110000000000000003 /* CapturedFrameTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000003 /* CapturedFrameTests.swift */; };
@@ -133,6 +141,14 @@
 		A10000000000000000000073 /* QTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QTheme.swift; sourceTree = "<group>"; };
 		A10000000000000000000074 /* EmbedWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmbedWebView.swift; sourceTree = "<group>"; };
 		A10000000000000000000075 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
+		A10000000000000000000076 /* Contractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Contractor.swift; sourceTree = "<group>"; };
+		A10000000000000000000077 /* ContractorsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContractorsService.swift; sourceTree = "<group>"; };
+		A10000000000000000000078 /* SearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchView.swift; sourceTree = "<group>"; };
+		A10000000000000000000079 /* OrgProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrgProfileView.swift; sourceTree = "<group>"; };
+		A1000000000000000000007A /* Message.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Message.swift; sourceTree = "<group>"; };
+		A1000000000000000000007B /* InboxService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InboxService.swift; sourceTree = "<group>"; };
+		A1000000000000000000007C /* InboxView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InboxView.swift; sourceTree = "<group>"; };
+		A1000000000000000000007D /* AccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountView.swift; sourceTree = "<group>"; };
 		B10000000000000000000001 /* ScanViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanViewModelTests.swift; sourceTree = "<group>"; };
 		B10000000000000000000002 /* MeshExtractorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeshExtractorTests.swift; sourceTree = "<group>"; };
 		B10000000000000000000003 /* CapturedFrameTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CapturedFrameTests.swift; sourceTree = "<group>"; };
@@ -227,6 +243,8 @@
 				A10000000000000000000039 /* RoomScope.swift */,
 				A10000000000000000000070 /* Bid.swift */,
 				A10000000000000000000071 /* ProjectDetail.swift */,
+				A10000000000000000000076 /* Contractor.swift */,
+				A1000000000000000000007A /* Message.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -268,6 +286,10 @@
 				A10000000000000000000073 /* QTheme.swift */,
 				A10000000000000000000074 /* EmbedWebView.swift */,
 				A10000000000000000000075 /* HomeView.swift */,
+				A10000000000000000000078 /* SearchView.swift */,
+				A10000000000000000000079 /* OrgProfileView.swift */,
+				A1000000000000000000007C /* InboxView.swift */,
+				A1000000000000000000007D /* AccountView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -303,6 +325,8 @@
 				A1000000000000000000002A /* CloudUploader.swift */,
 				A1000000000000000000002F /* RFQService.swift */,
 				A10000000000000000000041 /* RoomViewerCache.swift */,
+				A10000000000000000000077 /* ContractorsService.swift */,
+				A1000000000000000000007B /* InboxService.swift */,
 			);
 			path = Cloud;
 			sourceTree = "<group>";
@@ -483,6 +507,14 @@
 				A11111110000000000000073 /* QTheme.swift in Sources */,
 				A11111110000000000000074 /* EmbedWebView.swift in Sources */,
 				A11111110000000000000075 /* HomeView.swift in Sources */,
+				A11111110000000000000076 /* Contractor.swift in Sources */,
+				A11111110000000000000077 /* ContractorsService.swift in Sources */,
+				A11111110000000000000078 /* SearchView.swift in Sources */,
+				A11111110000000000000079 /* OrgProfileView.swift in Sources */,
+				A1111111000000000000007A /* Message.swift in Sources */,
+				A1111111000000000000007B /* InboxService.swift in Sources */,
+				A1111111000000000000007C /* InboxView.swift in Sources */,
+				A1111111000000000000007D /* AccountView.swift in Sources */,
 				A11111110000000000000025 /* FrameQualityScorer.swift in Sources */,
 				A11111110000000000000026 /* CornerAnnotation.swift in Sources */,
 				A11111110000000000000027 /* CornerAnnotationViewModel.swift in Sources */,
