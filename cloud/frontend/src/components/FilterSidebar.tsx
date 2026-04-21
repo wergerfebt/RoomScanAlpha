@@ -120,8 +120,10 @@ export default function FilterSidebar({
   const isMobile = useIsMobile();
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  // Price filter content
-  const priceFilter = prices.length >= 2 && (
+  // Price filter content — visible as soon as there's any bid. With a single
+  // bid the slider is degenerate (min === max), but the text inputs + rating
+  // controls still work, so we show it rather than hiding the whole section.
+  const priceFilter = prices.length >= 1 && (
     <div className="filter-section">
       <div style={{ padding: "14px 16px" }}><h4 style={{ fontSize: 14, fontWeight: 600 }}>Price</h4></div>
       <div className="filter-section-body">
