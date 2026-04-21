@@ -59,6 +59,8 @@ export default function ProjectDetail() {
   const [project, setProject] = useState<ProjectView | null>(null);
   const [bids, setBids] = useState<Bid[]>([]);
   const [rfqAttachments, setRfqAttachments] = useState<CarouselAttachment[]>([]);
+  const [uploadingPhotos, setUploadingPhotos] = useState(false);
+  const photoInputRef = useRef<HTMLInputElement>(null);
   const [rfqMeta, setRfqMeta] = useState<{ title: string | null; description: string | null; address: string | null; created_at: string | null } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -139,6 +141,46 @@ export default function ProjectDetail() {
       minRating: f.minRating,
     }));
   }, [bids]);
+
+  async function handlePhotoUpload(files: FileList | null) {
+    if (!files || !files.length || !rfqId) return;
+    setUploadingPhotos(true);
+    try {
+      const registered: CarouselAttachment[] = [];
+      for (const file of Array.from(files)) {
+        const ct = file.type || "image/jpeg";
+        const qs = new URLSearchParams({ content_type: ct, filename: file.name });
+        const { upload_url, blob_path } = await apiFetch<{ upload_url: string; blob_path: string }>(
+          `/api/rfqs/${rfqId}/attachment-upload-url?${qs.toString()}`,
+        );
+        const put = await fetch(upload_url, {
+          method: "PUT",
+          headers: { "Content-Type": ct },
+          body: file,
+        });
+        if (!put.ok) throw new Error(`Upload failed for ${file.name}`);
+        registered.push({ blob_path, content_type: ct, name: file.name, size_bytes: file.size });
+      }
+      const res = await apiFetch<{ attachments: CarouselAttachment[] }>(
+        `/api/rfqs/${rfqId}/attachments`,
+        {
+          method: "POST",
+          body: JSON.stringify({ attachments: registered }),
+        },
+      );
+      setRfqAttachments((prev) => {
+        const byPath = new Map<string, CarouselAttachment>();
+        for (const a of prev) byPath.set(a.blob_path, a);
+        for (const a of res.attachments) byPath.set(a.blob_path, a);
+        return Array.from(byPath.values());
+      });
+    } catch (err: unknown) {
+      alert((err as Error).message || "Failed to upload photos");
+    } finally {
+      setUploadingPhotos(false);
+      if (photoInputRef.current) photoInputRef.current.value = "";
+    }
+  }
 
   async function reloadBids() {
     if (!rfqId) return;
@@ -423,11 +465,41 @@ export default function ProjectDetail() {
             </section>
           )}
 
-          {/* Project photos — homeowner-shared media (direct upload + chat) */}
-          {rfqAttachments.some((a) => (a.content_type || "").startsWith("image/")) && (
+          {/* Project photos — homeowner-shared media (direct upload + chat).
+              Owners always see this section (with an add-photos affordance);
+              non-owners only see it when photos exist. */}
+          {(rfqMeta || rfqAttachments.some((a) => (a.content_type || "").startsWith("image/"))) && (
             <section style={{ marginTop: 32 }}>
-              <div className="pd-section-label">Project photos</div>
-              <PhotosCarousel attachments={rfqAttachments} />
+              <div className="pd-photos-head">
+                <div className="pd-section-label">Project photos</div>
+                {rfqMeta && (
+                  <>
+                    <input
+                      ref={photoInputRef}
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp,image/gif,image/heic"
+                      multiple
+                      style={{ display: "none" }}
+                      onChange={(e) => handlePhotoUpload(e.target.files)}
+                    />
+                    <button
+                      type="button"
+                      className="pd-pill pd-pill-secondary pd-pill-sm"
+                      disabled={uploadingPhotos}
+                      onClick={() => photoInputRef.current?.click()}
+                    >
+                      {uploadingPhotos ? "Uploading…" : "Add photos"}
+                    </button>
+                  </>
+                )}
+              </div>
+              {rfqAttachments.length > 0 ? (
+                <PhotosCarousel attachments={rfqAttachments} />
+              ) : (
+                <div className="pd-photos-empty">
+                  Share photos of the space, reference inspiration, or materials — contractors will see these when reviewing your project.
+                </div>
+              )}
             </section>
           )}
 
@@ -555,6 +627,19 @@ const PD_CSS = `
 .pd-pill-muted     { background: transparent; color: var(--q-ink-muted); border-color: var(--q-hairline); cursor: default; }
 .pd-pill-danger    { background: var(--q-surface); color: var(--q-danger); border-color: var(--q-hairline); }
 .pd-pill-danger:hover:not(:disabled) { background: var(--q-danger); color: var(--q-primary-ink); border-color: var(--q-danger); }
+.pd-pill-sm { padding: 6px 12px; font-size: 12px; font-weight: 600; }
+
+/* Project photos section — section header row with inline Add button */
+.pd-photos-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin-bottom: 10px;
+}
+.pd-photos-head .pd-section-label { margin-bottom: 0; }
+.pd-photos-empty {
+  padding: 16px 18px; background: var(--q-surface-muted); border-radius: 12px;
+  box-shadow: inset 0 0 0 0.5px var(--q-hairline);
+  font-size: 13px; color: var(--q-ink-muted); line-height: 1.5;
+}
 
 /* Edit modal */
 .pd-edit-overlay {
