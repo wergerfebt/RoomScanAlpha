@@ -46,6 +46,8 @@
 		A11111110000000000000070 /* Bid.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000070 /* Bid.swift */; };
 		A11111110000000000000071 /* ProjectDetail.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000071 /* ProjectDetail.swift */; };
 		A11111110000000000000072 /* ProjectDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000072 /* ProjectDetailView.swift */; };
+		A11111110000000000000073 /* QTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000073 /* QTheme.swift */; };
+		A11111110000000000000074 /* EmbedWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000074 /* EmbedWebView.swift */; };
 		B11111110000000000000001 /* ScanViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000001 /* ScanViewModelTests.swift */; };
 		B11111110000000000000002 /* MeshExtractorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000002 /* MeshExtractorTests.swift */; };
 		B11111110000000000000003 /* CapturedFrameTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000003 /* CapturedFrameTests.swift */; };
@@ -127,6 +129,8 @@
 		A10000000000000000000070 /* Bid.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Bid.swift; sourceTree = "<group>"; };
 		A10000000000000000000071 /* ProjectDetail.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectDetail.swift; sourceTree = "<group>"; };
 		A10000000000000000000072 /* ProjectDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectDetailView.swift; sourceTree = "<group>"; };
+		A10000000000000000000073 /* QTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QTheme.swift; sourceTree = "<group>"; };
+		A10000000000000000000074 /* EmbedWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmbedWebView.swift; sourceTree = "<group>"; };
 		B10000000000000000000001 /* ScanViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanViewModelTests.swift; sourceTree = "<group>"; };
 		B10000000000000000000002 /* MeshExtractorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeshExtractorTests.swift; sourceTree = "<group>"; };
 		B10000000000000000000003 /* CapturedFrameTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CapturedFrameTests.swift; sourceTree = "<group>"; };
@@ -259,6 +263,8 @@
 				A10000000000000000000042 /* RelocalizationView.swift */,
 				A10000000000000000000043 /* GapRescanView.swift */,
 				A10000000000000000000072 /* ProjectDetailView.swift */,
+				A10000000000000000000073 /* QTheme.swift */,
+				A10000000000000000000074 /* EmbedWebView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -471,6 +477,8 @@
 				A11111110000000000000070 /* Bid.swift in Sources */,
 				A11111110000000000000071 /* ProjectDetail.swift in Sources */,
 				A11111110000000000000072 /* ProjectDetailView.swift in Sources */,
+				A11111110000000000000073 /* QTheme.swift in Sources */,
+				A11111110000000000000074 /* EmbedWebView.swift in Sources */,
 				A11111110000000000000025 /* FrameQualityScorer.swift in Sources */,
 				A11111110000000000000026 /* CornerAnnotation.swift in Sources */,
 				A11111110000000000000027 /* CornerAnnotationViewModel.swift in Sources */,
