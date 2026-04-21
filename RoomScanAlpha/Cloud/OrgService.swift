@@ -54,8 +54,8 @@ final class OrgService {
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw URLError(.badServerResponse)
         }
-        struct Envelope: Codable { let images: [GalleryItem] }
-        return try JSONDecoder().decode(Envelope.self, from: data).images
+        struct Envelope: Codable { let media: [GalleryItem] }
+        return try JSONDecoder().decode(Envelope.self, from: data).media
     }
 
     /// `PUT /api/org` — admin update of org profile fields.

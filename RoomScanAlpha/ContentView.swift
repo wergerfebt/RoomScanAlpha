@@ -555,7 +555,10 @@ struct ContentView: View {
             InboxView(role: .homeowner) { showInbox = false }
         }
         .sheet(isPresented: $showAccount) {
-            AccountView { showAccount = false }
+            AccountView(
+                onClose: { showAccount = false },
+                onGoToWorkspace: account?.org != nil ? { workspaceMode = true } : nil
+            )
         }
     }
 

@@ -578,14 +578,23 @@ struct OrgServicesView: View {
 struct OrgSettingsView: View {
     let onClose: () -> Void
     @State private var org: OrgProfile?
-    @State private var name: String = ""
-    @State private var description: String = ""
-    @State private var address: String = ""
+    @State private var name = ""
+    @State private var description = ""
+    @State private var address = ""
+    @State private var websiteURL = ""
+    @State private var yelpURL = ""
+    @State private var googleReviewsURL = ""
+    @State private var hours: [String: String] = [:]
     @State private var loading = true
     @State private var saving = false
+    @State private var editing = false
     @State private var error: String?
     @State private var iconPicker: PhotosPickerItem?
+    @State private var bannerPicker: PhotosPickerItem?
     @State private var uploadingIcon = false
+    @State private var uploadingBanner = false
+
+    private let days = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 
     var body: some View {
         NavigationStack {
@@ -595,15 +604,14 @@ struct OrgSettingsView: View {
                 else {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 18) {
+                            bannerCard
                             iconCard
-                            fieldGroup
+                            infoSection
+                            linksSection
+                            hoursSection
                             if let error, !error.isEmpty {
                                 Text(error).font(.caption).foregroundStyle(QTheme.danger)
                             }
-                            Text("More profile options — banner, hours, team invites — are available on the web dashboard at roomscanalpha.com.")
-                                .font(.caption)
-                                .foregroundStyle(QTheme.inkDim)
-                                .padding(.top, 8)
                         }
                         .padding(20)
                     }
@@ -613,19 +621,32 @@ struct OrgSettingsView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Close", action: onClose).foregroundStyle(QTheme.ink)
+                    Button(editing ? "Cancel" : "Close") {
+                        if editing { resetFromOrg(); editing = false }
+                        else { onClose() }
+                    }
+                    .foregroundStyle(QTheme.ink)
                 }
                 ToolbarItem(placement: .primaryAction) {
-                    Button(action: save) {
-                        if saving { ProgressView().tint(QTheme.primary) }
-                        else { Text("Save").font(.system(size: 15, weight: .semibold)).foregroundStyle(QTheme.primary) }
+                    if editing {
+                        Button(action: save) {
+                            if saving { ProgressView().tint(QTheme.primary) }
+                            else { Text("Save").font(.system(size: 15, weight: .semibold)).foregroundStyle(QTheme.primary) }
+                        }
+                        .disabled(saving || !hasChanges)
+                    } else {
+                        Button("Edit") { editing = true }
+                            .fontWeight(.semibold)
+                            .foregroundStyle(QTheme.primary)
                     }
-                    .disabled(saving || !hasChanges)
                 }
             }
             .task { await load() }
             .onChange(of: iconPicker) { _, item in
                 if let item { Task { await uploadIcon(item) } }
+            }
+            .onChange(of: bannerPicker) { _, item in
+                if let item { Task { await uploadBanner(item) } }
             }
         }
         .tint(QTheme.primary)
@@ -636,7 +657,46 @@ struct OrgSettingsView: View {
         return name != org.name
             || description != (org.description ?? "")
             || address != (org.address ?? "")
+            || websiteURL != (org.websiteURL ?? "")
+            || yelpURL != (org.yelpURL ?? "")
+            || googleReviewsURL != (org.googleReviewsURL ?? "")
+            || hours != (org.businessHours ?? [:])
     }
+
+    // MARK: – Banner
+
+    private var bannerCard: some View {
+        ZStack(alignment: .bottomTrailing) {
+            Group {
+                if let urlString = org?.bannerImageURL, let url = URL(string: urlString) {
+                    AsyncImage(url: url) { phase in
+                        if let image = phase.image { image.resizable().scaledToFill() }
+                        else { QTheme.primary.opacity(0.5) }
+                    }
+                } else {
+                    LinearGradient(colors: [QTheme.primary, QTheme.primarySoft], startPoint: .topLeading, endPoint: .bottomTrailing)
+                }
+            }
+            .frame(height: 120)
+            .frame(maxWidth: .infinity)
+            .clipped()
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+
+            if editing {
+                PhotosPicker(selection: $bannerPicker, matching: .images) {
+                    ZStack {
+                        Circle().fill(.white).frame(width: 34, height: 34)
+                        Image(systemName: uploadingBanner ? "arrow.up.circle.fill" : "camera.fill")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(QTheme.ink)
+                    }
+                }
+                .padding(10)
+            }
+        }
+    }
+
+    // MARK: – Icon
 
     private var iconCard: some View {
         HStack(spacing: 16) {
@@ -652,23 +712,25 @@ struct OrgSettingsView: View {
                 .frame(width: 72, height: 72)
                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
 
-                PhotosPicker(selection: $iconPicker, matching: .images) {
-                    ZStack {
-                        Circle().fill(QTheme.primary).frame(width: 26, height: 26)
-                        Image(systemName: uploadingIcon ? "arrow.up.circle.fill" : "camera.fill")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(QTheme.primaryInk)
+                if editing {
+                    PhotosPicker(selection: $iconPicker, matching: .images) {
+                        ZStack {
+                            Circle().fill(QTheme.primary).frame(width: 26, height: 26)
+                            Image(systemName: uploadingIcon ? "arrow.up.circle.fill" : "camera.fill")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(QTheme.primaryInk)
+                        }
                     }
+                    .offset(x: 2, y: 2)
                 }
-                .offset(x: 2, y: 2)
             }
             VStack(alignment: .leading, spacing: 4) {
                 Text(name.isEmpty ? "Your Org" : name)
                     .font(.system(size: 18, weight: .bold))
                     .foregroundStyle(QTheme.ink)
-                Text(uploadingIcon ? "Uploading…" : "Tap the camera to change your logo.")
-                    .font(.caption)
-                    .foregroundStyle(QTheme.inkMuted)
+                if uploadingIcon {
+                    Text("Uploading…").font(.caption).foregroundStyle(QTheme.inkDim)
+                }
             }
             Spacer()
         }
@@ -686,51 +748,125 @@ struct OrgSettingsView: View {
             .overlay(Text(String(parts)).font(.system(size: 22, weight: .bold)).foregroundStyle(QTheme.primary))
     }
 
-    private var fieldGroup: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            fieldLabel("Organization name")
-            TextField("Name", text: $name)
-                .font(.system(size: 16))
-                .padding(.horizontal, 14).padding(.vertical, 12)
-                .background(QTheme.surface)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(QTheme.hairline, lineWidth: 0.5))
+    // MARK: – Info, links, hours
 
-            fieldLabel("About")
-            TextField("Describe your services", text: $description, axis: .vertical)
-                .lineLimit(3...8)
-                .font(.system(size: 16))
-                .padding(.horizontal, 14).padding(.vertical, 12)
-                .background(QTheme.surface)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(QTheme.hairline, lineWidth: 0.5))
-
-            fieldLabel("Business address")
-            TextField("Street, City, State", text: $address, axis: .vertical)
-                .lineLimit(1...3)
-                .font(.system(size: 16))
-                .padding(.horizontal, 14).padding(.vertical, 12)
-                .background(QTheme.surface)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(QTheme.hairline, lineWidth: 0.5))
+    private var infoSection: some View {
+        settingsBlock(title: "About") {
+            settingsField(label: "Organization name", text: $name, placeholder: "Your Org")
+            settingsField(label: "Description", text: $description, placeholder: "Describe your services", multiline: true)
+            settingsField(label: "Business address", text: $address, placeholder: "Street, City, State", multiline: true)
         }
     }
 
-    private func fieldLabel(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(QTheme.inkSoft)
+    private var linksSection: some View {
+        settingsBlock(title: "Links") {
+            settingsField(label: "Website", text: $websiteURL, placeholder: "https://…", keyboard: .URL)
+            settingsField(label: "Yelp URL", text: $yelpURL, placeholder: "https://yelp.com/biz/…", keyboard: .URL)
+            settingsField(label: "Google reviews URL", text: $googleReviewsURL, placeholder: "https://…", keyboard: .URL)
+        }
     }
+
+    private var hoursSection: some View {
+        settingsBlock(title: "Business hours") {
+            VStack(spacing: 8) {
+                ForEach(days, id: \.self) { day in
+                    HStack(spacing: 12) {
+                        Text(day.capitalized)
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(QTheme.ink)
+                            .frame(width: 90, alignment: .leading)
+
+                        if editing {
+                            TextField("e.g. 9am – 5pm", text: Binding(
+                                get: { hours[day] ?? "" },
+                                set: { hours[day] = $0 }
+                            ))
+                            .font(.system(size: 14))
+                            .padding(.horizontal, 12).padding(.vertical, 8)
+                            .background(QTheme.surfaceMuted)
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        } else {
+                            Text(hours[day]?.isEmpty == false ? hours[day]! : "Closed")
+                                .font(.system(size: 14))
+                                .foregroundStyle(hours[day]?.isEmpty == false ? QTheme.inkSoft : QTheme.inkDim)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func settingsBlock<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title.uppercased())
+                .font(.system(size: 12, weight: .bold)).tracking(0.5)
+                .foregroundStyle(QTheme.inkMuted)
+            VStack(alignment: .leading, spacing: 14) { content() }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(QTheme.surface)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(QTheme.hairline, lineWidth: 0.5))
+        }
+    }
+
+    private func settingsField(
+        label: String,
+        text: Binding<String>,
+        placeholder: String,
+        multiline: Bool = false,
+        keyboard: UIKeyboardType = .default
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(QTheme.inkSoft)
+            if editing {
+                Group {
+                    if multiline {
+                        TextField(placeholder, text: text, axis: .vertical)
+                            .lineLimit(1...6)
+                    } else {
+                        TextField(placeholder, text: text)
+                            .keyboardType(keyboard)
+                            .autocapitalization(.none)
+                    }
+                }
+                .font(.system(size: 16))
+                .padding(.horizontal, 12).padding(.vertical, 10)
+                .background(QTheme.surfaceMuted)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            } else {
+                Text(text.wrappedValue.isEmpty ? "—" : text.wrappedValue)
+                    .font(.system(size: 15))
+                    .foregroundStyle(text.wrappedValue.isEmpty ? QTheme.inkDim : QTheme.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    // MARK: – Data
 
     private func load() async {
         do {
             let o = try await OrgService.shared.getOrg()
             org = o
-            name = o.name
-            description = o.description ?? ""
-            address = o.address ?? ""
+            resetFromOrg()
         } catch { self.error = error.localizedDescription }
         loading = false
+    }
+
+    private func resetFromOrg() {
+        guard let o = org else { return }
+        name = o.name
+        description = o.description ?? ""
+        address = o.address ?? ""
+        websiteURL = o.websiteURL ?? ""
+        yelpURL = o.yelpURL ?? ""
+        googleReviewsURL = o.googleReviewsURL ?? ""
+        hours = o.businessHours ?? [:]
     }
 
     private func save() {
@@ -742,27 +878,45 @@ struct OrgSettingsView: View {
                     "name": name,
                     "description": description,
                     "address": address,
+                    "website_url": websiteURL,
+                    "yelp_url": yelpURL,
+                    "google_reviews_url": googleReviewsURL,
+                    "business_hours": hours,
                 ])
                 await load()
+                editing = false
             } catch { self.error = error.localizedDescription }
         }
     }
 
     private func uploadIcon(_ item: PhotosPickerItem) async {
         uploadingIcon = true
-        defer {
-            uploadingIcon = false
-            iconPicker = nil
-        }
+        defer { uploadingIcon = false; iconPicker = nil }
+        await uploadField(item: item, field: "icon_url", slotFetcher: OrgService.shared.orgIconUploadURL)
+    }
+
+    private func uploadBanner(_ item: PhotosPickerItem) async {
+        uploadingBanner = true
+        defer { uploadingBanner = false; bannerPicker = nil }
+        // Banner reuses the gallery upload-url since there's no separate banner
+        // endpoint — the gallery endpoint stores to the same org bucket.
+        await uploadField(item: item, field: "banner_image_url", slotFetcher: OrgService.shared.orgGalleryUploadURL)
+    }
+
+    private func uploadField(
+        item: PhotosPickerItem,
+        field: String,
+        slotFetcher: (String) async throws -> OrgService.UploadSlot
+    ) async {
         do {
             guard let data = try await item.loadTransferable(type: Data.self) else { return }
             let contentType = item.supportedContentTypes
                 .first(where: { $0.preferredMIMEType != nil })?
                 .preferredMIMEType ?? "image/jpeg"
-            let slot = try await OrgService.shared.orgIconUploadURL(contentType: contentType)
+            let slot = try await slotFetcher(contentType)
             guard let url = URL(string: slot.uploadURL) else { return }
             try await OrgService.shared.uploadBytes(to: url, contentType: contentType, data: data)
-            try await OrgService.shared.updateOrg(fields: ["icon_url": slot.blobPath])
+            try await OrgService.shared.updateOrg(fields: [field: slot.blobPath])
             await load()
         } catch { self.error = error.localizedDescription }
     }

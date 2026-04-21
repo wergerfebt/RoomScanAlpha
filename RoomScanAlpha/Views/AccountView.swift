@@ -6,6 +6,9 @@ import PhotosUI
 /// the web /account page. Email is read-only (Firebase-controlled).
 struct AccountView: View {
     let onClose: () -> Void
+    /// When set, shown as "Your Organization" card with a button to enter
+    /// the contractor workspace. Mirrors the web account page.
+    var onGoToWorkspace: (() -> Void)? = nil
 
     @State private var account: Account?
     @State private var name: String = ""
@@ -24,6 +27,9 @@ struct AccountView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
                         profileCard
+                        if account?.org != nil, onGoToWorkspace != nil {
+                            orgCard
+                        }
                         profileForm
                         if let error, !error.isEmpty {
                             Text(error).font(.caption).foregroundStyle(QTheme.danger)
@@ -128,6 +134,61 @@ struct AccountView: View {
         Circle()
             .fill(QTheme.primarySoft)
             .overlay(Text(initials).font(.system(size: 24, weight: .bold)).foregroundStyle(QTheme.primary))
+    }
+
+    @ViewBuilder
+    private var orgCard: some View {
+        if let org = account?.org {
+            VStack(alignment: .leading, spacing: 10) {
+                sectionLabel("Your Organization")
+                Button {
+                    onGoToWorkspace?()
+                    onClose()
+                } label: {
+                    HStack(spacing: 12) {
+                        orgAvatar(org).frame(width: 44, height: 44)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(org.name)
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(QTheme.ink)
+                            Text("Go to workspace")
+                                .font(.system(size: 13))
+                                .foregroundStyle(QTheme.primary)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(QTheme.inkDim)
+                    }
+                    .padding(16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(QTheme.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(QTheme.hairline, lineWidth: 0.5))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func orgAvatar(_ org: Account.OrgMembership) -> some View {
+        Group {
+            if let urlString = org.iconURL, let url = URL(string: urlString) {
+                AsyncImage(url: url) { phase in
+                    if let image = phase.image { image.resizable().scaledToFill() }
+                    else { orgInitials(org) }
+                }
+            } else { orgInitials(org) }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    private func orgInitials(_ org: Account.OrgMembership) -> some View {
+        let parts = org.name.split(separator: " ").prefix(2).compactMap { $0.first }
+        return RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(QTheme.primarySoft)
+            .overlay(Text(String(parts).uppercased()).font(.system(size: 14, weight: .bold)).foregroundStyle(QTheme.primary))
     }
 
     private var profileForm: some View {
