@@ -261,7 +261,7 @@ export default function ProjectDetail() {
               </div>
             </div>
             <div className="pd-header-actions">
-              <Link to={`/quote/${rfqId}`} className="pd-pill pd-pill-secondary">View 3D scan</Link>
+              <a href={`/quote/${rfqId}`} className="pd-pill pd-pill-secondary">View 3D scan</a>
               {rfqMeta && (
                 <button type="button" className="pd-pill pd-pill-secondary" onClick={openEdit}>Edit</button>
               )}

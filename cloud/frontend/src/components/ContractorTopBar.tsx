@@ -1,4 +1,4 @@
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import UserMenu from "./UserMenu";
 
 interface OrgInfo {
@@ -23,6 +23,7 @@ function getInitials(name: string | null): string {
 
 export default function ContractorTopBar({ org }: { org: OrgInfo }) {
   const location = useLocation();
+  const navigate = useNavigate();
   const params = new URLSearchParams(location.search);
   const activeTab = location.pathname === "/org" ? (params.get("tab") || "jobs") : "jobs";
 
@@ -49,7 +50,7 @@ export default function ContractorTopBar({ org }: { org: OrgInfo }) {
           </div>
         </div>
 
-        {/* Center: nav tabs */}
+        {/* Center: nav tabs (desktop) */}
         <nav className="ctb-tabs" aria-label="Contractor workspace">
           {NAV_TABS.map((t) => (
             <Link
@@ -61,6 +62,24 @@ export default function ContractorTopBar({ org }: { org: OrgInfo }) {
             </Link>
           ))}
         </nav>
+
+        {/* Mobile: dropdown picker (uses native <select> so iOS shows the
+            scrolling picker). Positioned after the brand, before the avatar. */}
+        <div className="ctb-tabs-mobile">
+          <select
+            aria-label="Workspace section"
+            value={activeTab}
+            onChange={(e) => navigate(`/org?tab=${e.target.value}`)}
+            className="ctb-tabs-select"
+          >
+            {NAV_TABS.map((t) => (
+              <option key={t.key} value={t.key}>{t.label}</option>
+            ))}
+          </select>
+          <svg className="ctb-tabs-caret" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M6 9l6 6 6-6" />
+          </svg>
+        </div>
 
         {/* Right: switch back + avatar (dropdown) */}
         <div className="ctb-right">
@@ -87,18 +106,28 @@ const CTB_CSS = `
   border-bottom: 0.5px solid rgba(255,255,255,0.08);
   position: sticky; top: 0; z-index: 100;
 }
+/* Mobile dropdown (native select) — hidden on desktop. */
+.ctb-tabs-mobile { display: none; position: relative; }
 @media (max-width: 860px) {
-  .ctb {
-    flex-wrap: wrap; height: auto; padding: 8px 12px;
-    row-gap: 6px; column-gap: 10px;
+  .ctb { padding: 0 12px; gap: 10px; }
+  .ctb-tabs { display: none; }
+  .ctb-tabs-mobile {
+    display: inline-flex; align-items: center;
+    background: rgba(255,255,255,0.08);
+    box-shadow: inset 0 0 0 0.5px rgba(255,255,255,0.12);
+    border-radius: 999px; height: 32px; min-width: 0;
   }
-  .ctb-brand { flex: 1 1 auto; min-width: 0; order: 1; }
-  .ctb-right { flex: 0 0 auto; margin-left: auto; order: 2; }
-  .ctb-tabs {
-    flex: 0 0 100%; width: 100%; min-width: 0; order: 3;
-    border-top: 0.5px solid rgba(255,255,255,0.08);
-    padding-top: 6px; margin-top: 2px;
-    overflow-x: auto;
+  .ctb-tabs-select {
+    appearance: none; -webkit-appearance: none;
+    background: transparent; border: none; color: #fff;
+    font-size: 13px; font-weight: 600; font-family: inherit;
+    padding: 0 24px 0 12px; cursor: pointer; outline: none;
+    max-width: 120px;
+  }
+  .ctb-tabs-select option { color: #141A16; background: #fff; }
+  .ctb-tabs-caret {
+    position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+    pointer-events: none; color: rgba(255,255,255,0.65);
   }
 }
 

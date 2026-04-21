@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import Layout from "../components/Layout";
 import FilterSidebar, { type FilterValues } from "../components/FilterSidebar";
 import ContractorCard, { type Bid } from "../components/ContractorCard";
@@ -117,12 +117,12 @@ export default function ProjectQuotes() {
             <h1 style={{ fontSize: 20, fontWeight: 700 }}>
               {data?.project_description || "Project Quotes"}
             </h1>
-            <Link
-              to={`/quote/${rfqId}`}
+            <a
+              href={`/quote/${rfqId}`}
               style={{ fontSize: 13, fontWeight: 600, color: "var(--color-primary)" }}
             >
               View scans &rarr;
-            </Link>
+            </a>
           </div>
           {bids.length > 0 && (
             <p style={{ fontSize: 13, color: "var(--color-text-muted)", marginTop: 4 }}>

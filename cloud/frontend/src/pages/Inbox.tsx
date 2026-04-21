@@ -588,10 +588,7 @@ const IB_CSS = `
 /* Mobile: show either the list OR the conversation, not both. The body has
    .ib-has-selection when a thread is selected. */
 @media (max-width: 760px) {
-  .ib { grid-template-columns: 1fr; }
-  /* Regular TopBar is ~56px; contractor top bar wraps to ~96px on mobile. */
-  .ib-role-homeowner { height: calc(100dvh - 56px); }
-  .ib-role-org { height: calc(100dvh - 96px); }
+  .ib { grid-template-columns: 1fr; height: calc(100dvh - 56px); }
   .ib-has-selection .ib-list { display: none; }
   .ib:not(.ib-has-selection) .ib-conv { display: none; }
 }

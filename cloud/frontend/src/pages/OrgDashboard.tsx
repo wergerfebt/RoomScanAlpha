@@ -582,11 +582,10 @@ const OJW_CSS = `
 @media (max-width: 1100px) {
   .ojw { grid-template-columns: 300px 1fr 320px; }
 }
-/* Mobile: single column, list OR detail (review stacked over bid). Contractor
-   topbar wraps to ~96px, so shorten the workspace height accordingly. */
+/* Mobile: single column, list OR detail (review stacked over bid). */
 @media (max-width: 820px) {
   .ojw {
-    display: flex; flex-direction: column; height: calc(100dvh - 96px);
+    display: flex; flex-direction: column; height: calc(100dvh - 56px);
   }
   .ojw-list { flex: 1; }
   .ojw-has-selection .ojw-list { display: none; }
