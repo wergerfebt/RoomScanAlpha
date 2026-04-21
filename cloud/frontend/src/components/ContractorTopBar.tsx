@@ -87,6 +87,19 @@ const CTB_CSS = `
   border-bottom: 0.5px solid rgba(255,255,255,0.08);
   position: sticky; top: 0; z-index: 100;
 }
+@media (max-width: 860px) {
+  .ctb {
+    flex-wrap: wrap; height: auto; padding: 8px 12px;
+    row-gap: 6px; column-gap: 10px;
+  }
+  .ctb-brand { flex: 1 1 auto; min-width: 0; }
+  .ctb-right { flex: 0 0 auto; margin-left: auto; }
+  .ctb-tabs {
+    order: 3; flex-basis: 100%;
+    border-top: 0.5px solid rgba(255,255,255,0.08);
+    padding-top: 6px; margin-top: 2px;
+  }
+}
 
 /* Brand */
 .ctb-brand { display: flex; align-items: center; gap: 18px; flex-shrink: 0; }

@@ -185,7 +185,7 @@ export default function Inbox() {
 
   return (
     <Layout>
-      <div className={`ib ib-role-${effectiveRole}`}>
+      <div className={`ib ib-role-${effectiveRole} ${selectedId ? "ib-has-selection" : ""}`}>
         {/* Thread list */}
         <aside className="ib-list">
           <div className="ib-list-head">
@@ -235,6 +235,12 @@ export default function Inbox() {
                   navigate(`/org?tab=jobs`);
                 }
               }}
+              onBack={() => {
+                setParams((prev) => {
+                  prev.delete("thread");
+                  return prev;
+                }, { replace: true });
+              }}
               onSend={handleSend}
             />
           ) : null}
@@ -279,10 +285,11 @@ function ThreadRow({ thread, active, onClick }: { thread: ThreadSummary; active:
 
 // --- Conversation ---
 
-function Conversation({ detail, role, onOpenProject, onSend }: {
+function Conversation({ detail, role, onOpenProject, onBack, onSend }: {
   detail: ConversationDetail;
   role: Role;
   onOpenProject: () => void;
+  onBack: () => void;
   onSend: (body: string, attachments: Attachment[]) => Promise<void>;
 }) {
   const counterpart = role === "homeowner" ? detail.org : detail.homeowner;
@@ -299,6 +306,11 @@ function Conversation({ detail, role, onOpenProject, onSend }: {
   return (
     <>
       <header className="ib-conv-head">
+        <button type="button" className="ib-back" onClick={onBack} aria-label="Back to inbox">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M15 18l-6-6 6-6" />
+          </svg>
+        </button>
         <div className="ib-conv-avatar">
           {cpIcon ? (
             <img src={cpIcon} alt="" />
@@ -565,9 +577,26 @@ void Link;
 const IB_CSS = `
 .ib {
   display: grid; grid-template-columns: 340px 1fr;
-  height: calc(100vh - 56px); background: var(--q-canvas); overflow: hidden;
+  height: calc(100dvh - 56px); background: var(--q-canvas); overflow: hidden;
 }
-@media (max-width: 760px) { .ib { grid-template-columns: 1fr; } .ib-conv { display: none; } }
+/* Mobile: show either the list OR the conversation, not both. The body has
+   .ib-has-selection when a thread is selected. */
+@media (max-width: 760px) {
+  .ib { grid-template-columns: 1fr; }
+  /* Regular TopBar is ~56px; contractor top bar wraps to ~96px on mobile. */
+  .ib-role-homeowner { height: calc(100dvh - 56px); }
+  .ib-role-org { height: calc(100dvh - 96px); }
+  .ib-has-selection .ib-list { display: none; }
+  .ib:not(.ib-has-selection) .ib-conv { display: none; }
+}
+.ib-back {
+  display: none; width: 36px; height: 36px; margin-right: 4px;
+  border: none; background: transparent; cursor: pointer;
+  color: var(--q-ink); border-radius: 50%;
+  align-items: center; justify-content: center; flex-shrink: 0;
+}
+.ib-back:hover { background: var(--q-surface-muted); }
+@media (max-width: 760px) { .ib-back { display: inline-flex; } }
 
 /* List */
 .ib-list {

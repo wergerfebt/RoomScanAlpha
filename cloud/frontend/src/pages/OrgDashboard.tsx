@@ -210,7 +210,7 @@ function OrgJobsWorkspace() {
 
   return (
     <>
-      <div className="ojw">
+      <div className={`ojw ${selectedJob ? "ojw-has-selection" : ""}`}>
         <aside className="ojw-list">
           <div className="ojw-list-head">
             <h1 className="ojw-title">Jobs</h1>
@@ -255,6 +255,7 @@ function OrgJobsWorkspace() {
               job={selectedJob}
               scanView={scanView}
               setScanView={setScanView}
+              onBack={() => setSelectedRfqId(null)}
             />
             <JobBidPane
               key={`bid-${selectedJob.rfq_id}`}
@@ -306,7 +307,7 @@ function JobRow({ job, active, onClick }: { job: Job; active: boolean; onClick: 
   );
 }
 
-function JobReviewPane({ job, scanView, setScanView }: { job: Job; scanView: "floorplan" | "bev"; setScanView: (v: "floorplan" | "bev") => void }) {
+function JobReviewPane({ job, scanView, setScanView, onBack }: { job: Job; scanView: "floorplan" | "bev"; setScanView: (v: "floorplan" | "bev") => void; onBack: () => void }) {
   const [view, setView] = useState<ContractorView | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -330,6 +331,12 @@ function JobReviewPane({ job, scanView, setScanView }: { job: Job; scanView: "fl
 
   return (
     <section className="ojw-review">
+      <button type="button" className="ojw-back" onClick={onBack} aria-label="Back to jobs">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M15 18l-6-6 6-6" />
+        </svg>
+        Back
+      </button>
       <div className="ojw-review-eyebrow">
         {job.address || "Scope review"}
       </div>
@@ -562,10 +569,44 @@ function JobBidPane({ job, onUpdate }: { job: Job; onUpdate: (rfqId: string, pat
 const OJW_CSS = `
 .ojw {
   display: grid; grid-template-columns: 340px 1fr 360px;
-  height: calc(100vh - 56px); background: var(--q-canvas); overflow: hidden;
+  height: calc(100dvh - 56px); background: var(--q-canvas); overflow: hidden;
 }
-@media (max-width: 1100px) { .ojw { grid-template-columns: 300px 1fr; } .ojw-bid { display: none; } }
-@media (max-width: 820px)  { .ojw { grid-template-columns: 1fr; } .ojw-review { display: none; } }
+@media (max-width: 1100px) {
+  .ojw { grid-template-columns: 300px 1fr 320px; }
+}
+/* Mobile: single column, list OR detail (review stacked over bid). Contractor
+   topbar wraps to ~96px, so shorten the workspace height accordingly. */
+@media (max-width: 820px) {
+  .ojw {
+    display: flex; flex-direction: column; height: calc(100dvh - 96px);
+  }
+  .ojw-list { flex: 1; }
+  .ojw-has-selection .ojw-list { display: none; }
+  .ojw:not(.ojw-has-selection) .ojw-review,
+  .ojw:not(.ojw-has-selection) .ojw-bid { display: none; }
+  .ojw:not(.ojw-has-selection) .ojw-nosel { display: none; }
+  /* Stack review above bid inside a scrollable flow. */
+  .ojw-review {
+    padding: 16px 16px 24px; overflow: visible; flex: none;
+    border-right: none;
+  }
+  .ojw-bid {
+    border-left: none; border-top: 0.5px solid var(--q-hairline);
+    padding: 20px 16px 28px; overflow: visible; flex: none;
+  }
+  .ojw-has-selection {
+    overflow-y: auto;
+  }
+}
+
+.ojw-back {
+  display: none; align-items: center; gap: 6px;
+  background: transparent; border: none; cursor: pointer;
+  color: var(--q-ink-soft); font-size: 13px; font-weight: 600; font-family: inherit;
+  padding: 6px 10px; border-radius: 8px; margin-bottom: 10px;
+}
+.ojw-back:hover { background: var(--q-surface-muted); color: var(--q-ink); }
+@media (max-width: 820px) { .ojw-back { display: inline-flex; } }
 
 .ojw-list {
   border-right: 0.5px solid var(--q-hairline); background: var(--q-surface);
