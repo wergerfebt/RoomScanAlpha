@@ -288,61 +288,61 @@ struct OrgGalleryView: View {
     }
 
     private func tile(_ item: GalleryItem, index: Int) -> some View {
-        // Uniform square so the grid reads as a clean 2-up no matter the
-        // source aspect ratios. Tapping opens the paging lightbox at this
-        // index; the trash badge is a separate hit area.
-        ZStack(alignment: .topTrailing) {
-            Color.clear.aspectRatio(1, contentMode: .fit)
-            Group {
-                if let urlString = item.imageURL, let url = URL(string: urlString) {
-                    Button {
-                        lightboxStart = index
-                    } label: {
-                        ZStack(alignment: .bottomLeading) {
-                            AsyncImage(url: url) { phase in
-                                if let image = phase.image {
-                                    image.resizable().scaledToFill()
-                                } else {
-                                    Rectangle().fill(QTheme.surfaceMuted)
-                                }
-                            }
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .clipped()
-
-                            if item.beforeImageURL != nil {
-                                Text("BEFORE / AFTER")
-                                    .font(.system(size: 9, weight: .bold))
-                                    .tracking(0.4)
-                                    .foregroundStyle(.white)
-                                    .padding(.horizontal, 7).padding(.vertical, 3)
-                                    .background(Color.black.opacity(0.55))
-                                    .clipShape(Capsule())
-                                    .padding(8)
+        // Strict uniform squares via Rectangle().aspectRatio(1).overlay —
+        // the Rectangle owns the frame, the AsyncImage inside is strictly
+        // clipped to it. No Button-inside-Button: the whole tile uses
+        // onTapGesture for the lightbox so the trash Button can own its
+        // own hit area.
+        Rectangle()
+            .fill(QTheme.surfaceMuted)
+            .aspectRatio(1, contentMode: .fit)
+            .overlay(
+                Group {
+                    if let urlString = item.imageURL, let url = URL(string: urlString) {
+                        AsyncImage(url: url) { phase in
+                            if let image = phase.image {
+                                image.resizable().scaledToFill()
+                            } else {
+                                Color.clear
                             }
                         }
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                     }
-                    .buttonStyle(.plain)
-                } else {
-                    Rectangle().fill(QTheme.surfaceMuted)
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+            )
+            .clipped()
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .onTapGesture {
+                if item.imageURL != nil { lightboxStart = index }
+            }
+            .overlay(alignment: .bottomLeading) {
+                if item.beforeImageURL != nil {
+                    Text("BEFORE / AFTER")
+                        .font(.system(size: 9, weight: .bold))
+                        .tracking(0.4)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 7).padding(.vertical, 3)
+                        .background(Color.black.opacity(0.55))
+                        .clipShape(Capsule())
+                        .padding(8)
+                        .allowsHitTesting(false)
                 }
             }
-
-            Button {
-                deleteTarget = item
-            } label: {
-                Image(systemName: "trash.fill")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .padding(7)
-                    .background(Color.black.opacity(0.55))
-                    .clipShape(Circle())
+            .overlay(alignment: .topTrailing) {
+                Button {
+                    deleteTarget = item
+                } label: {
+                    Image(systemName: "trash.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(7)
+                        .background(Color.black.opacity(0.55))
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .padding(6)
+                .accessibilityLabel("Remove photo")
             }
-            .buttonStyle(.plain)
-            .padding(6)
-            .accessibilityLabel("Remove photo")
-        }
     }
 
     private func addPicker(_ label: String) -> some View {
@@ -362,7 +362,13 @@ struct OrgGalleryView: View {
     private func load() async {
         loading = true
         defer { loading = false }
-        items = (try? await OrgService.shared.listGallery()) ?? []
+        // Preserve existing items on error so a flaky refresh doesn't
+        // flash "Gallery is empty" over real content.
+        do {
+            items = try await OrgService.shared.listGallery()
+        } catch {
+            self.error = error.localizedDescription
+        }
     }
 
     private func ingest(_ selected: [PhotosPickerItem]) async {
