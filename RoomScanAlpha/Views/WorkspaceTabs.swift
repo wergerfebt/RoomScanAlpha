@@ -1,4 +1,5 @@
 import SwiftUI
+import PhotosUI
 
 // MARK: – Jobs
 
@@ -180,40 +181,38 @@ struct OrgGalleryView: View {
     @State private var items: [GalleryItem] = []
     @State private var loading = true
     @State private var lightboxURL: URL?
+    @State private var pickerItems: [PhotosPickerItem] = []
+    @State private var uploadingCount = 0
+    @State private var deleteTarget: GalleryItem?
+    @State private var error: String?
 
     var body: some View {
         NavigationStack {
             ZStack {
                 QTheme.canvas.ignoresSafeArea()
-                if loading { ProgressView().tint(QTheme.primary) }
-                else if items.isEmpty {
-                    emptyState("Gallery is empty", "Upload photos from the web dashboard at roomscanalpha.com.")
+                if loading && items.isEmpty { ProgressView().tint(QTheme.primary) }
+                else if items.isEmpty && uploadingCount == 0 {
+                    VStack(spacing: 12) {
+                        emptyState("Gallery is empty", "Tap the + button to add your first work photos.")
+                        addPicker("Add photos")
+                    }
                 } else {
                     ScrollView {
                         LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
+                            if uploadingCount > 0 {
+                                uploadingTile
+                            }
                             ForEach(items) { item in
-                                if let urlString = item.imageURL, let url = URL(string: urlString) {
-                                    Button {
-                                        lightboxURL = url
-                                    } label: {
-                                        AsyncImage(url: url) { phase in
-                                            if let image = phase.image {
-                                                image.resizable().scaledToFill()
-                                            } else {
-                                                Rectangle().fill(QTheme.surfaceMuted)
-                                            }
-                                        }
-                                        .frame(height: 140)
-                                        .frame(maxWidth: .infinity)
-                                        .clipped()
-                                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                                    }
-                                    .buttonStyle(.plain)
-                                }
+                                tile(item)
                             }
                         }
                         .padding(12)
+
+                        if let error, !error.isEmpty {
+                            Text(error).font(.caption).foregroundStyle(QTheme.danger).padding(.horizontal, 16)
+                        }
                     }
+                    .refreshable { await load() }
                 }
             }
             .navigationTitle("Gallery")
@@ -222,6 +221,14 @@ struct OrgGalleryView: View {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Close", action: onClose).foregroundStyle(QTheme.ink)
                 }
+                ToolbarItem(placement: .primaryAction) {
+                    PhotosPicker(selection: $pickerItems, maxSelectionCount: 6, matching: .images) {
+                        Image(systemName: "plus")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(QTheme.primary)
+                    }
+                    .accessibilityLabel("Add photos")
+                }
             }
             .fullScreenCover(item: Binding(
                 get: { lightboxURL.map { URLItem(url: $0) } },
@@ -229,12 +236,134 @@ struct OrgGalleryView: View {
             )) { item in
                 GalleryLightbox(url: item.url) { lightboxURL = nil }
             }
+            .alert(
+                "Remove photo?",
+                isPresented: Binding(
+                    get: { deleteTarget != nil },
+                    set: { if !$0 { deleteTarget = nil } }
+                ),
+                presenting: deleteTarget
+            ) { target in
+                Button("Cancel", role: .cancel) {}
+                Button("Remove", role: .destructive) {
+                    Task { await delete(target) }
+                }
+            } message: { _ in
+                Text("This photo will no longer appear on your org profile.")
+            }
+            .onChange(of: pickerItems) { _, items in
+                if !items.isEmpty { Task { await ingest(items) } }
+            }
         }
         .tint(QTheme.primary)
-        .task {
-            items = (try? await OrgService.shared.listGallery()) ?? []
-            loading = false
+        .task { await load() }
+    }
+
+    private var uploadingTile: some View {
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(QTheme.surfaceMuted)
+            .frame(height: 140)
+            .overlay(
+                VStack(spacing: 6) {
+                    ProgressView().tint(QTheme.primary)
+                    Text("Uploading…").font(.caption).foregroundStyle(QTheme.inkMuted)
+                }
+            )
+    }
+
+    private func tile(_ item: GalleryItem) -> some View {
+        ZStack(alignment: .topTrailing) {
+            if let urlString = item.imageURL, let url = URL(string: urlString) {
+                Button {
+                    lightboxURL = url
+                } label: {
+                    AsyncImage(url: url) { phase in
+                        if let image = phase.image {
+                            image.resizable().scaledToFill()
+                        } else {
+                            Rectangle().fill(QTheme.surfaceMuted)
+                        }
+                    }
+                    .frame(height: 140)
+                    .frame(maxWidth: .infinity)
+                    .clipped()
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+                .buttonStyle(.plain)
+            } else {
+                Rectangle().fill(QTheme.surfaceMuted).frame(height: 140)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+
+            Button {
+                deleteTarget = item
+            } label: {
+                Image(systemName: "trash.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(7)
+                    .background(Color.black.opacity(0.55))
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .padding(6)
+            .accessibilityLabel("Remove photo")
         }
+    }
+
+    private func addPicker(_ label: String) -> some View {
+        PhotosPicker(selection: $pickerItems, maxSelectionCount: 6, matching: .images) {
+            HStack(spacing: 8) {
+                Image(systemName: "plus")
+                Text(label)
+            }
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(QTheme.primaryInk)
+            .padding(.horizontal, 18).padding(.vertical, 10)
+            .background(QTheme.primary)
+            .clipShape(Capsule())
+        }
+    }
+
+    private func load() async {
+        loading = true
+        defer { loading = false }
+        items = (try? await OrgService.shared.listGallery()) ?? []
+    }
+
+    private func ingest(_ selected: [PhotosPickerItem]) async {
+        defer { pickerItems = [] }
+        for item in selected {
+            uploadingCount += 1
+            do {
+                guard let data = try await item.loadTransferable(type: Data.self) else {
+                    uploadingCount -= 1
+                    continue
+                }
+                let contentType = item.supportedContentTypes
+                    .first(where: { $0.preferredMIMEType != nil })?
+                    .preferredMIMEType ?? "image/jpeg"
+                let slot = try await OrgService.shared.orgGalleryUploadURL(contentType: contentType)
+                guard let url = URL(string: slot.uploadURL) else {
+                    uploadingCount -= 1
+                    continue
+                }
+                try await OrgService.shared.uploadBytes(to: url, contentType: contentType, data: data)
+                try await OrgService.shared.addGalleryItem(imageBlobPath: slot.blobPath)
+            } catch {
+                self.error = error.localizedDescription
+            }
+            uploadingCount -= 1
+        }
+        await load()
+    }
+
+    private func delete(_ item: GalleryItem) async {
+        do {
+            try await OrgService.shared.deleteGalleryItem(imageId: item.id)
+            items.removeAll { $0.id == item.id }
+            deleteTarget = nil
+        } catch { self.error = error.localizedDescription }
     }
 }
 
@@ -336,37 +465,49 @@ struct OrgTeamView: View {
 
 struct OrgServicesView: View {
     let onClose: () -> Void
-    @State private var services: [OrgProfile.Service] = []
+    @State private var allServices: [ServiceRecord] = []
+    @State private var selected: Set<String> = []
     @State private var loading = true
+    @State private var saving = false
+    @State private var error: String?
+    @State private var initialSelected: Set<String> = []
+
+    private var hasChanges: Bool { selected != initialSelected }
 
     var body: some View {
         NavigationStack {
             ZStack {
                 QTheme.canvas.ignoresSafeArea()
-                if loading { ProgressView().tint(QTheme.primary) }
-                else if services.isEmpty {
-                    emptyState("No services selected", "Pick your service categories from the web dashboard.")
+                if loading && allServices.isEmpty { ProgressView().tint(QTheme.primary) }
+                else if allServices.isEmpty {
+                    emptyState("No services available", "Pull to retry.")
                 } else {
                     ScrollView {
-                        LazyVStack(spacing: 0) {
-                            ForEach(Array(services.enumerated()), id: \.element.id) { idx, s in
-                                if idx > 0 { Divider().background(QTheme.divider) }
-                                HStack {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundStyle(QTheme.primary)
-                                    Text(s.name)
-                                        .font(.system(size: 15))
-                                        .foregroundStyle(QTheme.ink)
-                                    Spacer()
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Pick the work categories your org covers. These power homeowner search.")
+                                .font(.callout)
+                                .foregroundStyle(QTheme.inkMuted)
+                                .padding(.horizontal, 16)
+
+                            LazyVStack(spacing: 0) {
+                                ForEach(Array(allServices.enumerated()), id: \.element.id) { idx, s in
+                                    if idx > 0 { Divider().background(QTheme.divider) }
+                                    row(s)
                                 }
-                                .padding(14)
+                            }
+                            .background(QTheme.surface)
+                            .clipShape(RoundedRectangle(cornerRadius: 14))
+                            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(QTheme.hairline, lineWidth: 0.5))
+                            .padding(.horizontal, 16)
+
+                            if let error, !error.isEmpty {
+                                Text(error).font(.caption).foregroundStyle(QTheme.danger)
+                                    .padding(.horizontal, 16)
                             }
                         }
-                        .background(QTheme.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
-                        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(QTheme.hairline, lineWidth: 0.5))
-                        .padding(16)
+                        .padding(.vertical, 16)
                     }
+                    .refreshable { await load() }
                 }
             }
             .navigationTitle("Services")
@@ -375,12 +516,59 @@ struct OrgServicesView: View {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Close", action: onClose).foregroundStyle(QTheme.ink)
                 }
+                ToolbarItem(placement: .primaryAction) {
+                    Button(action: save) {
+                        if saving { ProgressView().tint(QTheme.primary) }
+                        else { Text("Save").font(.system(size: 15, weight: .semibold)).foregroundStyle(QTheme.primary) }
+                    }
+                    .disabled(saving || !hasChanges)
+                }
             }
+            .task { await load() }
         }
         .tint(QTheme.primary)
-        .task {
-            services = (try? await OrgService.shared.listOrgServices()) ?? []
-            loading = false
+    }
+
+    private func row(_ s: ServiceRecord) -> some View {
+        Button {
+            if selected.contains(s.id) { selected.remove(s.id) } else { selected.insert(s.id) }
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: selected.contains(s.id) ? "checkmark.square.fill" : "square")
+                    .font(.system(size: 18))
+                    .foregroundStyle(selected.contains(s.id) ? QTheme.primary : QTheme.inkDim)
+                Text(s.name)
+                    .font(.system(size: 15))
+                    .foregroundStyle(QTheme.ink)
+                Spacer()
+            }
+            .padding(.horizontal, 14).padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func load() async {
+        loading = true
+        defer { loading = false }
+        do {
+            async let allTask = OrgService.shared.listAllServices()
+            async let mineTask = OrgService.shared.listOrgServices()
+            allServices = try await allTask
+            let mine = (try? await mineTask) ?? []
+            selected = Set(mine.map(\.id))
+            initialSelected = selected
+        } catch { self.error = error.localizedDescription }
+    }
+
+    private func save() {
+        Task {
+            saving = true
+            defer { saving = false }
+            do {
+                try await OrgService.shared.updateOrgServices(serviceIds: Array(selected))
+                initialSelected = selected
+            } catch { self.error = error.localizedDescription }
         }
     }
 }
@@ -390,45 +578,35 @@ struct OrgServicesView: View {
 struct OrgSettingsView: View {
     let onClose: () -> Void
     @State private var org: OrgProfile?
+    @State private var name: String = ""
+    @State private var description: String = ""
+    @State private var address: String = ""
     @State private var loading = true
+    @State private var saving = false
+    @State private var error: String?
+    @State private var iconPicker: PhotosPickerItem?
+    @State private var uploadingIcon = false
 
     var body: some View {
         NavigationStack {
             ZStack {
                 QTheme.canvas.ignoresSafeArea()
-                if loading { ProgressView().tint(QTheme.primary) }
-                else if let org = org {
+                if loading && org == nil { ProgressView().tint(QTheme.primary) }
+                else {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 18) {
-                            infoRow(label: "Organization", value: org.name)
-                            if let description = org.description, !description.isEmpty {
-                                infoRow(label: "Description", value: description)
+                            iconCard
+                            fieldGroup
+                            if let error, !error.isEmpty {
+                                Text(error).font(.caption).foregroundStyle(QTheme.danger)
                             }
-                            if let address = org.address, !address.isEmpty {
-                                infoRow(label: "Address", value: address)
-                            }
-                            if let rating = org.avgRating {
-                                infoRow(label: "Rating", value: String(format: "%.1f", rating))
-                            }
-
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("PROFILE EDITING")
-                                    .font(.system(size: 11, weight: .bold))
-                                    .tracking(0.5)
-                                    .foregroundStyle(QTheme.inkMuted)
-                                Text("To edit your logo, banner, hours, or services, sign in at roomscanalpha.com on the web.")
-                                    .font(.system(size: 14))
-                                    .foregroundStyle(QTheme.inkSoft)
-                            }
-                            .padding(18)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(QTheme.surfaceMuted)
-                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            Text("More profile options — banner, hours, team invites — are available on the web dashboard at roomscanalpha.com.")
+                                .font(.caption)
+                                .foregroundStyle(QTheme.inkDim)
+                                .padding(.top, 8)
                         }
                         .padding(20)
                     }
-                } else {
-                    emptyState("Couldn't load settings", "Check your connection and retry.")
                 }
             }
             .navigationTitle("Settings")
@@ -437,31 +615,156 @@ struct OrgSettingsView: View {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Close", action: onClose).foregroundStyle(QTheme.ink)
                 }
+                ToolbarItem(placement: .primaryAction) {
+                    Button(action: save) {
+                        if saving { ProgressView().tint(QTheme.primary) }
+                        else { Text("Save").font(.system(size: 15, weight: .semibold)).foregroundStyle(QTheme.primary) }
+                    }
+                    .disabled(saving || !hasChanges)
+                }
+            }
+            .task { await load() }
+            .onChange(of: iconPicker) { _, item in
+                if let item { Task { await uploadIcon(item) } }
             }
         }
         .tint(QTheme.primary)
-        .task {
-            org = try? await OrgService.shared.getOrg()
-            loading = false
+    }
+
+    private var hasChanges: Bool {
+        guard let org else { return false }
+        return name != org.name
+            || description != (org.description ?? "")
+            || address != (org.address ?? "")
+    }
+
+    private var iconCard: some View {
+        HStack(spacing: 16) {
+            ZStack(alignment: .bottomTrailing) {
+                Group {
+                    if let urlString = org?.iconURL, let url = URL(string: urlString) {
+                        AsyncImage(url: url) { phase in
+                            if let image = phase.image { image.resizable().scaledToFill() }
+                            else { iconInitials }
+                        }
+                    } else { iconInitials }
+                }
+                .frame(width: 72, height: 72)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+
+                PhotosPicker(selection: $iconPicker, matching: .images) {
+                    ZStack {
+                        Circle().fill(QTheme.primary).frame(width: 26, height: 26)
+                        Image(systemName: uploadingIcon ? "arrow.up.circle.fill" : "camera.fill")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(QTheme.primaryInk)
+                    }
+                }
+                .offset(x: 2, y: 2)
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                Text(name.isEmpty ? "Your Org" : name)
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(QTheme.ink)
+                Text(uploadingIcon ? "Uploading…" : "Tap the camera to change your logo.")
+                    .font(.caption)
+                    .foregroundStyle(QTheme.inkMuted)
+            }
+            Spacer()
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(QTheme.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(QTheme.hairline, lineWidth: 0.5))
+    }
+
+    private var iconInitials: some View {
+        let parts = (org?.name ?? "Q").split(separator: " ").prefix(2).compactMap { $0.first }
+        return RoundedRectangle(cornerRadius: 16, style: .continuous)
+            .fill(QTheme.primarySoft)
+            .overlay(Text(String(parts)).font(.system(size: 22, weight: .bold)).foregroundStyle(QTheme.primary))
+    }
+
+    private var fieldGroup: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            fieldLabel("Organization name")
+            TextField("Name", text: $name)
+                .font(.system(size: 16))
+                .padding(.horizontal, 14).padding(.vertical, 12)
+                .background(QTheme.surface)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(QTheme.hairline, lineWidth: 0.5))
+
+            fieldLabel("About")
+            TextField("Describe your services", text: $description, axis: .vertical)
+                .lineLimit(3...8)
+                .font(.system(size: 16))
+                .padding(.horizontal, 14).padding(.vertical, 12)
+                .background(QTheme.surface)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(QTheme.hairline, lineWidth: 0.5))
+
+            fieldLabel("Business address")
+            TextField("Street, City, State", text: $address, axis: .vertical)
+                .lineLimit(1...3)
+                .font(.system(size: 16))
+                .padding(.horizontal, 14).padding(.vertical, 12)
+                .background(QTheme.surface)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(QTheme.hairline, lineWidth: 0.5))
         }
     }
 
-    private func infoRow(label: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label.uppercased())
-                .font(.system(size: 11, weight: .bold))
-                .tracking(0.4)
-                .foregroundStyle(QTheme.inkMuted)
-            Text(value)
-                .font(.system(size: 15))
-                .foregroundStyle(QTheme.ink)
-                .fixedSize(horizontal: false, vertical: true)
+    private func fieldLabel(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(QTheme.inkSoft)
+    }
+
+    private func load() async {
+        do {
+            let o = try await OrgService.shared.getOrg()
+            org = o
+            name = o.name
+            description = o.description ?? ""
+            address = o.address ?? ""
+        } catch { self.error = error.localizedDescription }
+        loading = false
+    }
+
+    private func save() {
+        Task {
+            saving = true
+            defer { saving = false }
+            do {
+                try await OrgService.shared.updateOrg(fields: [
+                    "name": name,
+                    "description": description,
+                    "address": address,
+                ])
+                await load()
+            } catch { self.error = error.localizedDescription }
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(QTheme.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(QTheme.hairline, lineWidth: 0.5))
+    }
+
+    private func uploadIcon(_ item: PhotosPickerItem) async {
+        uploadingIcon = true
+        defer {
+            uploadingIcon = false
+            iconPicker = nil
+        }
+        do {
+            guard let data = try await item.loadTransferable(type: Data.self) else { return }
+            let contentType = item.supportedContentTypes
+                .first(where: { $0.preferredMIMEType != nil })?
+                .preferredMIMEType ?? "image/jpeg"
+            let slot = try await OrgService.shared.orgIconUploadURL(contentType: contentType)
+            guard let url = URL(string: slot.uploadURL) else { return }
+            try await OrgService.shared.uploadBytes(to: url, contentType: contentType, data: data)
+            try await OrgService.shared.updateOrg(fields: ["icon_url": slot.blobPath])
+            await load()
+        } catch { self.error = error.localizedDescription }
     }
 }
 
