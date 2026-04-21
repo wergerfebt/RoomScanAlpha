@@ -1000,6 +1000,7 @@ async def submit_bid(
                 cursor, bid_id=bid_id, attachment_id=attachment_id, role="image",
             )
             image_attachments_info.append({
+                "attachment_id": attachment_id,
                 "blob_path": img_blob_path,
                 "content_type": ct,
                 "name": image.filename,
@@ -1130,26 +1131,27 @@ def list_bids(rfq_id: str, token: str = None, authorization: Optional[str] = Hea
         if bid_ids:
             placeholders = ",".join(["%s"] * len(bid_ids))
             cursor.execute(
-                f"""SELECT ba.bid_id, ba.role, a.blob_path, a.content_type, a.name, a.size_bytes
+                f"""SELECT ba.bid_id, ba.role, a.id, a.blob_path, a.content_type, a.name, a.size_bytes
                     FROM bid_attachments ba
                     JOIN attachments a ON a.id = ba.attachment_id
                     WHERE ba.bid_id IN ({placeholders})
                     ORDER BY ba.created_at""",
                 bid_ids,
             )
-            for bid_id_val, role, bp, ct, nm, sb in cursor.fetchall():
+            for bid_id_val, role, aid, bp, ct, nm, sb in cursor.fetchall():
                 entry = attachments_by_bid.setdefault(str(bid_id_val), {"pdf_blob_path": None, "images": []})
                 if role == "quote_pdf":
                     entry["pdf_blob_path"] = bp
                 else:
                     entry["images"].append({
+                        "attachment_id": str(aid),
                         "blob_path": bp, "content_type": ct, "name": nm, "size_bytes": sb,
                     })
 
         # Fetch RFQ-level attachments so the homeowner can see media they've
         # shared (directly or via chat) alongside the bids.
         cursor.execute(
-            """SELECT a.blob_path, a.content_type, a.name, a.size_bytes
+            """SELECT a.id, a.blob_path, a.content_type, a.name, a.size_bytes
                FROM rfq_attachments ra
                JOIN attachments a ON a.id = ra.attachment_id
                WHERE ra.rfq_id = %s
@@ -1157,8 +1159,8 @@ def list_bids(rfq_id: str, token: str = None, authorization: Optional[str] = Hea
             (rfq_id,),
         )
         rfq_attachment_rows = [
-            {"blob_path": bp, "content_type": ct, "name": nm, "size_bytes": sb}
-            for bp, ct, nm, sb in cursor.fetchall()
+            {"attachment_id": str(aid), "blob_path": bp, "content_type": ct, "name": nm, "size_bytes": sb}
+            for aid, bp, ct, nm, sb in cursor.fetchall()
         ]
 
         # Collect org IDs to batch-fetch gallery images
@@ -3135,19 +3137,20 @@ def list_org_jobs(authorization: str = Header(None)) -> dict:
         if bid_ids_for_lookup:
             placeholders = ",".join(["%s"] * len(bid_ids_for_lookup))
             cursor.execute(
-                f"""SELECT ba.bid_id, ba.role, a.blob_path, a.content_type, a.name, a.size_bytes
+                f"""SELECT ba.bid_id, ba.role, a.id, a.blob_path, a.content_type, a.name, a.size_bytes
                     FROM bid_attachments ba
                     JOIN attachments a ON a.id = ba.attachment_id
                     WHERE ba.bid_id IN ({placeholders})
                     ORDER BY ba.created_at""",
                 bid_ids_for_lookup,
             )
-            for bid_id_val, role, bp, ct, nm, sb in cursor.fetchall():
+            for bid_id_val, role, aid, bp, ct, nm, sb in cursor.fetchall():
                 entry = attachments_by_bid.setdefault(str(bid_id_val), {"pdf_blob_path": None, "images": []})
                 if role == "quote_pdf":
                     entry["pdf_blob_path"] = bp
                 else:
                     entry["images"].append({
+                        "attachment_id": str(aid),
                         "blob_path": bp, "content_type": ct, "name": nm, "size_bytes": sb,
                     })
 
@@ -3159,15 +3162,16 @@ def list_org_jobs(authorization: str = Header(None)) -> dict:
         if all_rfq_ids:
             placeholders = ",".join(["%s"] * len(all_rfq_ids))
             cursor.execute(
-                f"""SELECT ra.rfq_id, a.blob_path, a.content_type, a.name, a.size_bytes
+                f"""SELECT ra.rfq_id, a.id, a.blob_path, a.content_type, a.name, a.size_bytes
                     FROM rfq_attachments ra
                     JOIN attachments a ON a.id = ra.attachment_id
                     WHERE ra.rfq_id IN ({placeholders})
                     ORDER BY ra.created_at""",
                 all_rfq_ids,
             )
-            for rid, bp, ct, nm, sb in cursor.fetchall():
+            for rid, aid, bp, ct, nm, sb in cursor.fetchall():
                 rfq_attachments_by_rfq.setdefault(str(rid), []).append({
+                    "attachment_id": str(aid),
                     "blob_path": bp, "content_type": ct, "name": nm, "size_bytes": sb,
                 })
     finally:
@@ -4560,6 +4564,28 @@ async def register_bid_attachments(rfq_id: str, bid_id: str, request: Request, a
         conn.close()
 
     return {"attachments": _resolve_attachments(created)}
+
+
+@app.delete("/api/rfqs/{rfq_id}/bids/{bid_id}/attachments/{attachment_id}")
+def delete_bid_attachment(rfq_id: str, bid_id: str, attachment_id: str, authorization: str = Header(None)) -> dict:
+    """Unlink an attachment from a bid. Caller must be a member of the bid's org.
+
+    Keeps the underlying `attachments` row + blob intact in case the same
+    attachment is still linked via a message or another scope.
+    """
+    decoded = verify_firebase_token(authorization)
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        _verify_bid_org_access(cursor, rfq_id, bid_id, decoded["uid"])
+        cursor.execute(
+            "DELETE FROM bid_attachments WHERE bid_id = %s AND attachment_id = %s",
+            (bid_id, attachment_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"status": "unlinked"}
 
 
 @app.get("/health")

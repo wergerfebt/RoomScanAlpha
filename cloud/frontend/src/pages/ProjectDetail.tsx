@@ -465,13 +465,13 @@ export default function ProjectDetail() {
             </section>
           )}
 
-          {/* Project photos — homeowner-shared media (direct upload + chat).
+          {/* Project media — homeowner-shared media (direct upload + chat).
               Owners always see this section (with an add-photos affordance);
               non-owners only see it when photos exist. */}
           {(rfqMeta || rfqAttachments.some((a) => (a.content_type || "").startsWith("image/"))) && (
             <section style={{ marginTop: 32 }}>
               <div className="pd-photos-head">
-                <div className="pd-section-label">Project photos</div>
+                <div className="pd-section-label">Project media</div>
                 {rfqMeta && (
                   <>
                     <input
@@ -488,16 +488,23 @@ export default function ProjectDetail() {
                       disabled={uploadingPhotos}
                       onClick={() => photoInputRef.current?.click()}
                     >
-                      {uploadingPhotos ? "Uploading…" : "Add photos"}
+                      {uploadingPhotos ? "Uploading…" : "Add media"}
                     </button>
                   </>
                 )}
               </div>
               {rfqAttachments.length > 0 ? (
-                <PhotosCarousel attachments={rfqAttachments} />
+                <PhotosCarousel
+                  attachments={rfqAttachments}
+                  onDelete={rfqMeta ? async (att) => {
+                    if (!att.attachment_id) return;
+                    await apiFetch(`/api/rfqs/${rfqId}/attachments/${att.attachment_id}`, { method: "DELETE" });
+                    setRfqAttachments((prev) => prev.filter((a) => a.blob_path !== att.blob_path));
+                  } : undefined}
+                />
               ) : (
                 <div className="pd-photos-empty">
-                  Share photos of the space, reference inspiration, or materials — contractors will see these when reviewing your project.
+                  Share photos or videos of the space, reference inspiration, or materials — contractors will see these when reviewing your project.
                 </div>
               )}
             </section>
@@ -629,7 +636,7 @@ const PD_CSS = `
 .pd-pill-danger:hover:not(:disabled) { background: var(--q-danger); color: var(--q-primary-ink); border-color: var(--q-danger); }
 .pd-pill-sm { padding: 6px 12px; font-size: 12px; font-weight: 600; }
 
-/* Project photos section — section header row with inline Add button */
+/* Project media section — section header row with inline Add button */
 .pd-photos-head {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   margin-bottom: 10px;

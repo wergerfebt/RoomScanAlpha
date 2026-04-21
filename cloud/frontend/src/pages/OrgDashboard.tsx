@@ -498,12 +498,14 @@ function JobBidPane({ job, onUpdate }: { job: Job; onUpdate: (rfqId: string, pat
       {editing && hasBid ? (
         <ContractorBidForm
           rfqId={job.rfq_id}
+          bidId={job.bid!.id}
           initial={{
             price_cents: job.bid!.price_cents,
             timeline: parsed.timeline,
             start: parsed.start,
             note: parsed.note,
             pdf_url: job.bid!.pdf_url ?? null,
+            attachments: job.bid!.attachments,
           }}
           submitLabel="Update bid"
           onCancel={() => setEditing(false)}
@@ -564,7 +566,7 @@ function JobBidPane({ job, onUpdate }: { job: Job; onUpdate: (rfqId: string, pat
             if (!visualCount) return null;
             return (
               <>
-                <div className="ojw-section-label" style={{ marginTop: 18 }}>Project photos</div>
+                <div className="ojw-section-label" style={{ marginTop: 18 }}>Project media</div>
                 <PhotosCarousel attachments={combined as CarouselAttachment[]} />
               </>
             );

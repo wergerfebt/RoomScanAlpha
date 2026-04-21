@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useRef } from "react";
+import { useEffect, useCallback, useRef, useState } from "react";
 import BeforeAfterSlider from "./BeforeAfterSlider";
 
 export interface LightboxItem {
@@ -15,28 +15,26 @@ interface LightboxProps {
 }
 
 export default function Lightbox({ items, startIndex, onClose, onIndexChange }: LightboxProps) {
-  const indexRef = useRef(startIndex);
+  const [idx, setIdx] = useState(startIndex);
   const touchStartX = useRef<number | null>(null);
 
-  const setIndex = useCallback((i: number) => {
-    indexRef.current = i;
-    onIndexChange?.(i);
+  const goPrev = useCallback(() => {
+    setIdx((cur) => {
+      if (cur <= 0) return cur;
+      const next = cur - 1;
+      onIndexChange?.(next);
+      return next;
+    });
   }, [onIndexChange]);
 
-  // Force re-render when index changes
-  const idx = indexRef.current;
-
-  const goPrev = useCallback(() => {
-    if (indexRef.current > 0) {
-      setIndex(indexRef.current - 1);
-    }
-  }, [setIndex]);
-
   const goNext = useCallback(() => {
-    if (indexRef.current < items.length - 1) {
-      setIndex(indexRef.current + 1);
-    }
-  }, [items.length, setIndex]);
+    setIdx((cur) => {
+      if (cur >= items.length - 1) return cur;
+      const next = cur + 1;
+      onIndexChange?.(next);
+      return next;
+    });
+  }, [items.length, onIndexChange]);
 
   // Keyboard navigation
   useEffect(() => {

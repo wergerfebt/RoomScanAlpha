@@ -267,10 +267,10 @@ export default function ContractorCard({
               </a>
             )}
 
-            {/* Bid images (contractor-attached, from direct upload or chat) */}
+            {/* Bid media (contractor-attached, from direct upload or chat) */}
             {bid?.attachments && bid.attachments.some((a) => (a.content_type || "").startsWith("image/")) && (
               <div onClick={(e) => e.stopPropagation()} style={{ marginTop: 10 }}>
-                <div className="contractor-card-subsection-label">Bid images</div>
+                <div className="contractor-card-subsection-label">Bid media</div>
                 <PhotosCarousel attachments={bid.attachments} tileSize={96} />
               </div>
             )}

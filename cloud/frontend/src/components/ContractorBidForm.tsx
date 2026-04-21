@@ -1,8 +1,12 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { getIdToken } from "../api/firebase";
+import { apiFetch } from "../api/client";
+import type { CarouselAttachment } from "./PhotosCarousel";
 
 interface Props {
   rfqId: string;
+  /** bid_id for update mode — required to delete existing attachments. */
+  bidId?: string;
   onSubmitted: (bid: { id: string; price_cents: number; description: string }) => void;
   onCancel?: () => void;
   initial?: {
@@ -11,6 +15,7 @@ interface Props {
     start?: string;
     note?: string;
     pdf_url?: string | null;
+    attachments?: CarouselAttachment[];
   };
   submitLabel?: string;
 }
@@ -46,7 +51,7 @@ function fmtFileSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-export default function ContractorBidForm({ rfqId, onSubmitted, onCancel, initial, submitLabel }: Props) {
+export default function ContractorBidForm({ rfqId, bidId, onSubmitted, onCancel, initial, submitLabel }: Props) {
   const [total, setTotal] = useState(initial?.price_cents != null ? String(initial.price_cents / 100) : "");
   const [timeline, setTimeline] = useState(initial?.timeline ?? "");
   const [start, setStart] = useState(initial?.start ?? "");
@@ -56,6 +61,15 @@ export default function ContractorBidForm({ rfqId, onSubmitted, onCancel, initia
   // one via Replace. Null means no existing PDF.
   const [existingPdfUrl, setExistingPdfUrl] = useState<string | null>(initial?.pdf_url ?? null);
   const [existingPdfSize, setExistingPdfSize] = useState<string | null>(null);
+  // Bid media: existing attachments (from the server) and newly-selected files
+  // pending upload. Existing items delete immediately against the API; new
+  // items upload as part of the bid multipart POST.
+  const [existingMedia, setExistingMedia] = useState<CarouselAttachment[]>(
+    (initial?.attachments ?? []).filter((a) => (a.content_type || "").startsWith("image/")),
+  );
+  const [newMedia, setNewMedia] = useState<File[]>([]);
+  const [deletingBlobPath, setDeletingBlobPath] = useState<string | null>(null);
+  const mediaInputRef = useRef<HTMLInputElement>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const isUpdate = !!initial;
@@ -109,6 +123,7 @@ export default function ContractorBidForm({ rfqId, onSubmitted, onCancel, initia
       formData.append("price_cents", String(Math.round(totalDollars * 100)));
       formData.append("description", description);
       if (pdf) formData.append("pdf", pdf);
+      for (const img of newMedia) formData.append("images", img);
       const res = await fetch(`/api/rfqs/${rfqId}/bids`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
@@ -231,6 +246,73 @@ export default function ContractorBidForm({ rfqId, onSubmitted, onCancel, initia
         Attach a PDF with your full project breakdown and line items. Customers compare your PDF side-by-side with other bids.
       </div>
 
+      <div className="cbf-label-row">
+        <span className="cbf-label">Bid media</span>
+        <span className="cbf-optional">Optional</span>
+      </div>
+
+      <div className="cbf-media-row">
+        {existingMedia.map((a) => (
+          <div key={a.blob_path} className="cbf-media-tile">
+            {a.download_url ? (
+              <img src={a.download_url} alt={a.name || ""} loading="lazy" />
+            ) : <div className="cbf-media-fallback">{(a.name || "File").slice(0, 8)}</div>}
+            <button
+              type="button"
+              className="cbf-media-remove"
+              disabled={deletingBlobPath === a.blob_path || submitting}
+              title="Remove"
+              aria-label={`Remove ${a.name || "media"}`}
+              onClick={async () => {
+                if (!bidId || !a.attachment_id) return;
+                if (!confirm(`Remove ${a.name || "this item"}?`)) return;
+                setDeletingBlobPath(a.blob_path);
+                try {
+                  await apiFetch(`/api/rfqs/${rfqId}/bids/${bidId}/attachments/${a.attachment_id}`, { method: "DELETE" });
+                  setExistingMedia((prev) => prev.filter((x) => x.blob_path !== a.blob_path));
+                } catch (err) {
+                  alert((err as Error).message || "Failed to remove");
+                } finally {
+                  setDeletingBlobPath(null);
+                }
+              }}
+            >×</button>
+          </div>
+        ))}
+        {newMedia.map((f, i) => (
+          <div key={`${f.name}-${i}`} className="cbf-media-tile cbf-media-tile-pending">
+            <img src={URL.createObjectURL(f)} alt={f.name} />
+            <button
+              type="button"
+              className="cbf-media-remove"
+              title="Remove"
+              aria-label={`Remove ${f.name}`}
+              onClick={() => setNewMedia((prev) => prev.filter((_, idx) => idx !== i))}
+              disabled={submitting}
+            >×</button>
+            <div className="cbf-media-pending-badge">New</div>
+          </div>
+        ))}
+        <label className="cbf-media-add" title="Add photos or videos">
+          <span>+</span>
+          <input
+            ref={mediaInputRef}
+            type="file"
+            accept="image/jpeg,image/png,image/webp,image/gif,image/heic"
+            multiple
+            style={{ display: "none" }}
+            onChange={(e) => {
+              const files = Array.from(e.target.files || []);
+              if (files.length) setNewMedia((prev) => [...prev, ...files]);
+              if (mediaInputRef.current) mediaInputRef.current.value = "";
+            }}
+          />
+        </label>
+      </div>
+      <div className="cbf-help">
+        Attach reference photos, material swatches, or example work for the customer.
+      </div>
+
       <div className="cbf-label" style={{ marginTop: 16 }}>Note to customer</div>
       <textarea
         rows={3}
@@ -349,6 +431,48 @@ const CBF_CSS = `
   font-size: 12px; color: var(--q-ink-muted); line-height: 1.45;
   margin-top: 8px;
 }
+.cbf-optional {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.3px; text-transform: uppercase;
+  color: var(--q-ink-muted);
+}
+
+.cbf-media-row {
+  display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px;
+}
+.cbf-media-tile {
+  position: relative; width: 84px; height: 84px; border-radius: 10px;
+  overflow: hidden; box-shadow: inset 0 0 0 0.5px var(--q-hairline);
+  background: var(--q-surface-muted);
+}
+.cbf-media-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.cbf-media-fallback {
+  width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;
+  font-size: 10px; color: var(--q-ink-muted);
+}
+.cbf-media-remove {
+  position: absolute; top: 4px; right: 4px;
+  width: 20px; height: 20px; padding: 0; border: none;
+  background: rgba(0,0,0,0.62); color: #fff; border-radius: 50%;
+  font-size: 14px; font-weight: 700; line-height: 1; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+}
+.cbf-media-remove:hover { background: rgba(0,0,0,0.85); }
+.cbf-media-remove:disabled { cursor: wait; opacity: 0.7; }
+.cbf-media-pending-badge {
+  position: absolute; bottom: 4px; left: 4px;
+  padding: 1px 6px; border-radius: 4px;
+  font-size: 9px; font-weight: 700; letter-spacing: 0.3px;
+  text-transform: uppercase; color: #fff; background: var(--q-primary);
+}
+.cbf-media-tile-pending { box-shadow: inset 0 0 0 1px var(--q-primary); }
+.cbf-media-add {
+  width: 84px; height: 84px; border-radius: 10px;
+  border: 1px dashed var(--q-hairline); background: var(--q-surface-muted);
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  font-size: 28px; color: var(--q-ink-muted); font-weight: 300;
+  transition: border-color 0.12s, color 0.12s, background 0.12s;
+}
+.cbf-media-add:hover { border-color: var(--q-primary); color: var(--q-primary); background: var(--q-canvas); }
 
 .cbf-error {
   background: rgba(176,58,46,0.08); color: var(--q-danger);
