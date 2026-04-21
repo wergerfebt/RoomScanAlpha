@@ -49,11 +49,13 @@ struct OrgProfile: Codable, Equatable {
     struct GalleryImage: Codable, Equatable, Identifiable {
         let id: String
         let imageURL: String?
+        let beforeImageURL: String?
         let caption: String?
 
         enum CodingKeys: String, CodingKey {
             case id, caption
             case imageURL = "image_url"
+            case beforeImageURL = "before_image_url"
         }
     }
 

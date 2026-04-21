@@ -13,9 +13,18 @@ struct ProjectMediaView: View {
     @State private var loading = true
     @State private var picker: [PhotosPickerItem] = []
     @State private var uploadingCount = 0
-    @State private var lightboxURL: URL?
+    @State private var lightboxStart: Int?
     @State private var deleteTarget: RFQService.RFQAttachment?
     @State private var error: String?
+
+    private struct StartIndex: Identifiable { let value: Int; var id: Int { value } }
+
+    private var lightboxPhotos: [LightboxPhoto] {
+        attachments.compactMap { att in
+            guard let urlString = att.downloadURL, let url = URL(string: urlString) else { return nil }
+            return LightboxPhoto(id: att.id, after: url)
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -55,8 +64,8 @@ struct ProjectMediaView: View {
                                 uploadingTile
                             }
                         }
-                        ForEach(attachments) { att in
-                            tile(att)
+                        ForEach(Array(attachments.enumerated()), id: \.element.id) { idx, att in
+                            tile(att, index: idx)
                         }
                     }
                 }
@@ -71,10 +80,14 @@ struct ProjectMediaView: View {
             if !items.isEmpty { Task { await ingest(items) } }
         }
         .fullScreenCover(item: Binding(
-            get: { lightboxURL.map { URLItem(url: $0) } },
-            set: { lightboxURL = $0?.url }
-        )) { item in
-            GalleryLightbox(url: item.url) { lightboxURL = nil }
+            get: { lightboxStart.map { StartIndex(value: $0) } },
+            set: { lightboxStart = $0?.value }
+        )) { start in
+            GalleryLightbox(
+                photos: lightboxPhotos,
+                startIndex: start.value,
+                onDismiss: { lightboxStart = nil }
+            )
         }
         .alert(
             "Remove photo?",
@@ -101,10 +114,10 @@ struct ProjectMediaView: View {
     }
 
     @ViewBuilder
-    private func tile(_ att: RFQService.RFQAttachment) -> some View {
+    private func tile(_ att: RFQService.RFQAttachment, index: Int) -> some View {
         if let urlString = att.downloadURL, let url = URL(string: urlString) {
             ZStack(alignment: .topTrailing) {
-                Button { lightboxURL = url } label: {
+                Button { lightboxStart = index } label: {
                     AsyncImage(url: url) { phase in
                         if let image = phase.image {
                             image.resizable().scaledToFill()
@@ -131,11 +144,6 @@ struct ProjectMediaView: View {
                 }
             }
         }
-    }
-
-    private struct URLItem: Identifiable {
-        let url: URL
-        var id: String { url.absoluteString }
     }
 
     // MARK: – Data

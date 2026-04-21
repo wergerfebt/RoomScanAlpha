@@ -12,7 +12,7 @@ struct OrgProfileView: View {
     @State private var org: OrgProfile?
     @State private var loading = true
     @State private var error: String?
-    @State private var lightboxURL: URL?
+    @State private var lightboxStart: Int?
 
     var body: some View {
         ScrollView {
@@ -57,10 +57,24 @@ struct OrgProfileView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }
         .fullScreenCover(item: Binding(
-            get: { lightboxURL.map(LightboxItem.init) },
-            set: { lightboxURL = $0?.url }
-        )) { item in
-            GalleryLightbox(url: item.url) { lightboxURL = nil }
+            get: { lightboxStart.map { StartIndex(value: $0) } },
+            set: { lightboxStart = $0?.value }
+        )) { start in
+            GalleryLightbox(
+                photos: lightboxPhotos,
+                startIndex: start.value,
+                onDismiss: { lightboxStart = nil }
+            )
+        }
+    }
+
+    private struct StartIndex: Identifiable { let value: Int; var id: Int { value } }
+
+    private var lightboxPhotos: [LightboxPhoto] {
+        (org?.gallery ?? []).compactMap { img in
+            guard let afterString = img.imageURL, let afterURL = URL(string: afterString) else { return nil }
+            let before = img.beforeImageURL.flatMap { URL(string: $0) }
+            return LightboxPhoto(id: img.id, after: afterURL, before: before)
         }
     }
 
@@ -195,24 +209,42 @@ struct OrgProfileView: View {
             sectionLabel("Work")
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {
-                    ForEach(gallery) { img in
-                        if let urlString = img.imageURL, let url = URL(string: urlString) {
-                            Button {
-                                lightboxURL = url
-                            } label: {
-                                AsyncImage(url: url) { phase in
-                                    if let image = phase.image {
-                                        image.resizable().scaledToFill()
-                                    } else {
-                                        Rectangle().fill(QTheme.surfaceMuted)
-                                    }
-                                }
-                                .frame(width: 200, height: 140)
-                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                            }
-                            .buttonStyle(.plain)
-                        }
+                    ForEach(Array(gallery.enumerated()), id: \.element.id) { idx, img in
+                        galleryTile(img)
+                            .onTapGesture { lightboxStart = idx }
                     }
+                }
+            }
+        }
+    }
+
+    /// Uniform square tile — keeps the horizontal scroller tidy even when
+    /// source images vary wildly in aspect ratio. A before/after badge
+    /// hints the pair is interactive.
+    @ViewBuilder
+    private func galleryTile(_ img: OrgProfile.GalleryImage) -> some View {
+        if let urlString = img.imageURL, let url = URL(string: urlString) {
+            ZStack(alignment: .bottomLeading) {
+                AsyncImage(url: url) { phase in
+                    if let image = phase.image {
+                        image.resizable().scaledToFill()
+                    } else {
+                        Rectangle().fill(QTheme.surfaceMuted)
+                    }
+                }
+                .frame(width: 160, height: 160)
+                .clipped()
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                if img.beforeImageURL != nil {
+                    Text("BEFORE / AFTER")
+                        .font(.system(size: 9, weight: .bold))
+                        .tracking(0.4)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 7).padding(.vertical, 3)
+                        .background(Color.black.opacity(0.55))
+                        .clipShape(Capsule())
+                        .padding(8)
                 }
             }
         }
@@ -292,58 +324,173 @@ private struct LightboxItem: Identifiable {
     var id: String { url.absoluteString }
 }
 
-/// Fullscreen image viewer with pinch-to-zoom. Tapped from the gallery
-/// + workspace photo grid so the user can actually see detail.
+/// One photo in the lightbox — an after shot with an optional "before"
+/// companion. When `before` is non-nil the lightbox renders a BEFORE/AFTER
+/// toggle at the top so the user can flip between the two.
+struct LightboxPhoto: Identifiable, Equatable {
+    let id: String
+    let after: URL
+    let before: URL?
+
+    init(id: String = UUID().uuidString, after: URL, before: URL? = nil) {
+        self.id = id
+        self.after = after
+        self.before = before
+    }
+}
+
+/// Fullscreen image viewer with pinch-to-zoom, left/right swipe paging,
+/// and a BEFORE/AFTER toggle for photos that have a `before` URL.
+///
+/// Compat initializer: the single-URL version still exists so existing
+/// callers (ProjectDetail photo strip, JobDetail media, etc.) don't need
+/// to change.
 struct GalleryLightbox: View {
-    let url: URL
+    let photos: [LightboxPhoto]
+    let startIndex: Int
     let onDismiss: () -> Void
+
+    @State private var index: Int
+    @State private var showBefore = false
+
+    init(photos: [LightboxPhoto], startIndex: Int, onDismiss: @escaping () -> Void) {
+        self.photos = photos
+        self.startIndex = startIndex
+        self.onDismiss = onDismiss
+        _index = State(initialValue: max(0, min(startIndex, max(0, photos.count - 1))))
+    }
+
+    /// Legacy single-URL init used throughout the app.
+    init(url: URL, onDismiss: @escaping () -> Void) {
+        self.init(photos: [LightboxPhoto(after: url)], startIndex: 0, onDismiss: onDismiss)
+    }
+
+    private var currentPhoto: LightboxPhoto? {
+        photos.indices.contains(index) ? photos[index] : nil
+    }
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            Color.black.ignoresSafeArea()
+
+            TabView(selection: $index) {
+                ForEach(Array(photos.enumerated()), id: \.offset) { i, photo in
+                    LightboxPage(
+                        photo: photo,
+                        showBefore: Binding(
+                            get: { i == index && showBefore },
+                            set: { showBefore = $0 }
+                        )
+                    )
+                    .tag(i)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: photos.count > 1 ? .automatic : .never))
+            .ignoresSafeArea()
+            .onChange(of: index) { _, _ in
+                // Reset to AFTER when switching photos so before/after state
+                // doesn't leak across pages.
+                showBefore = false
+            }
+
+            HStack {
+                Button(action: onDismiss) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "xmark").font(.system(size: 13, weight: .semibold))
+                        Text("Close").font(.system(size: 14, weight: .semibold))
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 14).padding(.vertical, 8)
+                    .background(.ultraThinMaterial)
+                    .background(Color.black.opacity(0.35))
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                Spacer()
+                if photos.count > 1 {
+                    Text("\(index + 1) / \(photos.count)")
+                        .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 10).padding(.vertical, 6)
+                        .background(Color.black.opacity(0.45))
+                        .clipShape(Capsule())
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+
+            if currentPhoto?.before != nil {
+                VStack {
+                    Spacer()
+                    HStack(spacing: 2) {
+                        beforeAfterTab("Before", active: showBefore) { showBefore = true }
+                        beforeAfterTab("After", active: !showBefore) { showBefore = false }
+                    }
+                    .padding(3)
+                    .background(.black.opacity(0.55))
+                    .clipShape(Capsule())
+                    .padding(.bottom, 30)
+                }
+            }
+        }
+        .statusBarHidden(true)
+    }
+
+    private func beforeAfterTab(_ label: String, active: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(active ? QTheme.ink : .white)
+                .padding(.horizontal, 16).padding(.vertical, 7)
+                .background(active ? .white : Color.clear)
+                .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// One page inside the paging lightbox. Each page owns its own
+/// zoom state so swiping doesn't clear the current page's zoom.
+private struct LightboxPage: View {
+    let photo: LightboxPhoto
+    @Binding var showBefore: Bool
 
     @State private var scale: CGFloat = 1
     @GestureState private var gestureScale: CGFloat = 1
 
-    var body: some View {
-        ZStack(alignment: .topLeading) {
-            Color.black.ignoresSafeArea()
-            AsyncImage(url: url) { phase in
-                if let image = phase.image {
-                    image
-                        .resizable()
-                        .scaledToFit()
-                        .scaleEffect(scale * gestureScale)
-                        .gesture(
-                            MagnificationGesture()
-                                .updating($gestureScale) { value, state, _ in state = value }
-                                .onEnded { value in
-                                    scale = max(1, min(scale * value, 4))
-                                }
-                        )
-                        .onTapGesture(count: 2) {
-                            withAnimation { scale = scale > 1 ? 1 : 2 }
-                        }
-                } else if phase.error != nil {
-                    Image(systemName: "photo").font(.system(size: 48)).foregroundStyle(.white.opacity(0.6))
-                } else {
-                    ProgressView().tint(.white)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    private var displayedURL: URL {
+        (showBefore ? photo.before : nil) ?? photo.after
+    }
 
-            Button(action: onDismiss) {
-                HStack(spacing: 6) {
-                    Image(systemName: "xmark").font(.system(size: 13, weight: .semibold))
-                    Text("Close").font(.system(size: 14, weight: .semibold))
-                }
-                .foregroundStyle(.white)
-                .padding(.horizontal, 14).padding(.vertical, 8)
-                .background(.ultraThinMaterial)
-                .background(Color.black.opacity(0.35))
-                .clipShape(Capsule())
+    var body: some View {
+        AsyncImage(url: displayedURL) { phase in
+            if let image = phase.image {
+                image
+                    .resizable()
+                    .scaledToFit()
+                    .scaleEffect(scale * gestureScale)
+                    .gesture(
+                        MagnificationGesture()
+                            .updating($gestureScale) { value, state, _ in state = value }
+                            .onEnded { value in
+                                scale = max(1, min(scale * value, 4))
+                            }
+                    )
+                    .onTapGesture(count: 2) {
+                        withAnimation { scale = scale > 1 ? 1 : 2 }
+                    }
+            } else if phase.error != nil {
+                Image(systemName: "photo").font(.system(size: 48)).foregroundStyle(.white.opacity(0.6))
+            } else {
+                ProgressView().tint(.white)
             }
-            .buttonStyle(.plain)
-            .padding(.top, 8)
-            .padding(.leading, 16)
         }
-        .statusBarHidden(true)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onChange(of: showBefore) { _, _ in
+            // Reset zoom when flipping before/after so the user isn't
+            // disoriented by a zoomed-in before shot.
+            scale = 1
+        }
     }
 }
 

@@ -180,11 +180,21 @@ struct OrgGalleryView: View {
     let onClose: () -> Void
     @State private var items: [GalleryItem] = []
     @State private var loading = true
-    @State private var lightboxURL: URL?
+    @State private var lightboxStart: Int?
     @State private var pickerItems: [PhotosPickerItem] = []
     @State private var uploadingCount = 0
     @State private var deleteTarget: GalleryItem?
     @State private var error: String?
+
+    private struct StartIndex: Identifiable { let value: Int; var id: Int { value } }
+
+    private var lightboxPhotos: [LightboxPhoto] {
+        items.compactMap { item in
+            guard let afterString = item.imageURL, let afterURL = URL(string: afterString) else { return nil }
+            let before = item.beforeImageURL.flatMap { URL(string: $0) }
+            return LightboxPhoto(id: item.id, after: afterURL, before: before)
+        }
+    }
 
     var body: some View {
         NavigationStack {
@@ -202,8 +212,8 @@ struct OrgGalleryView: View {
                             if uploadingCount > 0 {
                                 uploadingTile
                             }
-                            ForEach(items) { item in
-                                tile(item)
+                            ForEach(Array(items.enumerated()), id: \.element.id) { idx, item in
+                                tile(item, index: idx)
                             }
                         }
                         .padding(12)
@@ -231,10 +241,14 @@ struct OrgGalleryView: View {
                 }
             }
             .fullScreenCover(item: Binding(
-                get: { lightboxURL.map { URLItem(url: $0) } },
-                set: { lightboxURL = $0?.url }
-            )) { item in
-                GalleryLightbox(url: item.url) { lightboxURL = nil }
+                get: { lightboxStart.map { StartIndex(value: $0) } },
+                set: { lightboxStart = $0?.value }
+            )) { start in
+                GalleryLightbox(
+                    photos: lightboxPhotos,
+                    startIndex: start.value,
+                    onDismiss: { lightboxStart = nil }
+                )
             }
             .alert(
                 "Remove photo?",
@@ -260,9 +274,11 @@ struct OrgGalleryView: View {
     }
 
     private var uploadingTile: some View {
+        // Match the `aspectRatio(1, contentMode: .fit)` of the real tiles so
+        // a mid-upload grid doesn't jitter as rows land.
         RoundedRectangle(cornerRadius: 10, style: .continuous)
             .fill(QTheme.surfaceMuted)
-            .frame(height: 140)
+            .aspectRatio(1, contentMode: .fit)
             .overlay(
                 VStack(spacing: 6) {
                     ProgressView().tint(QTheme.primary)
@@ -271,28 +287,46 @@ struct OrgGalleryView: View {
             )
     }
 
-    private func tile(_ item: GalleryItem) -> some View {
+    private func tile(_ item: GalleryItem, index: Int) -> some View {
+        // Uniform square so the grid reads as a clean 2-up no matter the
+        // source aspect ratios. Tapping opens the paging lightbox at this
+        // index; the trash badge is a separate hit area.
         ZStack(alignment: .topTrailing) {
-            if let urlString = item.imageURL, let url = URL(string: urlString) {
-                Button {
-                    lightboxURL = url
-                } label: {
-                    AsyncImage(url: url) { phase in
-                        if let image = phase.image {
-                            image.resizable().scaledToFill()
-                        } else {
-                            Rectangle().fill(QTheme.surfaceMuted)
+            Color.clear.aspectRatio(1, contentMode: .fit)
+            Group {
+                if let urlString = item.imageURL, let url = URL(string: urlString) {
+                    Button {
+                        lightboxStart = index
+                    } label: {
+                        ZStack(alignment: .bottomLeading) {
+                            AsyncImage(url: url) { phase in
+                                if let image = phase.image {
+                                    image.resizable().scaledToFill()
+                                } else {
+                                    Rectangle().fill(QTheme.surfaceMuted)
+                                }
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .clipped()
+
+                            if item.beforeImageURL != nil {
+                                Text("BEFORE / AFTER")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .tracking(0.4)
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 7).padding(.vertical, 3)
+                                    .background(Color.black.opacity(0.55))
+                                    .clipShape(Capsule())
+                                    .padding(8)
+                            }
                         }
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                     }
-                    .frame(height: 140)
-                    .frame(maxWidth: .infinity)
-                    .clipped()
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .buttonStyle(.plain)
+                } else {
+                    Rectangle().fill(QTheme.surfaceMuted)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
-                .buttonStyle(.plain)
-            } else {
-                Rectangle().fill(QTheme.surfaceMuted).frame(height: 140)
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             }
 
             Button {
@@ -365,11 +399,6 @@ struct OrgGalleryView: View {
             deleteTarget = nil
         } catch { self.error = error.localizedDescription }
     }
-}
-
-private struct URLItem: Identifiable {
-    let url: URL
-    var id: String { url.absoluteString }
 }
 
 // MARK: – Team
@@ -776,21 +805,15 @@ struct OrgSettingsView: View {
                             .foregroundStyle(QTheme.ink)
                             .frame(width: 90, alignment: .leading)
 
-                        if editing {
-                            TextField("e.g. 9am – 5pm", text: Binding(
-                                get: { hours[day] ?? "" },
-                                set: { hours[day] = $0 }
-                            ))
-                            .font(.system(size: 14))
-                            .padding(.horizontal, 12).padding(.vertical, 8)
-                            .background(QTheme.surfaceMuted)
-                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                        } else {
-                            Text(hours[day]?.isEmpty == false ? hours[day]! : "Closed")
-                                .font(.system(size: 14))
-                                .foregroundStyle(hours[day]?.isEmpty == false ? QTheme.inkSoft : QTheme.inkDim)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
+                        TextField("Closed", text: Binding(
+                            get: { hours[day] ?? "" },
+                            set: { hours[day] = $0 }
+                        ))
+                        .disabled(!editing)
+                        .font(.system(size: 14))
+                        .padding(.horizontal, 12).padding(.vertical, 8)
+                        .background(QTheme.surfaceMuted)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     }
                 }
             }
@@ -819,31 +842,28 @@ struct OrgSettingsView: View {
         multiline: Bool = false,
         keyboard: UIKeyboardType = .default
     ) -> some View {
+        // Same container look in both modes; only the input reacts to
+        // `editing`. Keeps the form from "jumping" visually when the user
+        // toggles Edit and gives the read state a consistent field shape.
         VStack(alignment: .leading, spacing: 6) {
             Text(label)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(QTheme.inkSoft)
-            if editing {
-                Group {
-                    if multiline {
-                        TextField(placeholder, text: text, axis: .vertical)
-                            .lineLimit(1...6)
-                    } else {
-                        TextField(placeholder, text: text)
-                            .keyboardType(keyboard)
-                            .autocapitalization(.none)
-                    }
+            Group {
+                if multiline {
+                    TextField(placeholder, text: text, axis: .vertical)
+                        .lineLimit(1...6)
+                } else {
+                    TextField(placeholder, text: text)
+                        .keyboardType(keyboard)
+                        .autocapitalization(.none)
                 }
-                .font(.system(size: 16))
-                .padding(.horizontal, 12).padding(.vertical, 10)
-                .background(QTheme.surfaceMuted)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            } else {
-                Text(text.wrappedValue.isEmpty ? "—" : text.wrappedValue)
-                    .font(.system(size: 15))
-                    .foregroundStyle(text.wrappedValue.isEmpty ? QTheme.inkDim : QTheme.ink)
-                    .fixedSize(horizontal: false, vertical: true)
             }
+            .disabled(!editing)
+            .font(.system(size: 16))
+            .padding(.horizontal, 12).padding(.vertical, 10)
+            .background(QTheme.surfaceMuted)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
     }
 
