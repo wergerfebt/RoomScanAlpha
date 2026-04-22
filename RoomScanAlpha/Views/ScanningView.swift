@@ -57,7 +57,7 @@ struct ScanningView: View {
                     Button(action: onStart) {
                         Label("Start Scan", systemImage: "viewfinder")
                     }
-                    .largeCapsuleButton(role: .primary, tint: .blue)
+                    .largeCapsuleButton(role: .primary, gradient: QTheme.forestGradient)
                     .accessibilityLabel("Start scanning")
                     .padding(.horizontal, 24)
                     .padding(.bottom, 32)
@@ -139,7 +139,7 @@ struct ScanningView: View {
     /// startup frame so users don't think the app has crashed.
     private var bootOverlay: some View {
         ZStack {
-            Color.black.opacity(0.85)
+            QTheme.forestInkGradient
                 .ignoresSafeArea()
             VStack(spacing: 18) {
                 ProgressView()

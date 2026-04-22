@@ -85,8 +85,10 @@ struct ContentView: View {
                     sessionManager: sessionManager,
                     viewModel: viewModel,
                     onContinueScanning: {
-                        // Return to scanReady so the user sees the Start Scan button
-                        // again. Session is still running; resumeSession() preserves
+                        // "Scan missing areas" jumps straight back into capture —
+                        // no second "Start Scan" tap. The session has stayed live
+                        // through coverage review, so `resumeSession()` (driven by
+                        // `isResumingFromCoverage` in ScanningView.onAppear) keeps
                         // the world coordinate system and existing HEVC capture.
                         //
                         // Intentionally DO NOT clear localHoles / localUncoveredFaces /
@@ -97,7 +99,7 @@ struct ContentView: View {
                         viewModel.coverageRatio = 0
                         viewModel.isAnalyzingCoverage = false
                         viewModel.isResumingFromCoverage = true
-                        viewModel.state = .scanReady
+                        handleStartScan()
                     },
                     onLooksGood: {
                         // Session is still running (never paused), so annotation has live AR
@@ -124,7 +126,8 @@ struct ContentView: View {
             case .labelingRoom:
                 RoomLabelView(
                     roomLabel: $viewModel.roomLabel,
-                    roomScope: $viewModel.roomScope
+                    roomScope: $viewModel.roomScope,
+                    rfqId: viewModel.selectedRFQ?.id
                 ) {
                     if let frame = sessionManager.session.currentFrame {
                         viewModel.buildRFQContext(worldTransform: frame.camera.transform)

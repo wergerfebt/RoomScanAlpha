@@ -38,6 +38,26 @@ enum QTheme {
     static let radiusMedium: CGFloat = 12
     static let radiusLarge: CGFloat = 16
     static let radiusXLarge: CGFloat = 20
+
+    // Gradients — used on dark scan-flow surfaces (boot overlay, hero CTAs).
+    // The forest gradient runs from the brand primary to a deeper shade so the
+    // surface still reads as Quoterra rather than generic iOS blue/black.
+    static let primaryDeep   = Color(hex: 0x1F4A33) // darker forest, gradient stop
+    static let inkDeep       = Color(hex: 0x0A0F0C) // near-black for overlay base
+
+    static let forestGradient = LinearGradient(
+        colors: [primary, primaryDeep],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+    )
+
+    /// Used on full-screen overlays where we need to dim the camera feed but
+    /// keep a Quoterra tint. Sits between forest green and near-black.
+    static let forestInkGradient = LinearGradient(
+        colors: [primaryDeep.opacity(0.92), inkDeep.opacity(0.92)],
+        startPoint: .top,
+        endPoint: .bottom
+    )
 }
 
 extension Color {

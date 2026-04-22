@@ -13,6 +13,11 @@ enum ScanButtonRole {
 struct LargeCapsuleButtonStyle: ButtonStyle {
     var role: ScanButtonRole = .primary
     var tint: Color = .accentColor
+    /// Optional gradient fill for the hero scan-flow CTA. When set, replaces
+    /// the solid `tint` background on `.primary` buttons so we can express the
+    /// Quoterra forest gradient without losing the existing tint API for the
+    /// rest of the app.
+    var gradient: LinearGradient? = nil
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -66,9 +71,11 @@ struct LargeCapsuleButtonStyle: ButtonStyle {
     private var background: some View {
         switch role {
         case .primary:
-            tint
+            if let gradient { gradient } else { tint }
         case .secondary:
-            if hasExplicitTint {
+            if let gradient {
+                gradient
+            } else if hasExplicitTint {
                 tint
             } else {
                 Rectangle().fill(.ultraThinMaterial)
@@ -83,7 +90,7 @@ struct LargeCapsuleButtonStyle: ButtonStyle {
         case .primary:
             return .white
         case .secondary:
-            return hasExplicitTint ? .white : .primary
+            return (hasExplicitTint || gradient != nil) ? .white : .primary
         case .tertiary:
             return .primary
         }
@@ -103,5 +110,15 @@ extension View {
         tint: Color = .accentColor
     ) -> some View {
         self.buttonStyle(LargeCapsuleButtonStyle(role: role, tint: tint))
+    }
+
+    /// Forest-gradient hero variant for the most prominent scan-flow CTAs
+    /// (Start Scan, Continue, Scan missing areas). Keeps the same shape and
+    /// sizing as the solid-tint version.
+    func largeCapsuleButton(
+        role: ScanButtonRole = .primary,
+        gradient: LinearGradient
+    ) -> some View {
+        self.buttonStyle(LargeCapsuleButtonStyle(role: role, gradient: gradient))
     }
 }

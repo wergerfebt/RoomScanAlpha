@@ -105,12 +105,12 @@ struct CoverageReviewView: View {
 
     private func holeTier(holeCount: Int, texturePct: Int) -> (icon: String, color: Color, headline: String) {
         if holeCount == 0 && texturePct >= 90 {
-            return ("checkmark.shield.fill", .green, "No holes detected")
+            return ("checkmark.shield.fill", QTheme.success, "No holes detected")
         }
         if holeCount == 0 {
-            return ("exclamationmark.triangle.fill", .yellow, "\(texturePct)% textured — fill the patches")
+            return ("exclamationmark.triangle.fill", QTheme.warning, "\(texturePct)% textured — fill the patches")
         }
-        return ("xmark.shield.fill", .red, "\(holeCount) hole\(holeCount == 1 ? "" : "s") in the mesh")
+        return ("xmark.shield.fill", QTheme.danger, "\(holeCount) hole\(holeCount == 1 ? "" : "s") in the mesh")
     }
 
     // MARK: - Controls
@@ -125,7 +125,7 @@ struct CoverageReviewView: View {
                 } label: {
                     Label("Continue", systemImage: "arrow.right")
                 }
-                .largeCapsuleButton(role: .primary, tint: .green)
+                .largeCapsuleButton(role: .primary, gradient: QTheme.forestGradient)
                 .padding(.horizontal, 24)
             } else {
                 Button {
@@ -133,7 +133,7 @@ struct CoverageReviewView: View {
                 } label: {
                     Label("Scan missing areas", systemImage: "camera.viewfinder")
                 }
-                .largeCapsuleButton(role: .primary, tint: .blue)
+                .largeCapsuleButton(role: .primary, gradient: QTheme.forestGradient)
                 .padding(.horizontal, 24)
 
                 Button {

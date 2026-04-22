@@ -27,7 +27,7 @@ struct CornerTracingTutorialOverlay: View {
             } label: {
                 Text(page == 2 ? "Got it" : "Next")
             }
-            .largeCapsuleButton(role: .primary, tint: .blue)
+            .largeCapsuleButton(role: .primary, gradient: QTheme.forestGradient)
             .padding(.horizontal, 24)
             .padding(.bottom, 24)
         }

@@ -109,9 +109,9 @@ struct CornerAnnotationView: View {
     }
 
     private var finishRoomTint: Color {
-        if annotationVM.cornerCount >= 4 { return .green }
-        if annotationVM.cornerCount == 3 { return .blue }
-        return .gray
+        if annotationVM.cornerCount >= 4 { return QTheme.primary }
+        if annotationVM.cornerCount == 3 { return QTheme.scanAccent }
+        return QTheme.inkDim
     }
 
     private var finishRoomAccessibility: String {
@@ -152,7 +152,7 @@ struct CornerAnnotationView: View {
                 } label: {
                     Label("Done", systemImage: "checkmark.circle.fill")
                 }
-                .largeCapsuleButton(role: .primary, tint: .green)
+                .largeCapsuleButton(role: .primary, gradient: QTheme.forestGradient)
                 .disabled(!annotationVM.canDone)
                 .opacity(annotationVM.canDone ? 1 : 0.5)
                 .accessibilityLabel("Done — continue to room naming")
@@ -191,7 +191,7 @@ struct CornerAnnotationView: View {
                         Label("Add Corner", systemImage: "scope")
                             .frame(maxWidth: .infinity)
                     }
-                    .largeCapsuleButton(role: .secondary, tint: .yellow)
+                    .largeCapsuleButton(role: .secondary, tint: QTheme.warning)
                     .accessibilityLabel("Add corner at crosshair")
                 }
                 .padding(.horizontal, 24)

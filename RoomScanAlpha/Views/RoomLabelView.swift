@@ -1,4 +1,5 @@
 import SwiftUI
+import PhotosUI
 
 /// Combined room-naming + scope-of-work step. The scope was previously
 /// gathered *after* upload on the results screen, which broke the
@@ -8,11 +9,18 @@ import SwiftUI
 struct RoomLabelView: View {
     @Binding var roomLabel: String
     @Binding var roomScope: RoomScope?
+    /// RFQ to attach reference photos to. May be nil if the scan isn't bound
+    /// to an RFQ yet — in that case the reference-photos section is hidden.
+    var rfqId: String? = nil
     let onConfirm: () -> Void
 
     @State private var selectedScope: Set<String> = []
     @State private var notes: String = ""
     @FocusState private var nameFocused: Bool
+    @State private var photoPicks: [PhotosPickerItem] = []
+    @State private var uploadedPhotos: [RFQService.RFQAttachment] = []
+    @State private var uploadingPhotoCount = 0
+    @State private var photoError: String?
 
     private let suggestions = [
         "Kitchen", "Living Room", "Bedroom", "Bathroom",
@@ -28,6 +36,7 @@ struct RoomLabelView: View {
                 header
                 nameSection
                 scopeSection
+                if rfqId != nil { referencePhotosSection }
 
                 Button {
                     commit()
@@ -48,6 +57,9 @@ struct RoomLabelView: View {
                 selectedScope = Set(existing.items)
                 notes = existing.notes
             }
+        }
+        .onChange(of: photoPicks) { _, items in
+            if !items.isEmpty { Task { await ingestPhotos(items) } }
         }
         .dynamicTypeSize(.large ... .accessibility2)
     }
@@ -147,6 +159,70 @@ struct RoomLabelView: View {
         }
     }
 
+    private var referencePhotosSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                sectionLabel("Reference photos")
+                Spacer()
+                PhotosPicker(selection: $photoPicks, maxSelectionCount: 6, matching: .images) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "plus").font(.system(size: 12, weight: .semibold))
+                        Text("Add").font(.system(size: 13, weight: .semibold))
+                    }
+                    .foregroundStyle(QTheme.primary)
+                }
+            }
+
+            Text("Optional. Add inspiration shots, existing conditions, or product picks — contractors see these alongside the scan.")
+                .font(.caption)
+                .foregroundStyle(QTheme.inkMuted)
+
+            if uploadedPhotos.isEmpty && uploadingPhotoCount == 0 {
+                Text("No photos yet")
+                    .font(.callout)
+                    .foregroundStyle(QTheme.inkMuted)
+                    .padding(16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(QTheme.surfaceMuted)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(0..<uploadingPhotoCount, id: \.self) { _ in
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(QTheme.surfaceMuted)
+                                .frame(width: 96, height: 96)
+                                .overlay(ProgressView().tint(QTheme.primary))
+                        }
+                        ForEach(uploadedPhotos) { att in
+                            photoTile(att)
+                        }
+                    }
+                }
+            }
+
+            if let photoError, !photoError.isEmpty {
+                Text(photoError).font(.caption).foregroundStyle(QTheme.danger)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func photoTile(_ att: RFQService.RFQAttachment) -> some View {
+        if let urlString = att.downloadURL, let url = URL(string: urlString) {
+            AsyncImage(url: url) { phase in
+                if let image = phase.image {
+                    image.resizable().scaledToFill()
+                } else {
+                    Rectangle().fill(QTheme.surfaceMuted)
+                }
+            }
+            .frame(width: 96, height: 96)
+            .clipped()
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+    }
+
     private func sectionLabel(_ text: String) -> some View {
         Text(text.uppercased())
             .font(.system(size: 12, weight: .bold)).tracking(0.5)
@@ -155,5 +231,40 @@ struct RoomLabelView: View {
 
     private func commit() {
         roomScope = RoomScope(items: Array(selectedScope), notes: notes)
+    }
+
+    private func ingestPhotos(_ items: [PhotosPickerItem]) async {
+        defer { photoPicks = [] }
+        guard let rfqId else { return }
+        var toRegister: [(blobPath: String, contentType: String, name: String?, sizeBytes: Int?)] = []
+        for item in items {
+            uploadingPhotoCount += 1
+            do {
+                guard let data = try await item.loadTransferable(type: Data.self) else {
+                    uploadingPhotoCount -= 1
+                    continue
+                }
+                let contentType = item.supportedContentTypes
+                    .first(where: { $0.preferredMIMEType != nil })?
+                    .preferredMIMEType ?? "image/jpeg"
+                let ext = contentType.split(separator: "/").last.map(String.init) ?? "jpg"
+                let filename = "ref-\(Int(Date().timeIntervalSince1970))-\(UUID().uuidString.prefix(8)).\(ext)"
+                let slot = try await RFQService.shared.attachmentUploadURL(rfqId: rfqId, contentType: contentType, filename: filename)
+                guard let url = URL(string: slot.uploadURL) else { uploadingPhotoCount -= 1; continue }
+                try await RFQService.shared.uploadAttachmentBytes(to: url, contentType: contentType, data: data)
+                toRegister.append((slot.blobPath, contentType, filename, data.count))
+            } catch {
+                photoError = error.localizedDescription
+            }
+            uploadingPhotoCount -= 1
+        }
+        if !toRegister.isEmpty {
+            do {
+                try await RFQService.shared.registerProjectAttachments(rfqId: rfqId, items: toRegister)
+                uploadedPhotos = try await RFQService.shared.listProjectAttachments(rfqId: rfqId)
+            } catch {
+                photoError = error.localizedDescription
+            }
+        }
     }
 }
