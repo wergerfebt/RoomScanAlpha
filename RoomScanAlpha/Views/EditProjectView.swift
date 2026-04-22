@@ -23,6 +23,10 @@ struct EditProjectView: View {
     @State private var scopeTarget: ProjectRoom?
     @State private var confirmDeleteProject = false
     @State private var deletingProject = false
+    /// Set whenever a room mutation (rename / scope / delete) commits. The parent
+    /// doesn't reload on `onClose`, so we route dismissal through `onSave` when
+    /// this is true to make sure the project view picks up the change.
+    @State private var roomsMutated = false
 
     init(
         rfq: RFQ,
@@ -61,7 +65,7 @@ struct EditProjectView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel", action: onClose).foregroundStyle(QTheme.ink)
+                    Button("Cancel", action: dismissSheet).foregroundStyle(QTheme.ink)
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button(action: save) {
@@ -72,7 +76,7 @@ struct EditProjectView: View {
                                 .foregroundStyle(QTheme.primary)
                         }
                     }
-                    .disabled(saving || !hasChanges)
+                    .disabled(saving || !canSave)
                 }
             }
             .sheet(item: $renameTarget) { room in
@@ -115,10 +119,21 @@ struct EditProjectView: View {
         .tint(QTheme.primary)
     }
 
-    private var hasChanges: Bool {
+    private var hasFieldChanges: Bool {
         let origTitle = detail?.title ?? rfq.title ?? ""
         let origDesc = detail?.jobDescription ?? rfq.description ?? ""
         return title != origTitle || description != origDesc
+    }
+
+    /// The Save button is enabled when there is anything to commit *or* refresh
+    /// in the parent — title/description edits, or any room mutation that needs
+    /// the project view to reload.
+    private var canSave: Bool { hasFieldChanges || roomsMutated }
+
+    /// Cancel: if rooms changed under the user, reload the parent so the deleted
+    /// or renamed room doesn't linger in the project view.
+    private func dismissSheet() {
+        if roomsMutated { onSave() } else { onClose() }
     }
 
     // MARK: – Details section
@@ -259,11 +274,13 @@ struct EditProjectView: View {
             saving = true
             defer { saving = false }
             do {
-                try await RFQService.shared.updateRFQ(
-                    rfqId: rfq.id,
-                    title: title,
-                    description: description
-                )
+                if hasFieldChanges {
+                    try await RFQService.shared.updateRFQ(
+                        rfqId: rfq.id,
+                        title: title,
+                        description: description
+                    )
+                }
                 onSave()
             } catch {
                 self.error = error.localizedDescription
@@ -289,6 +306,7 @@ struct EditProjectView: View {
                 )
                 rooms[idx] = updated
             }
+            roomsMutated = true
             renameTarget = nil
         } catch {
             self.error = error.localizedDescription
@@ -313,6 +331,7 @@ struct EditProjectView: View {
                     scope: summary
                 )
             }
+            roomsMutated = true
             scopeTarget = nil
         } catch {
             self.error = error.localizedDescription
@@ -323,6 +342,7 @@ struct EditProjectView: View {
         do {
             try await RFQService.shared.deleteScan(rfqId: rfq.id, scanId: room.scanId)
             rooms.removeAll { $0.scanId == room.scanId }
+            roomsMutated = true
             deleteTarget = nil
         } catch {
             self.error = error.localizedDescription
