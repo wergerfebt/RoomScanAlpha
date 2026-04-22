@@ -51,6 +51,15 @@ enum QTheme {
         endPoint: .bottomTrailing
     )
 
+    /// Warning-tier gradient for "Add Corner" and other amber affordances.
+    /// Same diagonal direction as `forestGradient` so adjacent CTAs share a
+    /// shape language even when their semantic tier differs.
+    static let warmGradient = LinearGradient(
+        colors: [Color(hex: 0xD9871A), Color(hex: 0xB87414)],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+    )
+
     /// Used on full-screen overlays where we need to dim the camera feed but
     /// keep a Quoterra tint. Sits between forest green and near-black.
     static let forestInkGradient = LinearGradient(

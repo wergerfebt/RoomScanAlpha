@@ -121,4 +121,17 @@ extension View {
     ) -> some View {
         self.buttonStyle(LargeCapsuleButtonStyle(role: role, gradient: gradient))
     }
+
+    /// Conditional gradient: pass an optional gradient and a fallback tint.
+    /// When `gradient` is nil the button paints with the solid tint instead.
+    /// Useful for tier-aware buttons (e.g. Finish Room — gradient at 4+
+    /// corners, muted solid otherwise) that need to switch fill style by
+    /// state without duplicating the button declaration.
+    func largeCapsuleButton(
+        role: ScanButtonRole = .primary,
+        tint: Color,
+        gradient: LinearGradient?
+    ) -> some View {
+        self.buttonStyle(LargeCapsuleButtonStyle(role: role, tint: tint, gradient: gradient))
+    }
 }

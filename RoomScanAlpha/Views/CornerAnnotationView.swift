@@ -108,11 +108,11 @@ struct CornerAnnotationView: View {
         .padding(.horizontal, 16)
     }
 
-    private var finishRoomTint: Color {
-        if annotationVM.cornerCount >= 4 { return QTheme.primary }
-        if annotationVM.cornerCount == 3 { return QTheme.scanAccent }
-        return QTheme.inkDim
-    }
+    /// Finish Room paints with the forest gradient only when the polygon is
+    /// "ready" (4+ corners). At 3 corners the action is still legal, but we
+    /// don't promote it visually — same muted treatment as the disabled
+    /// state so the user isn't pushed to close a triangle by accident.
+    private var finishRoomReady: Bool { annotationVM.cornerCount >= 4 }
 
     private var finishRoomAccessibility: String {
         if annotationVM.cornerCount >= 4 {
@@ -159,15 +159,20 @@ struct CornerAnnotationView: View {
                 .padding(.horizontal, 24)
             } else {
                 // Fixed layout: Finish Room always in the primary slot, Add Corner
-                // always in the secondary row. Finish Room's color tiers by corner
-                // count (grey <3, blue =3 rare triangle, green ≥4 normal room).
+                // always in the secondary row. Finish Room paints with the forest
+                // gradient at 4+ corners; under that we keep it muted so the user
+                // doesn't get pushed to close a triangle prematurely.
                 Button {
                     annotationVM.closePolygon()
                     updateSceneNodes()
                 } label: {
                     Label("Finish Room", systemImage: "checkmark.seal.fill")
                 }
-                .largeCapsuleButton(role: .primary, tint: finishRoomTint)
+                .largeCapsuleButton(
+                    role: .primary,
+                    tint: QTheme.inkDim,
+                    gradient: finishRoomReady ? QTheme.forestGradient : nil
+                )
                 .disabled(!annotationVM.canClose)
                 .opacity(annotationVM.canClose ? 1 : 0.55)
                 .accessibilityLabel(finishRoomAccessibility)
@@ -191,7 +196,7 @@ struct CornerAnnotationView: View {
                         Label("Add Corner", systemImage: "scope")
                             .frame(maxWidth: .infinity)
                     }
-                    .largeCapsuleButton(role: .secondary, tint: QTheme.warning)
+                    .largeCapsuleButton(role: .secondary, gradient: QTheme.warmGradient)
                     .accessibilityLabel("Add corner at crosshair")
                 }
                 .padding(.horizontal, 24)

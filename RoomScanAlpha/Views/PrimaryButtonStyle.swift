@@ -3,13 +3,16 @@
 import SwiftUI
 
 extension View {
-    func primaryButtonStyle(color: Color = .blue) -> some View {
+    /// Forest-gradient primary CTA. Used for the inline scope-step Continue,
+    /// the Exporting / ScanResult Done buttons. Matches the gradient hero
+    /// CTAs rendered via `largeCapsuleButton(role:.primary, gradient:)`.
+    func primaryButtonStyle() -> some View {
         self
             .font(.title3)
             .fontWeight(.semibold)
             .frame(maxWidth: .infinity, minHeight: 56)
             .padding()
-            .background(color)
+            .background(QTheme.forestGradient)
             .foregroundStyle(.white)
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .dynamicTypeSize(...DynamicTypeSize.accessibility2)
@@ -21,8 +24,8 @@ extension View {
             .fontWeight(.semibold)
             .frame(maxWidth: .infinity, minHeight: 56)
             .padding()
-            .background(.gray.opacity(0.3))
-            .foregroundStyle(.gray)
+            .background(QTheme.inkDim.opacity(0.3))
+            .foregroundStyle(QTheme.inkMuted)
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .dynamicTypeSize(...DynamicTypeSize.accessibility2)
     }
