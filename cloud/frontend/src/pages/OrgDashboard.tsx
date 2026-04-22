@@ -552,22 +552,31 @@ function JobBidPane({ job, onUpdate }: { job: Job; onUpdate: (rfqId: string, pat
           )}
 
           {(() => {
-            // Combine RFQ-level media (anything the homeowner shared about the
-            // project) with images on the bid itself. Dedupe by blob_path so
-            // chat-originated attachments that exist in both don't double up.
-            const combined: JobAttachment[] = [];
-            const seen = new Set<string>();
-            for (const a of [...(job.rfq_attachments ?? []), ...(job.bid!.attachments ?? [])]) {
-              if (!a?.blob_path || seen.has(a.blob_path)) continue;
-              seen.add(a.blob_path);
-              combined.push(a);
-            }
-            const visualCount = combined.filter((a) => (a.content_type || "").startsWith("image/")).length;
-            if (!visualCount) return null;
+            // Split into two labelled sections so provenance is clear:
+            // homeowner-shared project media vs. the contractor's own bid media.
+            // Each section only renders if it has at least one image-like item.
+            const rfqItems = (job.rfq_attachments ?? []).filter((a) => {
+              const ct = a?.content_type || "";
+              return ct.startsWith("image/") || ct.startsWith("video/");
+            });
+            const bidItems = (job.bid!.attachments ?? []).filter((a) => {
+              const ct = a?.content_type || "";
+              return ct.startsWith("image/") || ct.startsWith("video/");
+            });
             return (
               <>
-                <div className="ojw-section-label" style={{ marginTop: 18 }}>Project media</div>
-                <PhotosCarousel attachments={combined as CarouselAttachment[]} />
+                {rfqItems.length > 0 && (
+                  <>
+                    <div className="ojw-section-label" style={{ marginTop: 18 }}>Project media</div>
+                    <PhotosCarousel attachments={rfqItems as CarouselAttachment[]} />
+                  </>
+                )}
+                {bidItems.length > 0 && (
+                  <>
+                    <div className="ojw-section-label" style={{ marginTop: 18 }}>Your bid media</div>
+                    <PhotosCarousel attachments={bidItems as CarouselAttachment[]} />
+                  </>
+                )}
               </>
             );
           })()}

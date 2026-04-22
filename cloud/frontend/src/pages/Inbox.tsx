@@ -33,11 +33,14 @@ interface ThreadSummary {
 }
 
 interface Attachment {
+  attachment_id?: string;
   blob_path: string;
   download_url?: string | null;
   content_type: string | null;
   name: string | null;
   size_bytes: number | null;
+  in_rfq_attachments?: boolean;
+  in_bid_attachments?: boolean;
 }
 
 interface Message {
@@ -61,6 +64,7 @@ interface ConversationDetail {
   participants: Array<{ id: string; name: string | null; email: string | null; icon_url: string | null; role: string }>;
   messages: Message[];
   caller_side: Role;
+  caller_bid_id?: string | null;
 }
 
 // --- Helpers ---
@@ -160,6 +164,31 @@ export default function Inbox() {
     }, { replace: true });
   }
 
+  async function handlePromote(attachmentId: string, scope: "rfq" | "bid") {
+    if (!detail) return;
+    const url = scope === "rfq"
+      ? `/api/rfqs/${detail.rfq.id}/attachments/promote`
+      : `/api/rfqs/${detail.rfq.id}/bids/${detail.caller_bid_id}/attachments/promote`;
+    await apiFetch(url, { method: "POST", body: JSON.stringify({ attachment_id: attachmentId }) });
+    // Optimistically flip the flag so the button flips to "Saved" state without
+    // a round trip. Subsequent conversation reloads will see the DB value.
+    setDetail((prev) => prev ? {
+      ...prev,
+      messages: prev.messages.map((m) => ({
+        ...m,
+        attachments: m.attachments.map((a) =>
+          a.attachment_id === attachmentId
+            ? {
+                ...a,
+                in_rfq_attachments: scope === "rfq" ? true : a.in_rfq_attachments,
+                in_bid_attachments: scope === "bid" ? true : a.in_bid_attachments,
+              }
+            : a,
+        ),
+      })),
+    } : prev);
+  }
+
   async function handleSend(body: string, attachments: Attachment[]) {
     if (!selectedId) return;
     const payload = {
@@ -248,6 +277,7 @@ export default function Inbox() {
                 }, { replace: true });
               }}
               onSend={handleSend}
+              onPromote={handlePromote}
             />
           ) : null}
         </section>
@@ -291,12 +321,13 @@ function ThreadRow({ thread, active, onClick }: { thread: ThreadSummary; active:
 
 // --- Conversation ---
 
-function Conversation({ detail, role, onOpenProject, onBack, onSend }: {
+function Conversation({ detail, role, onOpenProject, onBack, onSend, onPromote }: {
   detail: ConversationDetail;
   role: Role;
   onOpenProject: () => void;
   onBack: () => void;
   onSend: (body: string, attachments: Attachment[]) => Promise<void>;
+  onPromote: (attachmentId: string, scope: "rfq" | "bid") => Promise<void>;
 }) {
   const counterpart = role === "homeowner" ? detail.org : detail.homeowner;
   const cpName = counterpart.name || (counterpart as { email?: string }).email || "Unknown";
@@ -335,7 +366,13 @@ function Conversation({ detail, role, onOpenProject, onBack, onSend }: {
 
       <div className="ib-stream" ref={scrollRef}>
         {detail.messages.map((m) => (
-          <MessageItem key={m.id} msg={m} role={role} />
+          <MessageItem
+            key={m.id}
+            msg={m}
+            role={role}
+            canPromoteToBid={role === "org" && !!detail.caller_bid_id}
+            onPromote={onPromote}
+          />
         ))}
         {detail.messages.length === 0 && (
           <div className="ib-empty" style={{ textAlign: "center", padding: 40 }}>
@@ -349,7 +386,12 @@ function Conversation({ detail, role, onOpenProject, onBack, onSend }: {
   );
 }
 
-function MessageItem({ msg, role }: { msg: Message; role: Role }) {
+function MessageItem({ msg, role, canPromoteToBid, onPromote }: {
+  msg: Message;
+  role: Role;
+  canPromoteToBid: boolean;
+  onPromote: (attachmentId: string, scope: "rfq" | "bid") => Promise<void>;
+}) {
   const mine = msg.side === role;
   if (msg.kind === "event") {
     return (
@@ -382,7 +424,15 @@ function MessageItem({ msg, role }: { msg: Message; role: Role }) {
         {msg.body && <div className="ib-bubble-text">{msg.body}</div>}
         {msg.attachments.length > 0 && (
           <div className="ib-bubble-atts">
-            {msg.attachments.map((a, i) => <AttachmentView key={a.blob_path + i} att={a} />)}
+            {msg.attachments.map((a, i) => (
+              <AttachmentView
+                key={a.blob_path + i}
+                att={a}
+                role={role}
+                canPromoteToBid={canPromoteToBid}
+                onPromote={onPromote}
+              />
+            ))}
           </div>
         )}
       </div>
@@ -391,11 +441,45 @@ function MessageItem({ msg, role }: { msg: Message; role: Role }) {
   );
 }
 
-function AttachmentView({ att }: { att: Attachment }) {
+function AttachmentView({ att, role, canPromoteToBid, onPromote }: {
+  att: Attachment;
+  role: Role;
+  canPromoteToBid: boolean;
+  onPromote: (attachmentId: string, scope: "rfq" | "bid") => Promise<void>;
+}) {
   const url = att.download_url || undefined;
   const isImage = (att.content_type || "").startsWith("image/");
+  const isVideo = (att.content_type || "").startsWith("video/");
   const isPdf = (att.content_type || "") === "application/pdf";
   const filename = att.name || (isPdf ? "Document.pdf" : "Attachment");
+
+  // Promotion is offered only for visual media with an attachment_id (new
+  // responses). Legacy JSONB-only items don't have one and can't be promoted
+  // without a re-upload.
+  const canPromote = !!att.attachment_id && (isImage || isVideo);
+  const promoteScope: "rfq" | "bid" | null =
+    !canPromote ? null
+    : role === "homeowner" ? "rfq"
+    : (role === "org" && canPromoteToBid) ? "bid"
+    : null;
+  const isPromoted = promoteScope === "rfq" ? !!att.in_rfq_attachments
+                   : promoteScope === "bid" ? !!att.in_bid_attachments
+                   : false;
+  const [busy, setBusy] = useState(false);
+  async function doPromote() {
+    if (!promoteScope || !att.attachment_id || isPromoted || busy) return;
+    setBusy(true);
+    try {
+      await onPromote(att.attachment_id, promoteScope);
+    } catch (e) {
+      alert((e as Error).message || "Failed to save");
+    } finally {
+      setBusy(false);
+    }
+  }
+  const promoteLabel = promoteScope === "rfq"
+    ? (isPromoted ? "Saved to project" : "Save to project")
+    : (isPromoted ? "Attached to bid" : "Attach to bid");
 
   async function triggerDownload(e: React.MouseEvent) {
     if (!url) return;
@@ -417,12 +501,16 @@ function AttachmentView({ att }: { att: Attachment }) {
     }
   }
 
-  if (isImage && url) {
+  if ((isImage || isVideo) && url) {
     return (
       <div className="ib-att ib-att-image">
-        <a href={url} target="_blank" rel="noopener noreferrer" aria-label={`Open ${filename}`}>
-          <img src={url} alt={filename} />
-        </a>
+        {isVideo ? (
+          <video src={url} controls preload="metadata" />
+        ) : (
+          <a href={url} target="_blank" rel="noopener noreferrer" aria-label={`Open ${filename}`}>
+            <img src={url} alt={filename} />
+          </a>
+        )}
         <button
           type="button"
           className="ib-att-download"
@@ -434,6 +522,28 @@ function AttachmentView({ att }: { att: Attachment }) {
             <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" /><path d="M7 10l5 5 5-5" /><path d="M12 15V3" />
           </svg>
         </button>
+        {promoteScope && (
+          <button
+            type="button"
+            className={`ib-att-promote${isPromoted ? " is-done" : ""}`}
+            onClick={doPromote}
+            disabled={isPromoted || busy}
+            aria-pressed={isPromoted}
+            title={promoteLabel}
+          >
+            {isPromoted ? (
+              <>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
+                {promoteLabel}
+              </>
+            ) : (
+              <>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12h14" /></svg>
+                {busy ? "Saving…" : promoteLabel}
+              </>
+            )}
+          </button>
+        )}
       </div>
     );
   }
@@ -744,6 +854,30 @@ const IB_CSS = `
 }
 .ib-att-image:hover .ib-att-download { opacity: 1; }
 .ib-att-download:hover { background: rgba(20, 26, 22, 0.85); }
+
+.ib-att-image video { display: block; width: 100%; height: auto; max-height: 320px; border-radius: 12px; }
+
+/* "Save to project" / "Attach to bid" promotion pill on chat images */
+.ib-att-promote {
+  position: absolute; left: 8px; bottom: 8px; z-index: 2;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 10px; font-size: 11px; font-weight: 600; font-family: inherit;
+  border-radius: 9999px; border: none; cursor: pointer;
+  background: rgba(20, 26, 22, 0.75); color: #fff;
+  backdrop-filter: blur(6px);
+  opacity: 0; transition: opacity 0.15s, background 0.15s;
+}
+.ib-att-image:hover .ib-att-promote { opacity: 1; }
+.ib-att-promote:hover:not(:disabled) { background: rgba(20, 26, 22, 0.9); }
+.ib-att-promote.is-done {
+  opacity: 1; cursor: default;
+  background: rgba(20, 26, 22, 0.45);
+}
+.ib-att-promote:disabled { cursor: default; }
+.ib-att-promote svg { flex-shrink: 0; }
+@media (hover: none) {
+  .ib-att-promote { opacity: 1; }
+}
 
 .ib-att-file {
   display: flex; align-items: center; gap: 10px; padding: 8px 10px;

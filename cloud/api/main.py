@@ -4015,20 +4015,45 @@ def get_conversation(conversation_id: str, authorization: str = Header(None)) ->
 
         # Load attachments from unified join table. Merge with legacy JSONB by
         # blob_path so messages keep working during the dual-phase rollout
-        # (either source alone is sufficient; duplicates collapse).
+        # (either source alone is sufficient; duplicates collapse). Also flag
+        # whether each attachment is already promoted to the RFQ scope or to
+        # the conversation's bid scope, so the frontend can render the right
+        # button state (Save vs. Saved) without extra round trips.
         cursor.execute(
-            """SELECT ma.message_id, a.blob_path, a.content_type, a.name, a.size_bytes
+            """SELECT ma.message_id,
+                      a.id AS attachment_id,
+                      a.blob_path, a.content_type, a.name, a.size_bytes,
+                      EXISTS (SELECT 1 FROM rfq_attachments ra
+                              WHERE ra.attachment_id = a.id AND ra.rfq_id = %s) AS in_rfq,
+                      EXISTS (SELECT 1 FROM bid_attachments ba
+                              JOIN bids b ON b.id = ba.bid_id
+                              WHERE ba.attachment_id = a.id
+                                AND b.rfq_id = %s AND b.org_id = %s) AS in_bid
                FROM message_attachments ma
                JOIN attachments a ON a.id = ma.attachment_id
                JOIN messages m ON m.id = ma.message_id
                WHERE m.conversation_id = %s
                ORDER BY a.created_at""",
-            (conversation_id,),
+            (conv["rfq_id"], conv["rfq_id"], conv["org_id"], conversation_id),
         )
+        # Caller's org bid id for this RFQ (if any) — the frontend uses it to
+        # target the bid-scope promote endpoint.
+        cursor.execute(
+            """SELECT id FROM bids
+               WHERE rfq_id = %s AND org_id = %s AND status IN ('pending', 'accepted')
+               ORDER BY received_at DESC LIMIT 1""",
+            (conv["rfq_id"], conv["org_id"]),
+        )
+        caller_bid_row = cursor.fetchone()
+        caller_bid_id = str(caller_bid_row[0]) if caller_bid_row else None
+
         unified_by_mid: dict[str, list] = {}
-        for mid_row, bp, ct, nm, sb in cursor.fetchall():
+        for mid_row, aid, bp, ct, nm, sb, in_rfq, in_bid in cursor.fetchall():
             unified_by_mid.setdefault(str(mid_row), []).append({
+                "attachment_id": str(aid),
                 "blob_path": bp, "content_type": ct, "name": nm, "size_bytes": sb,
+                "in_rfq_attachments": bool(in_rfq),
+                "in_bid_attachments": bool(in_bid),
             })
 
         # Participants (homeowner + accepted org members)
@@ -4105,6 +4130,7 @@ def get_conversation(conversation_id: str, authorization: str = Header(None)) ->
         "participants": participants,
         "messages": messages,
         "caller_side": side,
+        "caller_bid_id": caller_bid_id,
     }
 
 
@@ -4147,14 +4173,10 @@ async def post_message(conversation_id: str, request: Request, authorization: st
             attachments=clean_attachments or None,
         )
 
-        # Dual-write attachments into the unified tables. Also auto-link to the
-        # RFQ (homeowner side) or the org's bid if one exists (contractor side),
-        # so images flow through to the underlying project/bid surfaces.
+        # Register attachments against the conversation message. Chat stays
+        # chat — promotion to rfq_attachments / bid_attachments is an explicit
+        # action (POST .../attachments/promote), not an implicit side effect.
         if clean_attachments:
-            bid_id_for_link = None
-            if side == "org":
-                bid_id_for_link = _find_pending_bid_for_org(cursor, conv["rfq_id"], conv["org_id"])
-
             for att in clean_attachments:
                 attachment_id = _register_attachment(
                     cursor,
@@ -4165,16 +4187,6 @@ async def post_message(conversation_id: str, request: Request, authorization: st
                     uploader_account_id=account_id,
                 )
                 _link_message_attachment(cursor, message_id=mid, attachment_id=attachment_id)
-                if side == "homeowner":
-                    _link_rfq_attachment(
-                        cursor, rfq_id=conv["rfq_id"], attachment_id=attachment_id,
-                        added_via_message_id=mid,
-                    )
-                elif side == "org" and bid_id_for_link:
-                    _link_bid_attachment(
-                        cursor, bid_id=bid_id_for_link, attachment_id=attachment_id,
-                        role="image", added_via_message_id=mid,
-                    )
 
         # Gather notification recipients + metadata for email
         cursor.execute(
@@ -4487,6 +4499,70 @@ def delete_rfq_attachment(rfq_id: str, attachment_id: str, authorization: str = 
     return {"status": "unlinked"}
 
 
+@app.post("/api/rfqs/{rfq_id}/attachments/promote")
+async def promote_attachment_to_rfq(rfq_id: str, request: Request, authorization: str = Header(None)) -> dict:
+    """Promote an attachment from a chat message into `rfq_attachments`.
+
+    The RFQ owner is the only account that can do this. The attachment must
+    already be linked (via `message_attachments`) to a message in a conversation
+    on this RFQ — otherwise callers could stash arbitrary attachment_ids into
+    any RFQ's scope. Idempotent.
+    """
+    decoded = verify_firebase_token(authorization)
+    body = await request.json()
+    attachment_id = body.get("attachment_id")
+    if not attachment_id:
+        raise HTTPException(400, "attachment_id is required")
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        _verify_rfq_owner(cursor, rfq_id, decoded["uid"])
+
+        # Verify this attachment exists in a conversation on this RFQ. We also
+        # capture the most recent message_id as the provenance pointer.
+        cursor.execute(
+            """SELECT m.id
+               FROM message_attachments ma
+               JOIN messages m ON m.id = ma.message_id
+               JOIN conversations c ON c.id = m.conversation_id
+               WHERE ma.attachment_id = %s AND c.rfq_id = %s
+               ORDER BY m.created_at DESC LIMIT 1""",
+            (attachment_id, rfq_id),
+        )
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(404, "Attachment not found in a conversation for this RFQ")
+        source_message_id = str(row[0])
+
+        _link_rfq_attachment(
+            cursor, rfq_id=rfq_id, attachment_id=attachment_id,
+            added_via_message_id=source_message_id,
+        )
+
+        # Echo the attachment back for optimistic UI updates.
+        cursor.execute(
+            """SELECT id, blob_path, content_type, name, size_bytes
+               FROM attachments WHERE id = %s""",
+            (attachment_id,),
+        )
+        a = cursor.fetchone()
+        conn.commit()
+    finally:
+        conn.close()
+
+    if not a:
+        raise HTTPException(404, "Attachment not found")
+    return {
+        "status": "promoted",
+        "scope": "rfq",
+        "attachment": _resolve_attachments([{
+            "attachment_id": str(a[0]), "blob_path": a[1], "content_type": a[2],
+            "name": a[3], "size_bytes": a[4],
+        }])[0],
+    }
+
+
 # --- Direct bid attachments (contractor image uploads outside the chat/submit flow) ---
 
 def _verify_bid_org_access(cursor, rfq_id: str, bid_id: str, uid: str) -> tuple[str, str]:
@@ -4634,6 +4710,67 @@ def delete_bid_attachment(rfq_id: str, bid_id: str, attachment_id: str, authoriz
     finally:
         conn.close()
     return {"status": "unlinked"}
+
+
+@app.post("/api/rfqs/{rfq_id}/bids/{bid_id}/attachments/promote")
+async def promote_attachment_to_bid(rfq_id: str, bid_id: str, request: Request, authorization: str = Header(None)) -> dict:
+    """Promote an attachment from a chat message into `bid_attachments`.
+
+    Caller must be a member of the bid's org. The attachment must already be
+    linked (via `message_attachments`) to a message in a conversation on this
+    RFQ where the caller's org is the participant org — otherwise we'd let
+    one org attach arbitrary media to their competitor's bid. Idempotent.
+    """
+    decoded = verify_firebase_token(authorization)
+    body = await request.json()
+    attachment_id = body.get("attachment_id")
+    if not attachment_id:
+        raise HTTPException(400, "attachment_id is required")
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        _account_id, org_id = _verify_bid_org_access(cursor, rfq_id, bid_id, decoded["uid"])
+
+        cursor.execute(
+            """SELECT m.id
+               FROM message_attachments ma
+               JOIN messages m ON m.id = ma.message_id
+               JOIN conversations c ON c.id = m.conversation_id
+               WHERE ma.attachment_id = %s AND c.rfq_id = %s AND c.org_id = %s
+               ORDER BY m.created_at DESC LIMIT 1""",
+            (attachment_id, rfq_id, org_id),
+        )
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(404, "Attachment not found in a conversation for this bid's org")
+        source_message_id = str(row[0])
+
+        _link_bid_attachment(
+            cursor, bid_id=bid_id, attachment_id=attachment_id, role="image",
+            added_via_message_id=source_message_id,
+        )
+
+        cursor.execute(
+            """SELECT id, blob_path, content_type, name, size_bytes
+               FROM attachments WHERE id = %s""",
+            (attachment_id,),
+        )
+        a = cursor.fetchone()
+        conn.commit()
+    finally:
+        conn.close()
+
+    if not a:
+        raise HTTPException(404, "Attachment not found")
+    return {
+        "status": "promoted",
+        "scope": "bid",
+        "attachment": _resolve_attachments([{
+            "attachment_id": str(a[0]), "blob_path": a[1], "content_type": a[2],
+            "name": a[3], "size_bytes": a[4],
+        }])[0],
+    }
 
 
 @app.get("/health")
