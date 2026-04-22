@@ -3519,17 +3519,6 @@ def _link_message_attachment(cursor, *, message_id: str, attachment_id: str) -> 
     )
 
 
-def _find_pending_bid_for_org(cursor, rfq_id: str, org_id: str) -> Optional[str]:
-    """Return the most recent pending/accepted bid_id for an (rfq, org), if any."""
-    cursor.execute(
-        """SELECT id FROM bids
-           WHERE rfq_id = %s AND org_id = %s AND status IN ('pending', 'accepted')
-           ORDER BY received_at DESC LIMIT 1""",
-        (rfq_id, org_id),
-    )
-    row = cursor.fetchone()
-    return str(row[0]) if row else None
-
 
 def _event_preview(event_type: str, bid_snapshot: Optional[dict]) -> str:
     """Short one-line preview text for an event message, used in thread lists."""
