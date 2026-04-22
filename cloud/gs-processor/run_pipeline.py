@@ -532,6 +532,7 @@ class ColorCorrector:
     print('[patch] stable pruning')
 
 
+
 def train_fastgs(data_path, iterations):
     t0 = time.time()
     os.chdir(FASTGS_DIR)
@@ -594,6 +595,7 @@ def export_splat(output_dir):
     arr[:, 28:32] = quat_u8
 
     splat_path = os.path.expanduser('~/gs-pipeline/room_scan.splat')
+    os.makedirs(os.path.dirname(splat_path), exist_ok=True)
     with open(splat_path, 'wb') as f:
         f.write(buf)
     print(f'Wrote {splat_path} ({n:,} Gaussians, {len(buf)/1e6:.1f} MB)')
@@ -657,10 +659,12 @@ def align_splat_to_arkit(splat_path, data_path, name_to_pos):
     quat = (quat_u8.astype(np.float64) - 128) / 128
 
     # Transform positions: new_xyz = scale * R @ xyz + t
-    new_xyz = (scale * (R_align @ xyz.T).T + t_align).astype(np.float32)
+    # ascontiguousarray needed — the `.T` path leaves a non-C-contiguous result
+    # and `.view(np.uint8)` below requires contiguity to reinterpret bytes.
+    new_xyz = np.ascontiguousarray((scale * (R_align @ xyz.T).T + t_align).astype(np.float32))
 
     # Transform scales by the uniform scale factor
-    new_scales = (scales * scale).astype(np.float32)
+    new_scales = np.ascontiguousarray((scales * scale).astype(np.float32))
 
     # Transform quaternions: new_q = R_quat * old_q
     # Convert R_align to quaternion

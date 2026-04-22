@@ -25,12 +25,13 @@ cd cloud/frontend
 npm run build
 firebase deploy --only hosting
 
-# GS Processor (GPU — Gaussian Splatting, Vertex AI)
+# GS Processor (GPU — Gaussian Splatting, Cloud Run Job in us-east4)
 cd cloud/gs-processor
-gcloud builds submit --tag us-central1-docker.pkg.dev/roomscanalpha/gs-pipeline/gs-processor:latest \
+gcloud builds submit --tag us-east4-docker.pkg.dev/roomscanalpha/gs-pipeline/gs-processor:latest \
   --project roomscanalpha --timeout=3600 --machine-type=e2-highcpu-32
-# Then submit a test job:
-python submit_job.py --scan_id SCAN_ID --room_id ROOM_ID --rfq_id RFQ_ID
+# Then trigger a manual execution (env vars supplied as per-execution overrides):
+gcloud run jobs execute gs-processor --region=us-east4 --project=roomscanalpha --async \
+  --update-env-vars=SCAN_ID=RFQ_ID,ROOM_ID=SCAN_ID,RFQ_ID=RFQ_ID
 
 # Reprocess a scan
 cd cloud/processor
@@ -59,14 +60,15 @@ Cloud Run: scan-processor (OIDC-protected, 8 vCPU / 16GB / concurrency=1)
   → WTA texture projection (fallback): per-surface JPEGs from annotation corners (killed)
   → Upload textured mesh + atlas to GCS
   → Write results to Cloud SQL → FCM notification to app
-  → Enqueue gs-processor via Cloud Tasks for Gaussian Splatting
+  → Trigger gs-processor Cloud Run Job (us-east4) for Gaussian Splatting
   → Supplemental merge: POST /process-supplemental
     → Downloads original + supplemental zips → merges meshes (voxel+proximity filter)
     → Merges keyframes (continuous numbering) → re-textures with all frames
     → Overwrites textured outputs in GCS
 
-Vertex AI Custom Job: gs-processor (g2-standard-8, L4 GPU, on-demand)
-  → Triggered by scan-processor via Vertex AI API after mesh processing
+Cloud Run Job: gs-processor (us-east4, 8 CPU / 32 GB / 1x L4 GPU, on-demand)
+  → Triggered by scan-processor via google-cloud-run v2 RunJobRequest with env overrides
+  → task-timeout=30m, max-retries=0 (no runaway retry loops), no zonal redundancy
   → Download scan data from GCS
   → HEVC video → extract frames → sharpness filter + stride-4 subsampling
   → ALIKED feature extraction (GPU, 8192 keypoints, 1600px)
@@ -112,7 +114,7 @@ React SPA (Firebase Hosting: roomscanalpha.com / roomscanalpha.web.app)
 |---------|-----|------|---------|
 | scan-api | `https://scan-api-839349778883.us-central1.run.app` | Firebase JWT | REST API + web viewer |
 | scan-processor | `https://scan-processor-839349778883.us-central1.run.app` | OIDC (Cloud Tasks) | Scan processing + OpenMVS |
-| gs-processor | Vertex AI Custom Job | Service Account | Gaussian Splatting (L4 GPU) |
+| gs-processor | Cloud Run Job (us-east4) | Service Account | Gaussian Splatting (L4 GPU) |
 | Firebase Hosting | `https://roomscanalpha.com` / `https://roomscanalpha.web.app` | — | React SPA frontend |
 | Cloud SQL | `roomscanalpha:us-central1:roomscanalpha-db` | IAM | PostgreSQL (db: `quoterra`) |
 | GCS | `gs://roomscanalpha-scans/` | IAM | Scan storage + portfolio images |
@@ -139,12 +141,26 @@ React SPA (Firebase Hosting: roomscanalpha.com / roomscanalpha.web.app)
 
 ### Gaussian Splatting Pipeline (Production)
 
-**Service: gs-processor** (Vertex AI Custom Job with L4 GPU)
+**Service: gs-processor** (Cloud Run Job with L4 GPU)
 - Source: `cloud/gs-processor/`
-- Image: `us-central1-docker.pkg.dev/roomscanalpha/gs-pipeline/gs-processor:latest`
-- Triggered by scan-processor via `submit_job.py` after mesh processing completes
-- Runs on g2-standard-8 (8 vCPU, 32GB RAM, 1x L4 GPU), auto-terminates
-- Produces a `.splat` file aligned to ARKit world frame for the 3D viewer
+- Image: `us-east4-docker.pkg.dev/roomscanalpha/gs-pipeline/gs-processor:latest`
+- Triggered by scan-processor via `google.cloud.run_v2` RunJobRequest with per-execution
+  env overrides (SCAN_ID, ROOM_ID, RFQ_ID). Lazy-imported in `cloud/processor/main.py:_submit_gs_job`.
+- Job spec: `--region=us-east4 --cpu=8 --memory=32Gi --gpu=1 --gpu-type=nvidia-l4
+  --task-timeout=30m --max-retries=0` (no zonal redundancy; matches quota allocation).
+- Cold start ~17s (us-east4 AR image pull colocated with Cloud Run region); total wall ~20-25 min.
+- Dockerfile multi-stage: GLOMAP built on Ubuntu 22.04 (Kitware CMake) so ABI matches the
+  Ubuntu 22.04 CUDA runtime — avoids glibc/libstdc++ version mismatches.
+- Produces a `.splat` file aligned to ARKit world frame for the 3D viewer.
+
+**IAM required** (already set on project 839349778883):
+- scan-processor's SA (`839349778883-compute@developer.gserviceaccount.com`) has
+  `roles/run.developer` on the gs-processor Cloud Run Job (covers `run.jobs.runWithOverrides`,
+  which `roles/run.invoker` alone does NOT grant).
+
+**Env vars on scan-processor** (required to wire the trigger):
+- `GS_ENABLED=true` — gate; defaults to false.
+- `GS_REGION=us-east4`, `GS_JOB_NAME=gs-processor` — both defaults match current setup.
 
 **Pipeline stages:**
 ```
@@ -178,13 +194,13 @@ React SPA (Firebase Hosting: roomscanalpha.com / roomscanalpha.web.app)
 - mesh.ply: ARKit world frame (unchanged from iOS)
 
 **Dependencies (in Docker):**
-- PyTorch 2.4.0+cu118, hloc (ALIKED + LightGlue), pycolmap 3.13, GLOMAP (built from source in Ubuntu 24.04 layer), FastGS + CUDA rasterizer, h5py, scipy
+- PyTorch 2.4.0+cu118, hloc (ALIKED + LightGlue), pycolmap 3.13, GLOMAP (built from source in Ubuntu 22.04 stage for ABI match with runtime), FastGS + CUDA rasterizer, h5py, scipy
 
 **Dev/test environment:**
-- Vertex AI Workbench `gs-pipeline` (g2-standard-8, L4, us-central1-a)
-- Auto-shutdown: 1hr idle. Start: `gcloud workbench instances start gs-pipeline --location=us-central1-a`
-- Script: `/home/jake_a_julian_gmail_com/gs-pipeline/run_pipeline.py`
-- GLOMAP Docker: `glomap:local` (pre-built on instance)
+- Workbench `gs-pipeline` in us-west1-a (g2-standard-8, L4). Currently STOPPED; data disk + boot disk (~$68/mo) retained until Cloud Run Job is fully validated in production.
+- Start: `gcloud workbench instances start gs-pipeline --location=us-west1-a`
+- Idle-shutdown service (`google-wi-idle-shutdown.service`) is DISABLED on this instance — long training jobs don't get SIGTERM'd mid-run. Remember to `stop` manually.
+- Iteration pattern: `docker run --rm --gpus all -v /tmp/run_pipeline.py:/app/run_pipeline.py:ro us-east4-docker.pkg.dev/roomscanalpha/gs-pipeline/gs-processor:latest` — mount local edits into the container, skip image rebuilds.
 
 ### Contractor Web Viewer
 
@@ -217,9 +233,10 @@ Used by `ProjectDetail.tsx` for the "Bird's eye" tab and by the Landing page's p
 - **Scale detection**: Auto-detects linear vs log-encoded scales (GLOMAP/Procrustes outputs linear, standard 3DGS uses log). Filters outlier splats (position >50m, scale >1.0, alpha <10).
 - **Depth sorting**: Web Worker with O(n) counting sort (16-bit quantized). Worker receives camera matrix, sorts + reorders all attribute buffers off main thread, transfers results back. Main thread only does buffer upload (~5ms), never blocks on sort.
 - **Room alignment**: Splat and room polygon are both in ARKit world frame (Y-up, meters) — no manual alignment needed. Cyan wireframe overlay of room polygon rendered directly in the 3D scene for visual verification. Camera positioned at room polygon centroid at 6ft eye level, looking toward first wall (matches OBJ viewer positioning).
-- **Room filtering**: Sidebar and floor plan only show rooms with `.splat` files available (`has_splat` field from API). Room switching disabled — viewer locked to the room whose splat is loaded.
+- **Room filtering**: Sidebar and floor plan only show rooms with `.splat` files available (`has_splat` field from API). `has_splat` is computed server-side by a GCS blob-exists check accepting either `room_scan.splat` (current pipeline output) or `room_scan_glomap.splat` (legacy). Room switching disabled — viewer locked to the room whose splat is loaded.
+- **RFQ resolution**: Viewer parses `rfq_id` from the URL path (`/splat/{rfq_id}`). It fetches `/api/rfqs/{rfq_id}/contractor-view`, then picks the first room where `has_splat=true` (or `?room=<scan_id>` query-param override). Fetches `room_scan.splat` via the file proxy.
 - **Features**: Same sidebar (job info, floor plan, metrics), isometric 3D model thumbnail, bird's eye view, WASD/arrow movement, measurements toggle.
-- **File proxy**: `.splat` files served via the same proxy endpoint as OBJ/MTL. Splats stored in GCS at `scans/{rfq_id}/{scan_id}/room_scan_glomap.splat`.
+- **File proxy**: `.splat` files served via the same proxy endpoint as OBJ/MTL. Current pipeline uploads to `scans/{rfq_id}/{scan_id}/room_scan.splat`; older runs have `room_scan_glomap.splat` — both are recognized.
 - **GPU usage**: ~520K splats with per-vertex covariance computation is GPU-intensive (~5-6GB GPU memory in Firefox). Future optimization: pre-compute covariance on CPU and store in GPU texture to simplify vertex shader.
 
 ### Admin Component Annotator
@@ -441,7 +458,7 @@ gs://roomscanalpha-scans/
   │   ├── mesh.ply                                      # Uploaded by processor
   │   ├── textured.obj / .mtl / _material_00_map_Kd.jpg # OpenMVS preview (50K faces)
   │   ├── standard_textured.obj / .mtl / ...jpg         # OpenMVS HD (300K faces, multi-atlas ok)
-  │   └── room_scan_glomap.splat                        # Gaussian Splat (ARKit world frame)
+  │   └── room_scan.splat                               # Gaussian Splat (ARKit world frame, from gs-processor Cloud Run Job)
   ├── conversations/{conversation_id}/                  # Inbox attachments
   │   └── {uuid}.{jpg|png|pdf|...}                      # Per-message blobs, caller-validated paths
   └── bids/{rfq_id}/{bid_id}.pdf                        # Bid breakdown PDFs

@@ -523,7 +523,11 @@ def _enqueue_texture_task(scan_id: str, rfq_id: str, blob_path: str) -> None:
 
 
 def _submit_gs_job(scan_id: str, rfq_id: str) -> None:
-    """Submit a Vertex AI Custom Job for Gaussian Splatting.
+    """Trigger a Cloud Run Job execution for Gaussian Splatting.
+
+    The job resource is pre-created in us-east4 via `gcloud run jobs create gs-processor`
+    with CPU/memory/GPU pre-baked; we only override env vars per execution. Fire-and-forget
+    — we don't wait for the ~20 min run to complete.
 
     Non-fatal on failure — the scan remains fully functional with OBJ mesh.
     The .splat file is an optional enhancement for the 3D viewer.
@@ -533,44 +537,32 @@ def _submit_gs_job(scan_id: str, rfq_id: str) -> None:
         return
 
     try:
-        from google.cloud import aiplatform
-        import time
+        from google.cloud import run_v2
 
-        gs_image = os.environ.get(
-            "GS_IMAGE",
-            "us-central1-docker.pkg.dev/roomscanalpha/gs-pipeline/gs-processor:latest",
+        gs_region = os.environ.get("GS_REGION", "us-east4")
+        gs_job_name = os.environ.get("GS_JOB_NAME", "gs-processor")
+        job_resource = f"projects/{PROJECT_ID}/locations/{gs_region}/jobs/{gs_job_name}"
+
+        client = run_v2.JobsClient()
+        request = run_v2.RunJobRequest(
+            name=job_resource,
+            overrides=run_v2.RunJobRequest.Overrides(
+                container_overrides=[
+                    run_v2.RunJobRequest.Overrides.ContainerOverride(
+                        env=[
+                            run_v2.EnvVar(name="SCAN_ID", value=rfq_id),
+                            run_v2.EnvVar(name="ROOM_ID", value=scan_id),
+                            run_v2.EnvVar(name="RFQ_ID", value=rfq_id),
+                        ],
+                    )
+                ]
+            ),
         )
-
-        aiplatform.init(
-            project=PROJECT_ID,
-            location=REGION,
-            staging_bucket=f"gs://{BUCKET_NAME}",
-        )
-
-        job = aiplatform.CustomJob(
-            display_name=f"gs-{scan_id[:8]}-{int(time.time())}",
-            worker_pool_specs=[{
-                "machine_spec": {
-                    "machine_type": "g2-standard-8",
-                    "accelerator_type": "NVIDIA_L4",
-                    "accelerator_count": 1,
-                },
-                "replica_count": 1,
-                "container_spec": {
-                    "image_uri": gs_image,
-                    "env": [
-                        {"name": "SCAN_ID", "value": rfq_id},
-                        {"name": "ROOM_ID", "value": scan_id},
-                        {"name": "RFQ_ID", "value": rfq_id},
-                    ],
-                },
-            }],
-        )
-
-        job.submit()
-        print(f"[Processor] Submitted GS job for scan {scan_id}: {job.resource_name}")
+        operation = client.run_job(request=request)
+        op_name = operation.operation.name if operation.operation else "pending"
+        print(f"[Processor] Triggered GS job for scan {scan_id}: {op_name}")
     except Exception as e:
-        print(f"[Processor] Warning: Failed to submit GS job: {e}")
+        print(f"[Processor] Warning: Failed to trigger GS job: {e}")
 
 
 def _update_texture_status(scan_id: str, rfq_id: str, texture_manifest: Optional[dict]) -> None:

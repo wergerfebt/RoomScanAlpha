@@ -825,10 +825,13 @@ def contractor_view(rfq_id: str) -> dict:
         except Exception:
             room["features"] = []
 
-        # Check if a Gaussian Splat file exists for this room
+        # Check if a Gaussian Splat file exists for this room. Current pipeline uploads
+        # room_scan.splat; older runs may have room_scan_glomap.splat — accept either.
         try:
-            splat_blob = bucket.blob(f"scans/{rfq_id}/{scan_id}/room_scan_glomap.splat")
-            room["has_splat"] = splat_blob.exists()
+            room["has_splat"] = (
+                bucket.blob(f"scans/{rfq_id}/{scan_id}/room_scan.splat").exists()
+                or bucket.blob(f"scans/{rfq_id}/{scan_id}/room_scan_glomap.splat").exists()
+            )
         except Exception:
             room["has_splat"] = False
 

@@ -265,17 +265,23 @@ import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer
 import * as GaussianSplats3D from '@mkkellogg/gaussian-splats-3d';
 
 // --- Config ---
-const SCAN_ID = 'b069da20-8f00-4d9b-9d13-6a7b82bc52ba';
-const ROOM_ID = '66abbeb4-d916-4e04-b735-ae67bceb9066';
-const RFQ_ID = SCAN_ID; // For single-room RFQs, scan_id == rfq_id
+// rfq_id comes from the URL path (/splat/{rfq_id}); ROOM_ID is resolved below from
+// the contractor-view API (first room with has_splat). SCAN_ID is retained as an
+// alias for RFQ_ID because that's how older sidebar metadata lines read it.
 const API_BASE = window.location.origin;
+const RFQ_ID = (() => {
+  const m = window.location.pathname.match(/\/splat\/([^/]+)/);
+  return m ? m[1] : '';
+})();
+const SCAN_ID = RFQ_ID;
+let ROOM_ID = '';  // set after contractor-view loads
 
-// Splat URL: check query param, then fall back to file proxy
+// Splat URL: check query param, then fall back to file proxy on the resolved room.
+// Current pipeline uploads room_scan.splat; older runs may have room_scan_glomap.splat.
 function getSplatUrl() {
   const params = new URLSearchParams(window.location.search);
   if (params.get('splat')) return params.get('splat');
-  // Use ROOM_ID as the scan_id in the file proxy (matches GCS directory structure)
-  return `${API_BASE}/api/rfqs/${RFQ_ID}/scans/${ROOM_ID}/files/room_scan_glomap.splat`;
+  return `${API_BASE}/api/rfqs/${RFQ_ID}/scans/${ROOM_ID}/files/room_scan.splat`;
 }
 
 // --- State ---
@@ -331,14 +337,18 @@ async function init() {
     const resp = await fetch(`${API_BASE}/api/rfqs/${RFQ_ID}/contractor-view`);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     currentData = await resp.json();
-    renderSidebar(currentData);
 
-    // Find the room matching ROOM_ID or SCAN_ID, default to first room
-    let roomIdx = 0;
-    if (currentData.rooms) {
-      const idx = currentData.rooms.findIndex(r => r.scan_id === ROOM_ID);
-      if (idx >= 0) roomIdx = idx;
-    }
+    // Resolve ROOM_ID: ?room=<scan_id> query param wins; otherwise pick the first
+    // room with has_splat=true. Viewer is locked to that room.
+    const rooms = currentData.rooms || [];
+    const qRoom = new URLSearchParams(window.location.search).get('room');
+    let target = qRoom ? rooms.find(r => r.scan_id === qRoom && r.has_splat) : null;
+    if (!target) target = rooms.find(r => r.has_splat);
+    if (!target) throw new Error('No rooms with splat data for this RFQ yet.');
+    ROOM_ID = target.scan_id;
+    const roomIdx = rooms.indexOf(target);
+
+    renderSidebar(currentData);
     await loadRoom(roomIdx);
     // Load splat once after room geometry is set up (camera will be positioned by renderSplatData)
     loadSplat();

@@ -1,14 +1,21 @@
-# Stage 1: Build GLOMAP from source (Ubuntu 24.04 has CMake 3.28+, Eigen 3.4+)
-FROM ubuntu:24.04 AS glomap-builder
+# Stage 1: Build GLOMAP from source on Ubuntu 22.04 (matches runtime ABI — glibc 2.35,
+# libstdc++ GLIBCXX_3.4.30, boost 1.74). Ubuntu 22.04 ships CMake 3.22 but GLOMAP needs
+# 3.28+, so we pull CMake from Kitware's PPA. Eigen 3.4.0 is already in 22.04 apt.
+FROM ubuntu:22.04 AS glomap-builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y \
-    git cmake ninja-build build-essential \
+    git ninja-build build-essential curl ca-certificates gpg wget \
     libboost-all-dev libeigen3-dev libflann-dev libfreeimage-dev \
     libmetis-dev libgoogle-glog-dev libgflags-dev libsqlite3-dev \
     libglew-dev qtbase5-dev libqt5opengl5-dev libcgal-dev \
     libatlas-base-dev libsuitesparse-dev libceres-dev \
+    && wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null \
+        | gpg --dearmor - | tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null \
+    && echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ jammy main" \
+        > /etc/apt/sources.list.d/kitware.list \
+    && apt-get update && apt-get install -y cmake \
     && rm -rf /var/lib/apt/lists/*
 
 RUN cd /opt && git clone --recursive https://github.com/colmap/glomap.git \
@@ -17,29 +24,23 @@ RUN cd /opt && git clone --recursive https://github.com/colmap/glomap.git \
     && ninja -j$(nproc) \
     && cp glomap/glomap /usr/local/bin/glomap
 
-# Stage 2: Runtime with CUDA + Python
+# Stage 2: Runtime with CUDA + Python (same Ubuntu version as builder — no ABI skew)
 FROM nvidia/cuda:11.8.0-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
-# System deps
+# System deps — includes GLOMAP runtime deps (suitesparse, flann, arpack, atlas)
 RUN apt-get update && apt-get install -y \
     python3 python3-pip python3-dev git curl \
     libboost-all-dev libfreeimage-dev libmetis-dev \
     libgoogle-glog-dev libgflags-dev libsqlite3-dev \
     libglew-dev libceres-dev ffmpeg ca-certificates \
+    libsuitesparse-dev libflann-dev libarpack2 libatlas-base-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy GLOMAP binary from builder, plus its Ubuntu 24.04 boost 1.83 runtime deps
-# (stage 2 has boost 1.74 which GLOMAP's dynamic linker can't satisfy)
+# GLOMAP binary (runtime libs match builder stage — both Ubuntu 22.04)
 COPY --from=glomap-builder /usr/local/bin/glomap /usr/local/bin/glomap
-COPY --from=glomap-builder /usr/lib/x86_64-linux-gnu/libboost_program_options.so.1.83.0 /usr/lib/x86_64-linux-gnu/
-COPY --from=glomap-builder /usr/lib/x86_64-linux-gnu/libboost_filesystem.so.1.83.0 /usr/lib/x86_64-linux-gnu/
-COPY --from=glomap-builder /usr/lib/x86_64-linux-gnu/libboost_system.so.1.83.0 /usr/lib/x86_64-linux-gnu/
-COPY --from=glomap-builder /usr/lib/x86_64-linux-gnu/libboost_thread.so.1.83.0 /usr/lib/x86_64-linux-gnu/
-COPY --from=glomap-builder /usr/lib/x86_64-linux-gnu/libboost_graph.so.1.83.0 /usr/lib/x86_64-linux-gnu/
-COPY --from=glomap-builder /usr/lib/x86_64-linux-gnu/libboost_serialization.so.1.83.0 /usr/lib/x86_64-linux-gnu/
 RUN ldconfig && ldd /usr/local/bin/glomap | (! grep -q "not found" || (echo "GLOMAP MISSING LIBS:" && ldd /usr/local/bin/glomap | grep "not found" && exit 1))
 
 # Python deps

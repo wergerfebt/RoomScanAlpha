@@ -1,8 +1,9 @@
 """
-gs-processor job: Runs the GS pipeline as a Vertex AI Custom Job.
+gs-processor job: Runs the GS pipeline as a Cloud Run Job (us-east4).
 
-Reads SCAN_ID, ROOM_ID, RFQ_ID from environment variables,
-runs the full pipeline, uploads .splat to GCS, then exits.
+Reads SCAN_ID, ROOM_ID, RFQ_ID from environment variables (supplied per-execution
+by scan-processor via RunJobRequest.overrides), runs the full pipeline,
+uploads .splat to GCS, then exits.
 """
 
 import os
