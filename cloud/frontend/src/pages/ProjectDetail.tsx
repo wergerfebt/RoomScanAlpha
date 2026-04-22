@@ -68,6 +68,7 @@ export default function ProjectDetail() {
   const [filters, setFilters] = useState<FilterValues>({ minPrice: 0, maxPrice: Infinity, minRating: "all" });
   const [hiring, setHiring] = useState(false);
   const [scanView, setScanView] = useState<"floorplan" | "bev">("floorplan");
+  const [bevFullscreen, setBevFullscreen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editTitle, setEditTitle] = useState("");
   const [editAddress, setEditAddress] = useState("");
@@ -130,6 +131,18 @@ export default function ProjectDetail() {
 
     return () => { cancelled = true; };
   }, [rfqId]);
+
+  useEffect(() => {
+    if (!bevFullscreen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setBevFullscreen(false); };
+    window.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [bevFullscreen]);
 
   // Reset price filter range when bids load so the slider covers actual prices.
   useEffect(() => {
@@ -389,12 +402,34 @@ export default function ProjectDetail() {
                       <div className="pd-scan-empty">Floor plan will appear after the scan processes.</div>
                     )
                   ) : (
-                    <iframe
-                      key={`bev-${rfqId}`}
-                      title="Bird's eye 3D view"
-                      src={`/embed/scan/${rfqId}?view=bev&measurements=on`}
-                      className="pd-scan-iframe"
-                    />
+                    <div className={`pd-bev-frame ${bevFullscreen ? "is-fullscreen" : ""}`}>
+                      <iframe
+                        key={`bev-${rfqId}`}
+                        title="Bird's eye 3D view"
+                        src={`/embed/scan/${rfqId}?view=bev&measurements=on`}
+                        className="pd-scan-iframe"
+                      />
+                      <button
+                        type="button"
+                        className={bevFullscreen ? "pd-fs-close" : "pd-scan-fs-btn"}
+                        onClick={() => setBevFullscreen((v) => !v)}
+                        aria-label={bevFullscreen ? "Exit full screen" : "Enter full screen"}
+                      >
+                        {bevFullscreen ? (
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M18 6L6 18" />
+                            <path d="M6 6l12 12" />
+                          </svg>
+                        ) : (
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M3 9V3h6" />
+                            <path d="M21 9V3h-6" />
+                            <path d="M3 15v6h6" />
+                            <path d="M21 15v6h-6" />
+                          </svg>
+                        )}
+                      </button>
+                    </div>
                   )}
                 </div>
               </div>
@@ -708,6 +743,35 @@ const PD_CSS = `
 .pd-scan-iframe {
   width: 100%; height: 100%; border: 0; display: block; background: #000;
 }
+.pd-bev-frame { position: relative; width: 100%; height: 100%; }
+.pd-bev-frame.is-fullscreen {
+  position: fixed; inset: 0; z-index: 1000; background: #000;
+  width: 100vw; height: 100vh; border-radius: 0;
+}
+.pd-scan-fs-btn {
+  position: absolute; top: 10px; right: 10px;
+  width: 34px; height: 34px; border-radius: 50%;
+  border: 0; padding: 0; cursor: pointer;
+  background: rgba(0, 0, 0, 0.55); color: #fff;
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: background 0.15s;
+}
+.pd-scan-fs-btn:hover { background: rgba(0, 0, 0, 0.75); }
+.pd-scan-fs-btn:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+
+.pd-fs-close {
+  position: absolute; top: max(14px, env(safe-area-inset-top));
+  right: max(14px, env(safe-area-inset-right));
+  width: 40px; height: 40px; border-radius: 50%;
+  border: 0; padding: 0; cursor: pointer;
+  background: rgba(0, 0, 0, 0.6); color: #fff;
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: background 0.15s;
+}
+.pd-fs-close:hover { background: rgba(0, 0, 0, 0.8); }
+.pd-fs-close:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
 .pd-scan-empty {
   height: 100%; display: flex; align-items: center; justify-content: center;
   color: var(--q-ink-muted); font-size: 13px; padding: 24px; text-align: center;

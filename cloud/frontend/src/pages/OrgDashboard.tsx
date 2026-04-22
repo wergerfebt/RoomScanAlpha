@@ -329,6 +329,7 @@ function JobRow({ job, active, onClick }: { job: Job; active: boolean; onClick: 
 function JobReviewPane({ job, scanView, setScanView, onBack }: { job: Job; scanView: "floorplan" | "bev"; setScanView: (v: "floorplan" | "bev") => void; onBack: () => void }) {
   const [view, setView] = useState<ContractorView | null>(null);
   const [loading, setLoading] = useState(true);
+  const [bevFullscreen, setBevFullscreen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -340,6 +341,18 @@ function JobReviewPane({ job, scanView, setScanView, onBack }: { job: Job; scanV
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [job.rfq_id]);
+
+  useEffect(() => {
+    if (!bevFullscreen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setBevFullscreen(false); };
+    window.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [bevFullscreen]);
 
   const totalFloor = view?.rooms.reduce((s, r) => s + (r.floor_area_sqft ?? 0), 0) ?? 0;
   const totalWall  = view?.rooms.reduce((s, r) => s + (r.wall_area_sqft ?? 0), 0) ?? 0;
@@ -380,11 +393,33 @@ function JobReviewPane({ job, scanView, setScanView, onBack }: { job: Job; scanV
               <div className="ojw-review-empty">No floor plan available.</div>
             )
           ) : (
-            <iframe
-              title="Bird's eye"
-              src={`/embed/scan/${job.rfq_id}?view=bev&measurements=on`}
-              className="ojw-review-iframe"
-            />
+            <div className={`ojw-bev-frame ${bevFullscreen ? "is-fullscreen" : ""}`}>
+              <iframe
+                title="Bird's eye"
+                src={`/embed/scan/${job.rfq_id}?view=bev&measurements=on`}
+                className="ojw-review-iframe"
+              />
+              <button
+                type="button"
+                className={bevFullscreen ? "ojw-fs-close" : "ojw-review-fs-btn"}
+                onClick={() => setBevFullscreen((v) => !v)}
+                aria-label={bevFullscreen ? "Exit full screen" : "Enter full screen"}
+              >
+                {bevFullscreen ? (
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M18 6L6 18" />
+                    <path d="M6 6l12 12" />
+                  </svg>
+                ) : (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M3 9V3h6" />
+                    <path d="M21 9V3h-6" />
+                    <path d="M3 15v6h6" />
+                    <path d="M21 15v6h-6" />
+                  </svg>
+                )}
+              </button>
+            </div>
           )}
         </div>
       </div>
@@ -749,6 +784,35 @@ const OJW_CSS = `
 .ojw-review-viewer > div { height: 100% !important; background: transparent !important; border: none !important; border-radius: 0 !important; }
 .ojw-review-viewer canvas { display: block; width: 100% !important; height: 100% !important; }
 .ojw-review-iframe { width: 100%; height: 100%; border: 0; background: #000; }
+.ojw-bev-frame { position: relative; width: 100%; height: 100%; }
+.ojw-bev-frame.is-fullscreen {
+  position: fixed; inset: 0; z-index: 1000; background: #000;
+  width: 100vw; height: 100vh; border-radius: 0;
+}
+.ojw-review-fs-btn {
+  position: absolute; top: 10px; right: 10px;
+  width: 34px; height: 34px; border-radius: 50%;
+  border: 0; padding: 0; cursor: pointer;
+  background: rgba(0, 0, 0, 0.55); color: #fff;
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: background 0.15s;
+}
+.ojw-review-fs-btn:hover { background: rgba(0, 0, 0, 0.75); }
+.ojw-review-fs-btn:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+
+.ojw-fs-close {
+  position: absolute; top: max(14px, env(safe-area-inset-top));
+  right: max(14px, env(safe-area-inset-right));
+  width: 40px; height: 40px; border-radius: 50%;
+  border: 0; padding: 0; cursor: pointer;
+  background: rgba(0, 0, 0, 0.6); color: #fff;
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: background 0.15s;
+}
+.ojw-fs-close:hover { background: rgba(0, 0, 0, 0.8); }
+.ojw-fs-close:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
 .ojw-review-empty {
   height: 100%; display: flex; align-items: center; justify-content: center;
   color: var(--q-ink-muted); font-size: 13px;

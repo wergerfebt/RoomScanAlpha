@@ -13,19 +13,6 @@ interface PreviewRoom {
   room_polygon_ft: number[][] | null;
 }
 
-function useIsMobile(breakpoint = 860) {
-  const [mobile, setMobile] = useState(
-    () => typeof window !== "undefined" && window.innerWidth <= breakpoint,
-  );
-  useEffect(() => {
-    const mq = window.matchMedia(`(max-width: ${breakpoint}px)`);
-    const handler = (e: MediaQueryListEvent) => setMobile(e.matches);
-    mq.addEventListener("change", handler);
-    return () => mq.removeEventListener("change", handler);
-  }, [breakpoint]);
-  return mobile;
-}
-
 const steps: Array<[string, string, string]> = [
   ["01", "Scan", "Capture your space in under 2 minutes with the iPhone app."],
   ["02", "Describe", "Tell us what you want done — cabinets, flooring, tile."],
@@ -34,8 +21,6 @@ const steps: Array<[string, string, string]> = [
 ];
 
 export default function Landing() {
-  const isMobile = useIsMobile();
-
   return (
     <Layout>
       <section className="ln-hero">
@@ -77,7 +62,7 @@ export default function Landing() {
           </div>
         </div>
 
-        {!isMobile && <ProductPreview />}
+        <ProductPreview />
       </section>
 
       <section className="ln-how">
@@ -185,9 +170,9 @@ function ProductPreview() {
 
 const LN_CSS = `
 .ln-hero {
-  max-width: 1280px; margin: 0 auto;
-  padding: 56px 64px 0;
-  display: grid; grid-template-columns: 1.15fr 1fr; gap: 48px;
+  max-width: 1440px; margin: 0 auto;
+  padding: 56px 40px 0;
+  display: grid; grid-template-columns: 1fr 1.1fr; gap: 48px;
   align-items: center;
 }
 .ln-hero-main { min-width: 0; }
@@ -296,7 +281,7 @@ const LN_CSS = `
 .ln-preview-bid-amt { font-size: 15px; font-weight: 700; letter-spacing: -0.3px; font-variant-numeric: tabular-nums; }
 
 /* How it works */
-.ln-how { max-width: 1280px; margin: 0 auto; padding: 56px 64px 0; }
+.ln-how { max-width: 1440px; margin: 0 auto; padding: 56px 40px 0; }
 .ln-how-label {
   font-size: 12px; font-weight: 700; color: var(--q-ink-muted);
   letter-spacing: 0.8px; text-transform: uppercase; margin-bottom: 16px;

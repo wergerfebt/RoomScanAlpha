@@ -461,17 +461,49 @@ async function loadRoom(index) {
   const cx = cornersM.reduce((s, p) => s + p[0], 0) / cornersM.length;
   const cz = cornersM.reduce((s, p) => s + p[1], 0) / cornersM.length;
 
-  // Tour-mode camera: eye-level at room centroid, looking at first wall midpoint.
-  const eyeHeight = floorY + Math.min(1.6, ceilingHeightM * 0.65);
-  camera.position.set(cx, eyeHeight, cz);
-  const [wx0, wz0] = cornersM[0];
-  const [wx1, wz1] = cornersM[1];
-  const lookX = (wx0 + wx1) / 2;
-  const lookZ = (wz0 + wz1) / 2;
-  const dx = lookX - cx, dz = lookZ - cz;
-  const lookDist = Math.sqrt(dx * dx + dz * dz) || 1;
-  controls.target.set(cx + dx / lookDist * 0.01, eyeHeight, cz + dz / lookDist * 0.01);
-  controls.update();
+  if (embedConfig.view === 'bev') {
+    // Frame the room from above using polygon bounds (no mesh required, so
+    // the very first render is already in BEV — avoids a tour-mode flash).
+    isBirdsEye = true;
+    const xs = cornersM.map((c) => c[0]);
+    const zs = cornersM.map((c) => c[1]);
+    const xmin = Math.min(...xs), xmax = Math.max(...xs);
+    const zmin = Math.min(...zs), zmax = Math.max(...zs);
+    const bevCx = (xmin + xmax) / 2;
+    const bevCz = (zmin + zmax) / 2;
+    const sizeX = xmax - xmin;
+    const sizeZ = zmax - zmin;
+    const maxSpan = Math.max(sizeX, sizeZ, 2);
+    const camHeight = avgCeilingY + maxSpan * 1.2;
+    camera.position.set(bevCx, camHeight, bevCz);
+    controls.target.set(bevCx, floorY, bevCz);
+    const dist = camHeight - floorY;
+    const aspect = camera.aspect || 1;
+    const fovFromV = 2 * Math.atan2(sizeZ / 2, dist);
+    const fovFromH = 2 * Math.atan2(sizeX / 2 / aspect, dist);
+    // Padding factor: 0.95 leaves a thin margin so the room fills ~95% of the
+    // frame on whichever axis is more constrained. Min FOV clamp dropped to 15°
+    // so small rooms don't get stuck at an artificially wide FOV (= zoomed out).
+    const fovRad = Math.max(fovFromV, fovFromH) / 0.95;
+    camera.fov = Math.min(Math.max(THREE.MathUtils.radToDeg(fovRad), 15), 120);
+    camera.updateProjectionMatrix();
+    controls.enableZoom = true;
+    controls.enablePan = true;
+    controls.rotateSpeed = 0.5;
+    controls.update();
+  } else {
+    // Tour-mode camera: eye-level at room centroid, looking at first wall midpoint.
+    const eyeHeight = floorY + Math.min(1.6, ceilingHeightM * 0.65);
+    camera.position.set(cx, eyeHeight, cz);
+    const [wx0, wz0] = cornersM[0];
+    const [wx1, wz1] = cornersM[1];
+    const lookX = (wx0 + wx1) / 2;
+    const lookZ = (wz0 + wz1) / 2;
+    const dx = lookX - cx, dz = lookZ - cz;
+    const lookDist = Math.sqrt(dx * dx + dz * dz) || 1;
+    controls.target.set(cx + dx / lookDist * 0.01, eyeHeight, cz + dz / lookDist * 0.01);
+    controls.update();
+  }
 
   const contentGroup = new THREE.Group();
   scene.add(contentGroup);
@@ -487,18 +519,22 @@ async function loadRoom(index) {
   // bounds to be known, otherwise the camera frames an empty box).
   loadOBJMesh(textureUrls.obj, textureUrls.atlas, false, contentGroup, false);
 
-  // Apply view mode after the mesh has had a chance to attach. loadOBJMesh
-  // uses OBJLoader.load() which is async; polling for children is simplest.
-  if (embedConfig.view === 'bev' && !window.__bevApplied) {
-    const waitForMesh = () => {
+  // BEV uses backface culling so the ceiling doesn't occlude the floor. Apply
+  // FrontSide once the async OBJ load has populated the group.
+  if (embedConfig.view === 'bev') {
+    const applyFrontSide = () => {
       if (contentGroup.children.length > 0) {
-        window.__bevApplied = true;
-        if (!isBirdsEye) window.toggleViewMode();
+        contentGroup.traverse((child) => {
+          if (child.isMesh) {
+            const mats = Array.isArray(child.material) ? child.material : [child.material];
+            mats.forEach((m) => { m.side = THREE.FrontSide; });
+          }
+        });
       } else {
-        setTimeout(waitForMesh, 100);
+        setTimeout(applyFrontSide, 100);
       }
     };
-    setTimeout(waitForMesh, 100);
+    setTimeout(applyFrontSide, 100);
   }
 }
 
@@ -669,19 +705,19 @@ window.toggleViewMode = function() {
     box.getCenter(center);
     box.getSize(size);
 
-    // Place camera well above ceiling, looking straight down
+    // Place camera above ceiling, looking straight down
     const maxSpan = Math.max(size.x, size.z, 2);
-    const camHeight = box.max.y + maxSpan * 1.5;
+    const camHeight = box.max.y + maxSpan * 1.2;
     camera.position.set(center.x, camHeight, center.z);
     controls.target.set(center.x, box.min.y, center.z);
 
-    // FOV so the room appears small (~40% of viewport)
+    // FOV so the room fills ~95% of the viewport.
     const dist = camHeight - box.min.y;
     const aspect = camera.aspect;
     const fovFromV = 2 * Math.atan2(size.z / 2, dist);
     const fovFromH = 2 * Math.atan2(size.x / 2 / aspect, dist);
-    const fovRad = Math.max(fovFromV, fovFromH) / 0.5;
-    camera.fov = Math.min(Math.max(THREE.MathUtils.radToDeg(fovRad), 30), 120);
+    const fovRad = Math.max(fovFromV, fovFromH) / 0.95;
+    camera.fov = Math.min(Math.max(THREE.MathUtils.radToDeg(fovRad), 15), 120);
     camera.updateProjectionMatrix();
 
     // Switch to FrontSide so backface culling hides nearest surfaces (like comparison app)
