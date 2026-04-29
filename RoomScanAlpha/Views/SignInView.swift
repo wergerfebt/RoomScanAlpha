@@ -1,4 +1,5 @@
 import SwiftUI
+import AuthenticationServices
 import FirebaseAuth
 import GoogleSignIn
 
@@ -124,6 +125,16 @@ struct SignInView: View {
                     }
                     .padding(.horizontal, 40)
 
+                    // Sign in with Apple — required by App Store Guideline 4.8
+                    // whenever a third-party social sign-in (Google here) is offered.
+                    AppleIDButton(cornerRadius: 14) {
+                        signInWithApple()
+                    }
+                    .frame(height: 50)
+                    .padding(.horizontal, 28)
+                    .disabled(isLoading)
+                    .opacity(isLoading ? 0.5 : 1)
+
                     // Google Sign-In
                     Button {
                         signInWithGoogle()
@@ -215,6 +226,25 @@ struct SignInView: View {
                 onSignedIn()
             } catch {
                 errorMessage = friendlyError(error)
+            }
+            isLoading = false
+        }
+    }
+
+    private func signInWithApple() {
+        isLoading = true
+        errorMessage = nil
+        Task {
+            do {
+                _ = try await AuthManager.shared.signInWithApple()
+                onSignedIn()
+            } catch {
+                // User-cancelled is silent — Apple sets ASAuthorizationError.canceled.
+                let nsError = error as NSError
+                if nsError.domain != ASAuthorizationError.errorDomain
+                    || nsError.code != ASAuthorizationError.canceled.rawValue {
+                    errorMessage = error.localizedDescription
+                }
             }
             isLoading = false
         }
@@ -364,5 +394,38 @@ private struct ProfileCompletionView: View {
             UserDefaults.standard.set(phone, forKey: "userPhone")
         }
         onComplete()
+    }
+}
+
+// MARK: - Sign in with Apple button
+
+/// Wraps UIKit's `ASAuthorizationAppleIDButton` so we get the official
+/// Apple-styled button (matches HIG) but drive the auth flow ourselves
+/// via `AuthManager.signInWithApple()`. SwiftUI's own `SignInWithAppleButton`
+/// can desync the nonce between its `onRequest` and `onCompletion` closures,
+/// which causes Firebase to reject the JWT with a nonce-mismatch error.
+private struct AppleIDButton: UIViewRepresentable {
+    let cornerRadius: CGFloat
+    let action: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(action: action) }
+
+    func makeUIView(context: Context) -> ASAuthorizationAppleIDButton {
+        let button = ASAuthorizationAppleIDButton(type: .signIn, style: .black)
+        button.cornerRadius = cornerRadius
+        button.addTarget(context.coordinator,
+                         action: #selector(Coordinator.tapped),
+                         for: .touchUpInside)
+        return button
+    }
+
+    func updateUIView(_ uiView: ASAuthorizationAppleIDButton, context: Context) {
+        context.coordinator.action = action
+    }
+
+    final class Coordinator {
+        var action: () -> Void
+        init(action: @escaping () -> Void) { self.action = action }
+        @objc func tapped() { action() }
     }
 }

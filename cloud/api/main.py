@@ -2314,7 +2314,12 @@ def delete_org(authorization: str = Header(None)) -> dict:
 
 @app.delete("/api/account")
 def delete_account(authorization: str = Header(None)) -> dict:
-    """Delete the current user's account and remove org memberships."""
+    """Delete the current user's account: scrub RFQs, drop org memberships, remove account row.
+
+    Required by App Store Guideline 5.1.1(v). Caller must also invoke
+    Firebase `currentUser.delete()` so the user cannot sign back in with the
+    same credentials.
+    """
     decoded = verify_firebase_token(authorization)
     uid = decoded["uid"]
     conn = get_db_connection()
@@ -2326,9 +2331,18 @@ def delete_account(authorization: str = Header(None)) -> dict:
             raise HTTPException(404, "Account not found")
         account_id = row[0]
 
+        # Soft-delete RFQs so contractors keep their bid history but the
+        # project disappears from active listings/inboxes. Covers both the
+        # legacy user_id pivot and the account-linked rfqs.
+        cursor.execute(
+            """UPDATE rfqs SET deleted_at = now()
+               WHERE deleted_at IS NULL
+                 AND (user_id = %s OR homeowner_account_id = %s)""",
+            (uid, account_id),
+        )
         # Remove org memberships
         cursor.execute("DELETE FROM org_members WHERE account_id = %s", (account_id,))
-        # Delete account
+        # Delete account row (scrubs email/name/phone/address PII)
         cursor.execute("DELETE FROM accounts WHERE id = %s", (account_id,))
         conn.commit()
     finally:

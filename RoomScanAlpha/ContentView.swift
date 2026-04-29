@@ -534,7 +534,12 @@ struct ContentView: View {
         .sheet(isPresented: $showAccount) {
             AccountView(
                 onClose: { showAccount = false },
-                onGoToWorkspace: account?.org != nil ? { workspaceMode = true } : nil
+                onGoToWorkspace: account?.org != nil ? { workspaceMode = true } : nil,
+                onAccountDeleted: {
+                    showAccount = false
+                    isAuthenticated = false
+                    account = nil
+                }
             )
         }
         .sheet(isPresented: $showNewProjectSheet) {

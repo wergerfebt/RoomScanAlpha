@@ -21,6 +21,7 @@
 		A11111110000000000000011 /* FirebaseMessaging in Frameworks */ = {isa = PBXBuildFile; productRef = A18888880000000000000002 /* FirebaseMessaging */; };
 		A1111111000000000000002B /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = A18888880000000000000003 /* GoogleSignIn */; };
 		A11111110000000000000012 /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000020 /* GoogleService-Info.plist */; };
+		A111111100000000000000F0 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000F0 /* PrivacyInfo.xcprivacy */; };
 		A11111110000000000000013 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000021 /* AppDelegate.swift */; };
 		A11111110000000000000014 /* CapturedFrame.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000022 /* CapturedFrame.swift */; };
 		A11111110000000000000015 /* FrameCaptureManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000023 /* FrameCaptureManager.swift */; };
@@ -59,6 +60,7 @@
 		A1111111000000000000007D /* AccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000007D /* AccountView.swift */; };
 		A1111111000000000000007E /* Account.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000007E /* Account.swift */; };
 		A1111111000000000000007F /* AccountService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000007F /* AccountService.swift */; };
+		A111111100000000000000F2 /* AppleSignInCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000F2 /* AppleSignInCoordinator.swift */; };
 		A11111110000000000000081 /* Job.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000081 /* Job.swift */; };
 		A11111110000000000000082 /* OrgService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000082 /* OrgService.swift */; };
 		A11111110000000000000083 /* ContractorHomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000083 /* ContractorHomeView.swift */; };
@@ -123,6 +125,8 @@
 		A1000000000000000000000A /* ScanningView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanningView.swift; sourceTree = "<group>"; };
 		A10000000000000000000010 /* RoomScanAlpha.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = RoomScanAlpha.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A10000000000000000000020 /* GoogleService-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "GoogleService-Info.plist"; sourceTree = "<group>"; };
+		A100000000000000000000F0 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = "PrivacyInfo.xcprivacy"; sourceTree = "<group>"; };
+		A100000000000000000000F1 /* RoomScanAlpha.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "RoomScanAlpha.entitlements"; sourceTree = "<group>"; };
 		A10000000000000000000021 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		A10000000000000000000022 /* CapturedFrame.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CapturedFrame.swift; sourceTree = "<group>"; };
 		A10000000000000000000023 /* FrameCaptureManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameCaptureManager.swift; sourceTree = "<group>"; };
@@ -161,6 +165,7 @@
 		A1000000000000000000007D /* AccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountView.swift; sourceTree = "<group>"; };
 		A1000000000000000000007E /* Account.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Account.swift; sourceTree = "<group>"; };
 		A1000000000000000000007F /* AccountService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountService.swift; sourceTree = "<group>"; };
+		A100000000000000000000F2 /* AppleSignInCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleSignInCoordinator.swift; sourceTree = "<group>"; };
 		A10000000000000000000081 /* Job.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Job.swift; sourceTree = "<group>"; };
 		A10000000000000000000082 /* OrgService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrgService.swift; sourceTree = "<group>"; };
 		A10000000000000000000083 /* ContractorHomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContractorHomeView.swift; sourceTree = "<group>"; };
@@ -247,6 +252,8 @@
 				A13333330000000000000008 /* Export */,
 				A13333330000000000000009 /* Cloud */,
 				A10000000000000000000020 /* GoogleService-Info.plist */,
+				A100000000000000000000F0 /* PrivacyInfo.xcprivacy */,
+				A100000000000000000000F1 /* RoomScanAlpha.entitlements */,
 				A10000000000000000000003 /* Assets.xcassets */,
 			);
 			path = RoomScanAlpha;
@@ -356,6 +363,7 @@
 				A10000000000000000000077 /* ContractorsService.swift */,
 				A1000000000000000000007B /* InboxService.swift */,
 				A1000000000000000000007F /* AccountService.swift */,
+				A100000000000000000000F2 /* AppleSignInCoordinator.swift */,
 				A10000000000000000000082 /* OrgService.swift */,
 			);
 			path = Cloud;
@@ -483,6 +491,7 @@
 			files = (
 				A11111110000000000000003 /* Assets.xcassets in Resources */,
 				A11111110000000000000012 /* GoogleService-Info.plist in Resources */,
+				A111111100000000000000F0 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -547,6 +556,7 @@
 				A1111111000000000000007D /* AccountView.swift in Sources */,
 				A1111111000000000000007E /* Account.swift in Sources */,
 				A1111111000000000000007F /* AccountService.swift in Sources */,
+				A111111100000000000000F2 /* AppleSignInCoordinator.swift in Sources */,
 				A11111110000000000000081 /* Job.swift in Sources */,
 				A11111110000000000000082 /* OrgService.swift in Sources */,
 				A11111110000000000000083 /* ContractorHomeView.swift in Sources */,
@@ -734,6 +744,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = RoomScanAlpha/RoomScanAlpha.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_PREVIEWS = YES;
@@ -763,6 +774,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = RoomScanAlpha/RoomScanAlpha.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_PREVIEWS = YES;

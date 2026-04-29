@@ -9,6 +9,10 @@ struct AccountView: View {
     /// When set, shown as "Your Organization" card with a button to enter
     /// the contractor workspace. Mirrors the web account page.
     var onGoToWorkspace: (() -> Void)? = nil
+    /// Invoked after the account is deleted server-side and the Firebase
+    /// user is removed. Caller should drop authenticated state so the user
+    /// lands back on the sign-in screen.
+    var onAccountDeleted: (() -> Void)? = nil
 
     @State private var account: Account?
     @State private var name: String = ""
@@ -19,6 +23,8 @@ struct AccountView: View {
     @State private var error: String?
     @State private var iconPicker: PhotosPickerItem?
     @State private var uploadingIcon = false
+    @State private var showDeleteConfirm = false
+    @State private var deleting = false
 
     var body: some View {
         NavigationStack {
@@ -34,6 +40,7 @@ struct AccountView: View {
                         if let error, !error.isEmpty {
                             Text(error).font(.caption).foregroundStyle(QTheme.danger)
                         }
+                        dangerZone
                     }
                     .padding(20)
                 }
@@ -58,6 +65,14 @@ struct AccountView: View {
             .task { await load() }
             .onChange(of: iconPicker) { _, item in
                 if let item { Task { await uploadIcon(item) } }
+            }
+            .alert("Delete account?", isPresented: $showDeleteConfirm) {
+                Button("Cancel", role: .cancel) {}
+                Button("Delete", role: .destructive) {
+                    Task { await performDelete() }
+                }
+            } message: {
+                Text("This permanently removes your profile, projects, and sign-in. Bids submitted by contractors are kept for their records but your projects will no longer appear. This cannot be undone.")
             }
         }
         .tint(QTheme.primary)
@@ -225,6 +240,31 @@ struct AccountView: View {
         }
     }
 
+    private var dangerZone: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionLabel("Account")
+            Button(role: .destructive) {
+                showDeleteConfirm = true
+            } label: {
+                HStack {
+                    if deleting { ProgressView().tint(QTheme.danger) }
+                    Text(deleting ? "Deleting…" : "Delete Account")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(QTheme.danger)
+                    Spacer()
+                }
+                .padding(.horizontal, 14).padding(.vertical, 14)
+                .background(QTheme.surface)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(QTheme.hairline, lineWidth: 0.5))
+            }
+            .disabled(deleting)
+            Text("Permanently removes your profile, projects, and sign-in.")
+                .font(.caption).foregroundStyle(QTheme.inkDim)
+        }
+        .padding(.top, 8)
+    }
+
     private func sectionLabel(_ text: String) -> some View {
         Text(text.uppercased())
             .font(.system(size: 12, weight: .bold)).tracking(0.5)
@@ -259,6 +299,33 @@ struct AccountView: View {
             } catch {
                 self.error = error.localizedDescription
             }
+        }
+    }
+
+    private func performDelete() async {
+        deleting = true
+        defer { deleting = false }
+        do {
+            // Server first: scrubs DB rows + soft-deletes RFQs.
+            try await AccountService.shared.deleteAccount()
+            // Best-effort revoke of any Apple Sign-In refresh token before
+            // we drop the Firebase user (token outlives the user otherwise).
+            await AuthManager.shared.revokeAppleTokenIfNeeded()
+            // Then drop the Firebase user so they can't sign back in.
+            // If the ID token is too old, Firebase throws requiresRecentLogin —
+            // we surface that and ask the user to sign out + back in.
+            try await AuthManager.shared.deleteFirebaseUser()
+            onAccountDeleted?()
+            onClose()
+        } catch let nsError as NSError {
+            // FIRAuthErrorCodeRequiresRecentLogin = 17014
+            if nsError.domain == "FIRAuthErrorDomain", nsError.code == 17014 {
+                self.error = "For security, please sign out and sign back in, then try Delete Account again."
+            } else {
+                self.error = nsError.localizedDescription
+            }
+        } catch {
+            self.error = error.localizedDescription
         }
     }
 

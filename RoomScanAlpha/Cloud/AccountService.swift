@@ -19,6 +19,19 @@ final class AccountService {
         return try JSONDecoder().decode(Account.self, from: data)
     }
 
+    /// `DELETE /api/account` — scrub the caller's RFQs, drop org memberships,
+    /// remove the account row. Caller must also delete the Firebase user.
+    func deleteAccount() async throws {
+        let token = try await AuthManager.shared.getToken()
+        var request = URLRequest(url: URL(string: "\(apiBaseURL)/api/account")!)
+        request.httpMethod = "DELETE"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw URLError(.badServerResponse)
+        }
+    }
+
     /// `PUT /api/account` — update name, phone, icon_url, etc.
     func updateAccount(fields: [String: Any]) async throws {
         let token = try await AuthManager.shared.getToken()
